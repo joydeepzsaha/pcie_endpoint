@@ -758,14 +758,14 @@ module pcie_ltssm_downstream
             ordered_set_c = gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
             //goto next pcie ltssm state
             next_state = ST_CONFIGURATION_LINKWIDTH_ACCEPT;
-          end  //check timeout counter
-          else if (timer_r >= TwentyFourMsTimeOut)
-          begin
-            //assert error
-            error_c    = '1;
-            //goto detect
-            next_state = ST_IDLE;
           end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        if ((timer_r >= TwentyFourMsTimeOut) && (next_state == curr_state)) begin
+          //assert error
+          error_c    = '1;
+          //goto detect
+          next_state = ST_IDLE;
         end
       end
       //-----------------------------------------------------------
@@ -789,12 +789,12 @@ module pcie_ltssm_downstream
             transmit_ordered_set   = '1;
             ordered_set_c = gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
             next_state = ST_CONFIGURATION_LANENUM_WAIT;
-          end  //check timeout counter
-          else if (timer_r >= TwoMsTimeOut)
-          begin
-            error_c    = '1;
-            next_state = ST_IDLE;
           end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
+          error_c    = '1;
+          next_state = ST_IDLE;
         end
       end
       //-----------------------------------------------------------
@@ -818,15 +818,15 @@ module pcie_ltssm_downstream
           else if (|link_lane_reconfig && ordered_set_sent_cnt_r >= 8'h8)
           begin
             next_state = ST_CONFIGURATION_LANENUM_WAIT;
-          end  //check timeout counter
-          else if (timer_r >= TwoMsTimeOut)
-          begin
-            //assert error
-            error_c    = '1;
-            //reset counter
-            //goto detect
-            next_state = ST_IDLE;
           end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
+          //assert error
+          error_c    = '1;
+          //reset counter
+          //goto detect
+          next_state = ST_IDLE;
         end
       end
       //-----------------------------------------------------------
@@ -846,14 +846,14 @@ module pcie_ltssm_downstream
             ordered_set_c = gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
             //goto lanenum accept
             next_state = ST_CONFIGURATION_LANENUM_ACCEPT;
-          end  //check timeout counter
-          else if (timer_r >= TwoMsTimeOut)
-          begin
-            //assert error
-            error_c    = '1;
-            //goto detect
-            next_state = ST_IDLE;
           end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
+          //assert error
+          error_c    = '1;
+          //goto detect
+          next_state = ST_IDLE;
         end
       end
       //-----------------------------------------------------------
@@ -877,14 +877,14 @@ module pcie_ltssm_downstream
             gen_os_ctrl_c.gen_idle = '1;
             //goto config idle
             next_state             = ST_CONFIGURATION_IDLE;
-          end  //check timeout counter
-          else if (timer_r >= TwoMsTimeOut)
-          begin
-            //assert error
-            error_c    = '1;
-            //goto idle
-            next_state = ST_IDLE;
           end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
+          //assert error
+          error_c    = '1;
+          //goto idle
+          next_state = ST_IDLE;
         end
       end
       //-----------------------------------------------------------
