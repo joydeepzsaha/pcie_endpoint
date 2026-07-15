@@ -1027,7 +1027,7 @@ module pcie_ltssm_downstream
             // ts2_symbol6.req_equal = '1;
           end
           transmit_ordered_set = '1;
-          ordered_set_c = gen_ts_os( rate_speed_e'(last_data_rate_r.rate), TS2, train_seq_e'(LINK_NUM),
+          ordered_set_c = gen_ts_os( rate_speed_e'(last_data_rate_r.rate), TS2, train_seq_e'(link_number_selected),
                    train_seq_e'(0), last_data_rate_r, '0, ts2_symbol6);
           //goto next pcie ltssm state
           next_state = ST_RECOVERY_RCVR_CFG;
@@ -1035,7 +1035,7 @@ module pcie_ltssm_downstream
           if (!changed_speed_recovery_r && curr_data_rate_r.rate != gen1) begin
             transmit_ordered_set = '1;
             ordered_set_c = gen_ts_os( rate_speed_e'(last_data_rate_r.rate), TS2,
-                     train_seq_e'(LINK_NUM), train_seq_e'(0), last_data_rate_r, '0, ts2_symbol6);
+                     train_seq_e'(link_number_selected), train_seq_e'(0), last_data_rate_r, '0, ts2_symbol6);
             //goto next pcie ltssm state
             next_state = ST_RECOVERY_SPEED;
           end else if (changed_speed_recovery_r) begin
@@ -1405,7 +1405,7 @@ module pcie_ltssm_downstream
             // timer_c                = '0;
             gen_os_ctrl_c.valid    = '0;
             ordered_set_sent_cnt_c = '0;
-            next_state             = ST_DETECT;
+            next_state             = ST_IDLE;
           end
         end
       end
