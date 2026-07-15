@@ -11,6 +11,10 @@ filesets:
     files:
       - pcie_ltssm/tb/test_ltssm_configuration.py : {file_type : user, copyto : .}
 
+  cocotb_linkup:
+    files:
+      - test_ltssm_linkup.py : {file_type : user, copyto : .}
+
 targets:
   default:
     flow: sim
@@ -51,6 +55,20 @@ targets:
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl,cocotb]
+    toplevel : [pcie_ltssm_downstream]
+
+  verilate_fast:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_linkup
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_linkup]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
