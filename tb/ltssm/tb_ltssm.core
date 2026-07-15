@@ -21,6 +21,21 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_recovery.py : {file_type : user, copyto : .}
 
+  cocotb_detect_retry:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_detect_retry.py : {file_type : user, copyto : .}
+
+  cocotb_polling_timeout:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_polling_timeout.py : {file_type : user, copyto : .}
+
+  cocotb_polling_timeout_tx_ok:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_polling_timeout_tx_ok.py : {file_type : user, copyto : .}
+
 targets:
   default:
     flow: sim
@@ -89,6 +104,48 @@ targets:
         - -GSIM_FAST_LINK=1
         - waiver.vlt
     filesets : [rtl,cocotb_recovery]
+    toplevel : [pcie_ltssm_downstream]
+
+  verilate_detect_retry:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_detect_retry
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_detect_retry]
+    toplevel : [pcie_ltssm_downstream]
+
+  verilate_polling_timeout:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_polling_timeout
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_polling_timeout]
+    toplevel : [pcie_ltssm_downstream]
+
+  verilate_polling_timeout_tx_ok:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_polling_timeout_tx_ok
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_polling_timeout_tx_ok]
     toplevel : [pcie_ltssm_downstream]
 
   synth:

@@ -662,15 +662,22 @@ module pcie_ltssm_downstream
               //goto cofig
               next_state = ST_POLLING_CONFIGURATION;
             end else if (|lanes_ts1_satisfied) begin
-              // TODO: This should be entered when a 24 ms timeout is reached, 1024 TS1s were sent and 
+              // TODO: This should be entered when a 24 ms timeout is reached, 1024 TS1s were sent and
               // Any lane received 8 consecutive TS1s with the copmbliance rceive bit of symbol 5 == 1 and loopback bit == 0
               next_state = ST_POLLING_COMPLIANCE;
             end
           end
-          if (timer_r >= TwentyFourMsTimeOut) begin
-              // If neither are met we go to ST_IDLE (Detect State...)
-              next_state = ST_IDLE;
-          end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        // 24ms Polling watchdog. Must NOT be gated behind ordered_set_tranmitted_i:
+        // a stalled TX handshake is exactly the failure this failsafe exists to
+        // catch, and gating it there defeats its purpose (Bug 4).
+        // The (next_state == curr_state) guard ensures the watchdog only fires
+        // when no success path above has already claimed a transition -- without
+        // it, this check would clobber a legitimate ST_POLLING_CONFIGURATION
+        // transition that happened to occur at >= 24ms.
+        if ((timer_r >= TwentyFourMsTimeOut) && (next_state == curr_state)) begin
+          next_state = ST_IDLE;
         end
       end
       //*********************************************************
