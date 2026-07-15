@@ -13,7 +13,13 @@ filesets:
 
   cocotb_linkup:
     files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_linkup.py : {file_type : user, copyto : .}
+
+  cocotb_recovery:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_recovery.py : {file_type : user, copyto : .}
 
 targets:
   default:
@@ -69,6 +75,20 @@ targets:
         - -GSIM_FAST_LINK=1
         - waiver.vlt
     filesets : [rtl,cocotb_linkup]
+    toplevel : [pcie_ltssm_downstream]
+
+  verilate_recovery:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_recovery
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_recovery]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
