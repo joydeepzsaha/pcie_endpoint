@@ -57,6 +57,17 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_rc_linkup.py : {file_type : user, copyto : .}
 
+  rtl_b2b:
+    files:
+      - tb_ltssm_b2b.sv : {file_type : systemVerilogSource}
+    depend:
+      - fusesoc:pcie:ltssm
+
+  cocotb_b2b:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_b2b.py : {file_type : user, copyto : .}
+
 targets:
   default:
     flow: sim
@@ -126,6 +137,22 @@ targets:
         - waiver.vlt
     filesets : [rtl,cocotb_recovery]
     toplevel : [pcie_ltssm_downstream]
+
+  # Back-to-back RC<->EP link-up: two LTSSM instances in tb_ltssm_b2b.sv,
+  # IS_ROOT_PORT set per-instance inside the harness. x1.
+  verilate_b2b:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_b2b
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - waiver.vlt
+    filesets : [rtl_b2b,cocotb_b2b]
+    toplevel : [tb_ltssm_b2b]
 
   # Root-Complex-mode link-up: DUT is the RC (IS_ROOT_PORT=1), x1 link,
   # LINK_NUM=1. First target to exercise the IS_ROOT_PORT=1 DUT behavior.
