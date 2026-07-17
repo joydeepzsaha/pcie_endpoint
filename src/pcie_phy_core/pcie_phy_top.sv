@@ -299,7 +299,9 @@ module pcie_phy_top
       .DATA_WIDTH   (DATA_WIDTH),
       .KEEP_WIDTH   (KEEP_WIDTH),
       .USER_WIDTH   (USER_WIDTH),
-      .SIM_FAST_LINK(SIM_FAST_LINK)
+      .SIM_FAST_LINK(SIM_FAST_LINK),
+      .IS_ROOT_PORT (IS_ROOT_PORT),
+      .LINK_NUM     (LINK_NUM)
   ) pcie_ltssm_downstream_inst (
       .clk_i              (pipe_rx_usr_clk_i),
       .rst_i              (rst_i || phy_phystatus_rst),

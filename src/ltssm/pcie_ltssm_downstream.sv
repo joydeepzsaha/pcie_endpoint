@@ -319,7 +319,10 @@ module pcie_ltssm_downstream
 
   always_ff @(posedge clk_i) begin : gen_link_number
     if (rst_i) begin
-      link_number_selected <= '0;
+      // RC (IS_ROOT_PORT=1) originates the Link Number as LINK_NUM; EP
+      // (IS_ROOT_PORT=0) starts at '0 and latches from the RX side below,
+      // unchanged from before.
+      link_number_selected <= IS_ROOT_PORT ? LINK_NUM[7:0] : '0;
       max_rate             <= gen1;
     end else begin
       logic [MAX_NUM_LANES-1:0] flag_lane;
@@ -328,7 +331,10 @@ module pcie_ltssm_downstream
       flag_rate = '0;
       for (int i = 0; i < MAX_NUM_LANES; i++) begin
         if (i == 0) begin
-          if (lane_link_number_selected[i]) begin
+          // !IS_ROOT_PORT guard: RC never re-latches link_number_selected
+          // from the RX side -- it already holds LINK_NUM from reset above.
+          // Fix #6's EP latch (below) is untouched when IS_ROOT_PORT=0.
+          if (!IS_ROOT_PORT && lane_link_number_selected[i]) begin
             link_number_selected <= link_number_selected_per_lane[8*i+:8];
           end
 
@@ -337,7 +343,7 @@ module pcie_ltssm_downstream
           end
         end else begin
 
-          if (lane_link_number_selected[i] && ((flag_lane >> i) == '0)) begin
+          if (!IS_ROOT_PORT && lane_link_number_selected[i] && ((flag_lane >> i) == '0)) begin
             link_number_selected <= link_number_selected_per_lane[8*i+:8];
             flag_lane[i] = '1;
           end
@@ -727,7 +733,11 @@ module pcie_ltssm_downstream
           gen_os_ctrl_c.gen_ts1 = '1;
           gen_os_ctrl_c.gen_ts2 = '0;
           transmit_ordered_set = '1;
-          ordered_set_c = gen_ts_os( gen1, TS1);
+          // RC originates LINK_NUM from the first TS1 of Configuration;
+          // EP still offers PAD/PAD until it has something to latch (fix #6).
+          ordered_set_c = IS_ROOT_PORT
+              ? gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected))
+              : gen_ts_os( gen1, TS1);
           //goto wait low
           next_state = ST_CONFIGURATION_LINKWIDTH_START;
         end  //check timeout count
@@ -863,7 +873,12 @@ module pcie_ltssm_downstream
             gen_os_ctrl_c.gen_ts2  = '0;
             transmit_ordered_set   = '1;
             gen_os_ctrl_c.set_lane = '1;
-            ordered_set_c = gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
+            // RC assigns Lane Number 0 here (x1 only -- constant, not
+            // per-lane). EP still offers PAD until COMPLETE (unchanged).
+            // TODO(x4): per-lane lane number assignment requires per-lane TX path.
+            ordered_set_c = IS_ROOT_PORT
+                ? gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected), train_seq_e'(0))
+                : gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
             //goto lanenum accept
             next_state = ST_CONFIGURATION_LANENUM_ACCEPT;
           end
@@ -1773,11 +1788,15 @@ module pcie_ltssm_downstream
 
               
               //check that link number is not pad and that lane number is pad
-              if ((ordered_set_i[lane].link_num != PAD) &&
+              //RC already knows its own LINK_NUM (originated, not latched --
+              //see gen_link_number) and needs the peer to echo exactly that
+              //value back, not just any non-PAD value; EP shape unchanged.
+              if ((IS_ROOT_PORT ? (ordered_set_i[lane].link_num == link_number_selected)
+                                 : (ordered_set_i[lane].link_num != PAD)) &&
                   (ordered_set_i[lane].lane_num == PAD)) begin
                 //incrment ts1 count
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : ts1_cnt + 1;
-              end else begin    
+              end else begin
                 //reset ts1 cnt... this ensures that the TS1-OS are consecutive per the spec
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 :'0;
               end
@@ -1847,8 +1866,12 @@ module pcie_ltssm_downstream
               single_ts2_received_c ='1;
 
             if (ts1_valid_i[lane] || ts2_valid_i[lane]) begin
+              //RC assigned Lane Number 0 in LANENUM_WAIT (x1 only, constant --
+              //see TODO(x4) there) and confirms the peer echoed exactly that
+              //value; EP still accepts any non-PAD lane number, unchanged.
               if ((ordered_set_i[lane].link_num == link_number_selected) &&
-                  (ordered_set_i[lane].lane_num != PAD)) begin
+                  (IS_ROOT_PORT ? (ordered_set_i[lane].lane_num == 8'h0)
+                                 : (ordered_set_i[lane].lane_num != PAD))) begin
 
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : ts1_cnt + 1;
 
