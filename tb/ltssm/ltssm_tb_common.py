@@ -104,6 +104,84 @@ def pack_tsos_all_lanes(**kw):
     return v
 
 
+# ---- train_seq_e discriminator bytes (pcie_phy_pkg.sv) ----
+# gen_ts_os() writes TSOS_ into ts_s6..ts_s9 and every ts_id[0..5] byte, so a
+# DUT-originated ordered set carries the TS type there. pack_tsos() leaves them
+# 0 (the RTL RX keys TS1/TS2 off the ts1_valid_i/ts2_valid_i strobes, not these
+# bytes), so the discriminator is only meaningful on DUT *output* (ordered_set_o).
+TS1 = 0x4A
+TS2 = 0x45
+
+
+def unpack_tsos(value):
+    """Inverse of pack_tsos() for a single pcie_tsos_t (128-bit int).
+
+    Field offsets are the same packed layout pack_tsos() writes to, read back
+    out; derivation in the struct-layout comment above. Returns link_num,
+    lane_num, rate/speed_change (from the rate_id byte), train_ctrl, and a
+    TS1/TS2 discriminator taken from ts_s6 (offset 48) cross-checked against
+    ts_id[0] (offset 80) -- both are written to TSOS_ by gen_ts_os().
+    """
+    value &= (1 << TSOS_WIDTH) - 1
+    b = lambda off: (value >> off) & 0xFF          # noqa: E731
+    rate_id_byte = b(32)
+    ts_s6 = b(48)
+    ts_id0 = b(80)
+    # ts_s6 and ts_id0 agree on a real DUT TS; prefer ts_s6, note disagreement.
+    if ts_s6 in (TS1, TS2):
+        ts_type = ts_s6
+    elif ts_id0 in (TS1, TS2):
+        ts_type = ts_id0
+    else:
+        ts_type = None
+    return {
+        "com":              b(0),
+        "link_num":         b(8),
+        "lane_num":         b(16),
+        "n_fts":            b(24),
+        "rate_id_byte":     rate_id_byte,
+        "speed_change":    (rate_id_byte >> 7) & 0x1,
+        "autonomous_change": (rate_id_byte >> 6) & 0x1,
+        "rate":            (rate_id_byte >> 1) & 0x1F,
+        "train_ctrl":       b(40),
+        "ts_s6":            ts_s6,
+        "ts_id0":           ts_id0,
+        "ts_type":          ts_type,          # TS1, TS2, or None
+        "is_ts1":           ts_type == TS1,
+        "is_ts2":           ts_type == TS2,
+    }
+
+
+def _verify_unpack_roundtrip():
+    """Standalone self-check: pack_tsos() -> unpack_tsos() must round-trip the
+    link/lane/rate/speed_change fields for every representative combination.
+    Runs at import so it fails loudly before any test uses the unpacker.
+    ts_type is NOT checked here: pack_tsos() deliberately leaves the TS
+    discriminator bytes 0 (that path is exercised only on DUT output), so a
+    packed value has ts_type None by construction."""
+    cases = [
+        dict(link_num=None, lane_num=None, rate=0,          speed_change=0),
+        dict(link_num=0x01, lane_num=None, rate=GEN1_RATE,  speed_change=0),
+        dict(link_num=0x01, lane_num=0,    rate=GEN1_RATE,  speed_change=0),
+        dict(link_num=0x5A, lane_num=0x03, rate=0x07,       speed_change=1),
+        dict(link_num=0xFF, lane_num=0xFE, rate=0x1F,       speed_change=1),
+    ]
+    for c in cases:
+        u = unpack_tsos(pack_tsos(**c))
+        exp_link = PAD if c["link_num"] is None else c["link_num"]
+        exp_lane = PAD if c["lane_num"] is None else c["lane_num"]
+        assert u["link_num"] == exp_link, (c, u["link_num"], exp_link)
+        assert u["lane_num"] == exp_lane, (c, u["lane_num"], exp_lane)
+        assert u["rate"] == c["rate"], (c, u["rate"])
+        assert u["speed_change"] == c["speed_change"], (c, u["speed_change"])
+        assert u["ts_type"] is None, (c, u["ts_type"])
+    return True
+
+
+# Run the round-trip check at import -- fails loudly before any test body runs.
+_UNPACK_ROUNDTRIP_OK = _verify_unpack_roundtrip()
+
+
 async def os_tx_pulser(dut):
     """Emulate the PHY-TX 'ordered set transmitted' handshake: the FSM only
     advances its counters on this pulse. One pulse every few cycles."""
@@ -221,4 +299,175 @@ async def bring_up_link(dut):
     dut.ts2_valid_i.value = 0
     dut.idle_valid_i.value = ALL
     await wait_state(dut, ST_L0, 2000, "L0")
+    dut.idle_valid_i.value = 0
+
+
+# ==========================================================================
+#  Root-Complex-mode driver: TB plays Endpoint, DUT plays Root Complex.
+#  x1 (MAX_NUM_LANES=1) only. Reactive -- it samples what the DUT actually
+#  originates on ordered_set_o, asserts it, then echoes on ordered_set_i.
+#  Nothing about the DUT's transmitted sequence is hardcoded/scripted: every
+#  link_num/lane_num/TS-type the DUT sends is read back and checked, so a DUT
+#  transmitting garbage fails the assertion instead of being rubber-stamped.
+# ==========================================================================
+
+# x1 single-lane masks (this driver is x1-scoped; do not reuse the 4-lane ALL).
+LANE0_MASK      = 0x1
+RXSTATUS_OK_X1  = 0b011   # one lane x 3'b011, the "receiver ready" encoding
+
+
+def _dump_rc_trace(dut, trace, note):
+    """On hang/assertion-failure, dump the per-state transmit trace plus the
+    DUT-internal counters/flags that decide each Configuration exit."""
+    dut._log.error(f"==== RC Configuration FAILURE: {note} ====")
+    dut._log.error("---- per-state ordered_set_o the DUT transmitted ----")
+    for t in trace:
+        dut._log.error(
+            f"  {t['name']:17s} entry-tx: ts={t['ts']} "
+            f"link={t['link']:#04x} lane={t['lane']:#04x}"
+            + (f"  exit-tx: ts={t['exit_ts']} link={t['exit_link']:#04x} "
+               f"lane={t['exit_lane']:#04x}" if 'exit_ts' in t else ""))
+    cur = int(dut.ltssm_state_o.value)
+    dut._log.error(f"---- hang point: state={STATE_NAMES.get(cur, hex(cur))} "
+                   f"({cur:#07x}) ----")
+
+    def rd(path):
+        try:
+            return hex(int(eval("dut." + path + ".value")))  # noqa: S307
+        except Exception as e:                                # noqa: BLE001
+            return f"<n/a: {type(e).__name__}>"
+    for sig in ("link_number_selected", "link_width_satisfied",
+                "link_lanes_formed", "link_lanes_nums_match",
+                "ts1_lanenum_wait_satisfied", "lane_num_formed",
+                "lane_active_r", "ordered_set_sent_cnt_r"):
+        dut._log.error(f"  {sig:28s} = {rd(sig)}")
+    for sig in ("gen_cnt_ts1[0].ts1_cnt", "gen_cnt_ts1[0].ts2_cnt",
+                "gen_cnt_ts1[0].lane_in_save"):
+        dut._log.error(f"  {sig:28s} = {rd(sig)}")
+
+
+def _assert_tx(dut, trace, name, exp_ts, exp_link, exp_lane):
+    """Sample ordered_set_o, record it, and assert the DUT originated exactly
+    the (TS type, link_num, lane_num) the spec requires for this state."""
+    u = unpack_tsos(int(dut.ordered_set_o.value))
+    trace.append({"name": name, "ts": "TS1" if u["is_ts1"] else
+                  ("TS2" if u["is_ts2"] else f"?{u['ts_s6']:#04x}"),
+                  "link": u["link_num"], "lane": u["lane_num"]})
+    ts_ok = u["is_ts1"] if exp_ts == TS1 else u["is_ts2"]
+    if not (ts_ok and u["link_num"] == exp_link and u["lane_num"] == exp_lane):
+        _dump_rc_trace(dut, trace,
+                       f"{name}: DUT transmitted the wrong ordered set")
+        raise AssertionError(
+            f"{name}: expected {'TS1' if exp_ts == TS1 else 'TS2'} "
+            f"link={exp_link:#04x} lane={exp_lane:#04x}; got "
+            f"ts={trace[-1]['ts']} link={u['link_num']:#04x} "
+            f"lane={u['lane_num']:#04x}")
+    return u
+
+
+async def bring_up_link_rc(dut):
+    """Reset -> ... -> L0 with the DUT as Root Complex (IS_ROOT_PORT=1) and the
+    TB as its Endpoint link partner. x1 only. Returns in L0."""
+    assert _UNPACK_ROUNDTRIP_OK  # unpacker self-check ran at import
+    LINK = LINK_NUM              # the Link Number the DUT (RC) originates
+    trace = []
+
+    drive_idle_inputs(dut)
+    dut.rst_i.value = 1
+    await ClockCycles(dut.clk_i, 5)
+    dut.rst_i.value = 0
+    await ClockCycles(dut.clk_i, 5)
+    assert int(dut.ltssm_state_o.value) == ST_IDLE
+    assert int(dut.link_up_o.value) == 0
+
+    # ---- Detect + Polling: role-neutral, same handshake as bring_up_link,
+    #      x1 masks. ----
+    dut.en_i.value = 1
+    await wait_state(dut, ST_DETECT_QUIET, 50, "DETECT_QUIET")
+
+    dut.phy_rxelecidle_i.value = LANE0_MASK
+    await ClockCycles(dut.clk_i, 3)
+    dut.phy_rxelecidle_i.value = 0
+    await wait_state(dut, ST_DETECT_ACTIVE, 50, "DETECT_ACTIVE")
+    assert int(dut.phy_txdetectrx_o.value) == 1, "RC must request rx-detect"
+
+    dut.receiver_detected_i.value = LANE0_MASK
+    dut.phy_rxstatus_i.value = RXSTATUS_OK_X1
+    dut.phy_phystatus_i.value = LANE0_MASK
+    await ClockCycles(dut.clk_i, 3)
+    dut.phy_phystatus_i.value = 0
+    cocotb.start_soon(os_tx_pulser(dut))
+    await wait_state(dut, ST_POLLING_ACTIVE, 100, "POLLING_ACTIVE")
+
+    # Polling.Active: EP answers TS1 PAD/PAD (role-neutral).
+    dut.ordered_set_i.value = pack_tsos(link_num=None, lane_num=None)
+    dut.ts1_valid_i.value = LANE0_MASK
+    await wait_state(dut, ST_POLLING_CONFIG, 2000, "POLLING_CONFIGURATION")
+
+    # Polling.Config: EP answers TS2 PAD/PAD (role-neutral).
+    dut.ts1_valid_i.value = 0
+    dut.ts2_valid_i.value = LANE0_MASK
+    await wait_state(dut, ST_CFG_LW_START, 2000, "CFG_LINKWIDTH_START")
+
+    # ---- Configuration: DUT (RC) originates; TB samples, asserts, echoes. ----
+    # (state, name, DUT-transmits TS/link/lane, echo strobe, echo pack kwargs)
+    steps = [
+        (ST_CFG_LW_START,  "LINKWIDTH_START",  TS1, LINK, PAD,
+         "ts1", dict(link_num=LINK, lane_num=None)),
+        (ST_CFG_LW_ACCEPT, "LINKWIDTH_ACCEPT", TS1, LINK, PAD,
+         "ts1", dict(link_num=LINK, lane_num=None)),
+        (ST_CFG_LN_WAIT,   "LANENUM_WAIT",     TS1, LINK, 0,
+         "ts1", dict(link_num=LINK, lane_num=0)),
+        (ST_CFG_LN_ACCEPT, "LANENUM_ACCEPT",   TS1, LINK, 0,
+         "ts1", dict(link_num=LINK, lane_num=0)),
+        (ST_CFG_COMPLETE,  "COMPLETE",         TS2, LINK, 0,
+         "ts2", dict(link_num=LINK, lane_num=0)),
+    ]
+    next_names = ["CFG_LINKWIDTH_ACCEPT", "CFG_LANENUM_WAIT",
+                  "CFG_LANENUM_ACCEPT", "CFG_COMPLETE", "CFG_IDLE"]
+    next_states = [ST_CFG_LW_ACCEPT, ST_CFG_LN_WAIT, ST_CFG_LN_ACCEPT,
+                   ST_CFG_COMPLETE, ST_CFG_IDLE]
+
+    for i, (st, name, exp_ts, exp_link, exp_lane, strobe, echo) in \
+            enumerate(steps):
+        # DUT is already in this state (waited for it). Settle one cycle so
+        # ordered_set_o (registered from the prior state's exit build) is stable.
+        await RisingEdge(dut.clk_i)
+        _assert_tx(dut, trace, name, exp_ts, exp_link, exp_lane)
+
+        # Echo the ordered set that closes this state's RX exit condition.
+        dut.ordered_set_i.value = pack_tsos(**echo)
+        dut.ts1_valid_i.value = LANE0_MASK if strobe == "ts1" else 0
+        dut.ts2_valid_i.value = LANE0_MASK if strobe == "ts2" else 0
+
+        try:
+            await wait_state(dut, next_states[i], 4000, next_names[i])
+        except AssertionError as e:
+            # Record what the DUT was transmitting at the hang, then dump.
+            u = unpack_tsos(int(dut.ordered_set_o.value))
+            trace[-1].update(exit_ts=("TS1" if u["is_ts1"] else
+                             ("TS2" if u["is_ts2"] else f"?{u['ts_s6']:#04x}")),
+                             exit_link=u["link_num"], exit_lane=u["lane_num"])
+            _dump_rc_trace(dut, trace, f"stuck in {name}: {e}")
+            raise
+
+    # ---- Configuration.Idle: DUT transmits a zeroed/idle OS; EP sends idles. ----
+    await RisingEdge(dut.clk_i)
+    u = unpack_tsos(int(dut.ordered_set_o.value))
+    trace.append({"name": "IDLE", "ts": "idle/zero",
+                  "link": u["link_num"], "lane": u["lane_num"]})
+    if u["is_ts1"] or u["is_ts2"]:
+        _dump_rc_trace(dut, trace, "IDLE: DUT still transmitting a TS ordered set")
+        raise AssertionError(
+            f"CFG_IDLE: expected idle/zeroed OS, got "
+            f"{'TS1' if u['is_ts1'] else 'TS2'}")
+    dut.ts1_valid_i.value = 0
+    dut.ts2_valid_i.value = 0
+    dut.ordered_set_i.value = 0
+    dut.idle_valid_i.value = LANE0_MASK
+    try:
+        await wait_state(dut, ST_L0, 4000, "L0")
+    except AssertionError as e:
+        _dump_rc_trace(dut, trace, f"stuck in CFG_IDLE: {e}")
+        raise
     dut.idle_valid_i.value = 0
