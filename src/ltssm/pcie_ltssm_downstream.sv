@@ -817,7 +817,17 @@ module pcie_ltssm_downstream
             gen_os_ctrl_c.gen_ts1  = '1;
             gen_os_ctrl_c.gen_ts2  = '0;
             transmit_ordered_set   = '1;
-            ordered_set_c = gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
+            // This exit build feeds the ordered set transmitted during
+            // Configuration.Lanenum.Wait -- the state where a downstream/root
+            // port assigns Lane numbers. RC must therefore already carry an
+            // assigned Lane number here (0 at x1), not PAD, or it sits in
+            // Lanenum.Wait transmitting PAD forever and its peer never changes
+            // its lane number -> 2ms timeout -> error -> ST_IDLE. EP still
+            // offers PAD until Complete (unchanged).
+            // TODO(x4): per-lane lane number assignment requires per-lane TX path.
+            ordered_set_c = IS_ROOT_PORT
+                ? gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected), train_seq_e'(0))
+                : gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
             next_state = ST_CONFIGURATION_LANENUM_WAIT;
           end
         end  // end of: if (ordered_set_tranmitted_i)
