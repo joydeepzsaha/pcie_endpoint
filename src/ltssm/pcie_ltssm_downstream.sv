@@ -6,6 +6,13 @@
 //! Module does not support upconfig!
 //!
 //! Module does not support crosslink!
+//!
+//! Module does not support autonomous lane-width reconfiguration: a link
+//! width change requires a full retrain from Detect (there is no live-link
+//! path that renegotiates width without first dropping back through
+//! Detect/Configuration).
+//!
+//! Module does not support lane reversal.
 module pcie_ltssm_downstream
   import pcie_phy_pkg::*;
 #(
@@ -665,6 +672,19 @@ module pcie_ltssm_downstream
               // TODO: This should be entered when a 24 ms timeout is reached, 1024 TS1s were sent and
               // Any lane received 8 consecutive TS1s with the copmbliance rceive bit of symbol 5 == 1 and loopback bit == 0
               next_state = ST_POLLING_COMPLIANCE;
+            end else begin
+              // Neither lanes_ts1_satisfied nor lanes_ts2_satisfied is set on
+              // any lane -- the link partner never responded at all during
+              // Polling.Active. next_state is left alone here (still ==
+              // curr_state), so the generic 24ms watchdog below still sends
+              // us to ST_IDLE either way; this just makes sure error_o
+              // distinguishes "no response at all" from the other paths
+              // through this state instead of silently falling through.
+              // (1'b1, not '1 -- Verilator 5.050 hits a parser edge case
+              // with the unsized literal as the sole statement in a bare
+              // else-begin block at this exact position; functionally
+              // identical for a 1-bit reg.)
+              error_c = 1'b1;
             end
           end
         end  // end of: if (ordered_set_tranmitted_i)
@@ -1501,7 +1521,16 @@ module pcie_ltssm_downstream
         link_lane_reconfig[lane]         <= (ts1_cnt >= 8'h2);
         lane_num_formed[lane]            <= lane_active_r[lane] ? (ts2_cnt == 8'h8) : '1;
         //determine if TS1 req satisfied for lane by its count
-        link_idle_satisfied[lane]        <= (ts1_cnt >= 8'h8);
+        //(ts1_cnt is repurposed as the idle count while curr_state ==
+        //ST_CONFIGURATION_IDLE -- see that state's per-lane block, same
+        //convention ST_RECOVERY_IDLE uses for its own counter -- so this is
+        //not a mixup with idle_cnt/lanes_idle_satisfied, which belong to
+        //ST_RECOVERY_IDLE's separate exit condition instead.) Gated by
+        //lane_active_r like its siblings above/below so an inactive lane on
+        //a reduced-width link contributes a trivial '1' to the &-reduction
+        //at ST_CONFIGURATION_IDLE's exit check instead of blocking it
+        //forever.
+        link_idle_satisfied[lane]        <= lane_active_r[lane] ? (ts1_cnt >= 8'h8) : '1;
         ts1_cnt_satisfied[lane]          <= lane_active_r[lane] ? (ts1_cnt == 8'h8) : '1;
         ts2_cnt_satisfied[lane]          <= lane_active_r[lane] ? (ts2_cnt == 8'h8) : '1;
         at_least_one_ts1_ts2[lane]       <= (ts1_cnt_c != '0) | (ts2_cnt_c != '0);
@@ -1756,9 +1785,17 @@ module pcie_ltssm_downstream
 
             //check if consecutive TS1's satisfied for this lane
             if (link_width_satisfied[lane]) begin
-              //select link number by choosing lowest significant lane satisfied
-              //ignore all other lanes
-              if ((lane == 0) || (link_width_satisfied[lane:0] == '0)) begin
+              //select link number by choosing the lowest-numbered lane that
+              //is currently satisfied -- not hardcoded to lane 0.
+              //(1<<lane)-1 masks off every bit at position >= lane, leaving
+              //just the lanes below it; for lane==0 this mask is 0 so the
+              //check is trivially true (there is no lower lane), which is
+              //why no separate lane==0 special case is needed here (and
+              //avoids an invalid link_width_satisfied[lane-1:0] part-select
+              //at lane==0, since `lane` is a genvar -- elaborated per
+              //instance, not a runtime index -- and that range would
+              //elaborate to [-1:0] for that instance).
+              if ((link_width_satisfied & ((1 << lane) - 1)) == '0) begin
                 link_number_selected_per_lane_c = ordered_set_i[lane].link_num;
                 lane_link_number_selected_c ='1;
               end

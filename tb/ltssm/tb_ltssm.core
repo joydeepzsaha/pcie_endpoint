@@ -41,6 +41,17 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_config_timeout.py : {file_type : user, copyto : .}
 
+  cocotb_partial_lanes:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_partial_lanes.py : {file_type : user, copyto : .}
+
+  cocotb_recovery_partial_lanes:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_partial_lanes.py : {file_type : user, copyto : .}
+      - test_ltssm_recovery_partial_lanes.py : {file_type : user, copyto : .}
+
 targets:
   default:
     flow: sim
@@ -165,6 +176,34 @@ targets:
         - -GSIM_FAST_LINK=1
         - waiver.vlt
     filesets : [rtl,cocotb_config_timeout]
+    toplevel : [pcie_ltssm_downstream]
+
+  verilate_partial_lanes:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_partial_lanes
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_partial_lanes]
+    toplevel : [pcie_ltssm_downstream]
+
+  verilate_recovery_partial_lanes:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_recovery_partial_lanes
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_recovery_partial_lanes]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
