@@ -129,7 +129,9 @@ module pcie_phy_top
   logic              [    MAX_NUM_LANES-1:0] polarity_inverted;
   training_ctrl_t    [    MAX_NUM_LANES-1:0] training_ctrl;
   rate_speed_e                               curr_data_rate;
-  pcie_ordered_set_t                         ordered_set;
+  // pcie_ltssm_downstream.ordered_set_o is now per-lane (pcie_ordered_set_t
+  // [MAX_NUM_LANES-1:0]) to support x4 root-port Lane Number assignment.
+  pcie_ordered_set_t [    MAX_NUM_LANES-1:0] ordered_set;
   (* mark_debug = "true", keep = "true" *) logic                                      ordered_set_tranmitted;
   logic                                      send_ordered_set;
   rate_id_t          [    MAX_NUM_LANES-1:0] rate_id;
@@ -281,7 +283,10 @@ module pcie_phy_top
       //   .num_active_lanes_o(num_active_lanes_o),
       .num_active_lanes_i      (num_active_lanes_i),
       .send_ordered_set_i      (send_ordered_set),
-      .ordered_set_i           (ordered_set),
+      // TODO(x4-integration): os_generator/phy_transmit take a single ordered
+      // set, so lane 0's is used here. Per-lane serialization is Phase 4b;
+      // correct for x1, and the b2b harness bypasses this datapath entirely.
+      .ordered_set_i           (ordered_set[0]),
       .curr_data_rate_i        (curr_data_rate),
       .ordered_set_tranmitted_o(ordered_set_tranmitted),
       .s_dllp_axis_tdata       (s_dllp_axis_tdata),

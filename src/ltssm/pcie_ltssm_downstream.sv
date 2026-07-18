@@ -82,7 +82,7 @@ module pcie_ltssm_downstream
     //training set configuration signals
     input  pcie_tsos_t        [MAX_NUM_LANES-1:0] ordered_set_i,
     output presets_coeff_t    [MAX_NUM_LANES-1:0] preset_coeff_o,
-    output pcie_ordered_set_t                     ordered_set_o,
+    output pcie_ordered_set_t [MAX_NUM_LANES-1:0] ordered_set_o,
     // input  ts_symbol6_union_t [MAX_NUM_LANES-1:0] symbol6_i,
     // input  training_ctrl_t    [MAX_NUM_LANES-1:0] training_ctrl_i,
     // input  rate_id_t          [MAX_NUM_LANES-1:0] rate_id_i,
@@ -807,10 +807,17 @@ module pcie_ltssm_downstream
         gen_os_ctrl_c.valid = '1;
         if ((ordered_set_tranmitted_i)) begin
           ordered_set_sent_cnt_c = ordered_set_sent_cnt_r + 1'b1;
-          //check if pcie state continue scenario satisfied
-          //link lane formed xor was put for some spec reason, removing for single lane test as it
-          //fails to proceed
-          if ((|link_lanes_formed) && /*(!(^link_lanes_formed)) &&*/
+          //check if pcie state continue scenario satisfied.
+          //Advance once any lane has formed (>=2 consecutive matching TS1s);
+          //the responding subset is then selected per-lane via lane_active_r
+          //gating downstream. (The old `!(^link_lanes_formed)` parity gate was
+          //deleted -- see commit message: it required an EVEN number of formed
+          //lanes, which rejects x1, and parity does not express "one contiguous
+          //link" anyway.)
+          //TODO(contiguity): no check that the formed lanes are contiguous from
+          //lane 0 / constitute a single link; needed for fragmentation and
+          //crosslink rejection, unimplemented.
+          if ((|link_lanes_formed) &&
           ordered_set_sent_cnt_r >= 8'h08)
           begin
             ordered_set_sent_cnt_c = '0;
@@ -1876,11 +1883,13 @@ module pcie_ltssm_downstream
               single_ts2_received_c ='1;
 
             if (ts1_valid_i[lane] || ts2_valid_i[lane]) begin
-              //RC assigned Lane Number 0 in LANENUM_WAIT (x1 only, constant --
-              //see TODO(x4) there) and confirms the peer echoed exactly that
-              //value; EP still accepts any non-PAD lane number, unchanged.
+              //RC assigned this lane its physical index (see the per-lane
+              //output stage) and confirms the peer echoed exactly that value.
+              //`== lane` generalises the old x1 `== 8'h0` to x4 (lane==0 at x1,
+              //so bit-identical there) and matches the COMPLETE check below.
+              //EP still accepts any non-PAD lane number, unchanged.
               if ((ordered_set_i[lane].link_num == link_number_selected) &&
-                  (IS_ROOT_PORT ? (ordered_set_i[lane].lane_num == 8'h0)
+                  (IS_ROOT_PORT ? (ordered_set_i[lane].lane_num == lane)
                                  : (ordered_set_i[lane].lane_num != PAD))) begin
 
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : ts1_cnt + 1;
@@ -1935,7 +1944,61 @@ module pcie_ltssm_downstream
     end
   end
 
-  assign ordered_set_o    = ordered_set_r;
+  // ======================================================================
+  //  Per-lane ordered-set output -- THE SINGLE POINT OF PER-LANE DIVERGENCE
+  // ======================================================================
+  //  The whole FSM builds ONE 128-bit template (ordered_set_r) per cycle; a
+  //  downstream/root port must, however, transmit a DIFFERENT Lane Number on
+  //  each lane during Configuration (PCIe Base, Configuration.Lanenum). This
+  //  block is the only place the single template fans out per-lane, and the
+  //  Lane Number byte is the ONLY field that ever differs between lanes --
+  //  Link Number, rate, TS type, everything else is broadcast identically.
+  //
+  //  Widening the OUTPUT (ordered_set_o -> array) rather than the ~20 build
+  //  sites (ordered_set_c) keeps every gen_ts_os/gen_eios/gen_eieos/gen_zeros
+  //  call untouched and confines x4 to this stage. See the Step-0 design note.
+  //
+  //  When per-lane assignment fires (physical lane index l):
+  //    * gen_ts1|gen_ts2 : only a TS1/TS2 ordered set carries a Lane Number.
+  //      Gating here means idle (gen_idle -> gen_zeros), EIOS and EIEOS are
+  //      NEVER touched -- their byte 2 is pattern data, not a lane number.
+  //    * template lane_num != PAD : the FSM only puts a non-PAD lane number in
+  //      the template once it has decided to assign one. This is what keeps the
+  //      two roles correct WITHOUT an IS_ROOT_PORT test here: the RC exit
+  //      builds carry train_seq_e'(0) (non-PAD) from Lanenum.Wait on, so the RC
+  //      assigns per-lane from Lanenum.Wait; the EP builds carry PAD until its
+  //      COMPLETE-feeding build (line ~853), so the EP only diverges per-lane
+  //      at Complete (which is all a *spec* upstream port needs -- and note the
+  //      repo's EP does not yet advertise lane numbers earlier; that is a
+  //      separate EP-side gap).
+  //
+  //  x1 (MAX_NUM_LANES=1): l is always 0, and every template that reaches this
+  //  block with lane_num != PAD already holds 0, so t.lane_num = 0 is a no-op
+  //  -- bit-identical to the previous `assign ordered_set_o = ordered_set_r`.
+  //
+  //  Lane reversal (optional per spec, unimplemented): a reversed link would
+  //  map assigned-number -> reversed-physical-lane HERE (t.lane_num = f(l))
+  //  and the RX `lane_num == lane` checks would compare against f(l).
+  //  TODO(lane-reversal): not implemented; contiguous, non-reversed only.
+  //  TODO(contiguity): no fragmentation/contiguity check on the forming lanes
+  //  (see the deleted Linkwidth.Accept parity gate); non-contiguous responders
+  //  get physical-index lane numbers, not sequential 0..N-1.
+  always_comb begin : per_lane_ordered_set_o
+    pcie_tsos_t tmpl;
+    logic       assign_lane;
+    tmpl        = pcie_tsos_t'(ordered_set_r);
+    assign_lane = (gen_os_ctrl_r.gen_ts1 || gen_os_ctrl_r.gen_ts2)
+                && (tmpl.lane_num != train_seq_e'(PAD_));
+    for (int l = 0; l < MAX_NUM_LANES; l++) begin
+      pcie_tsos_t t;
+      t = tmpl;
+      if (assign_lane) begin
+        t.lane_num = l[7:0];        // sequential = physical lane index
+      end
+      ordered_set_o[l] = pcie_ordered_set_t'(t);
+    end
+  end
+
   assign curr_data_rate_o = curr_data_rate_r.rate;
   assign gen_os_ctrl_o    = gen_os_ctrl_r;
 

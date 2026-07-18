@@ -98,8 +98,10 @@ module tb_ltssm_b2b
   // ---------------------------------------------------------------------
   //  Per-instance nets
   // ---------------------------------------------------------------------
-  pcie_ordered_set_t                     rc_ordered_set_o;
-  pcie_ordered_set_t                     ep_ordered_set_o;
+  // ordered_set_o is now per-lane (the DUT assigns a distinct Lane Number per
+  // lane in Configuration); one struct per lane.
+  pcie_ordered_set_t [MAX_NUM_LANES-1:0] rc_ordered_set_o;
+  pcie_ordered_set_t [MAX_NUM_LANES-1:0] ep_ordered_set_o;
   gen_os_struct_t                        rc_gen_os_ctrl_o;
   gen_os_struct_t                        ep_gen_os_ctrl_o;
 
@@ -117,33 +119,27 @@ module tb_ltssm_b2b
         && (os.symbols[8] == tsid) && (os.symbols[9] == tsid);
   endfunction
 
-  // Receive content: each side's ordered_set_i is the peer's ordered_set_o,
-  // reinterpreted as pcie_tsos_t (both are 128 bits; gen_ts_os built the peer's
-  // value as a pcie_tsos_t in the first place). Python never drives these.
+  // Receive content: each side's ordered_set_i[l] is the peer's ordered_set_o[l]
+  // -- PER-LANE, so lane l receives exactly what the peer transmitted on lane l
+  // (crucially, the peer's per-lane Lane Number). Python never drives these.
   always_comb begin
     for (int l = 0; l < MAX_NUM_LANES; l++) begin
-      ep_ordered_set_i[l] = pcie_tsos_t'(rc_ordered_set_o);  // EP receives RC's TX
-      rc_ordered_set_i[l] = pcie_tsos_t'(ep_ordered_set_o);  // RC receives EP's TX
+      ep_ordered_set_i[l] = pcie_tsos_t'(rc_ordered_set_o[l]);  // EP rx RC's lane l
+      rc_ordered_set_i[l] = pcie_tsos_t'(ep_ordered_set_o[l]);  // RC rx EP's lane l
     end
   end
 
-  // Valid strobes: one decoded ordered set per beat, per direction.
+  // Valid strobes: one decoded ordered set per beat, per lane, per direction.
+  // TS type (ts-id bytes 6..9) is identical across a peer's lanes -- only the
+  // Lane Number byte differs -- but we decode per-lane for faithfulness.
   always_comb begin
-    logic ep_rx_ts1, ep_rx_ts2, ep_rx_idle;
-    logic rc_rx_ts1, rc_rx_ts2, rc_rx_idle;
-    ep_rx_ts1  = is_tsos(rc_ordered_set_o, TS1);
-    ep_rx_ts2  = is_tsos(rc_ordered_set_o, TS2);
-    ep_rx_idle = rc_gen_os_ctrl_o.gen_idle;
-    rc_rx_ts1  = is_tsos(ep_ordered_set_o, TS1);
-    rc_rx_ts2  = is_tsos(ep_ordered_set_o, TS2);
-    rc_rx_idle = ep_gen_os_ctrl_o.gen_idle;
     for (int l = 0; l < MAX_NUM_LANES; l++) begin
-      ep_ts1_valid_i[l]  = os_beat & ep_rx_ts1;
-      ep_ts2_valid_i[l]  = os_beat & ep_rx_ts2;
-      ep_idle_valid_i[l] = os_beat & ep_rx_idle;
-      rc_ts1_valid_i[l]  = os_beat & rc_rx_ts1;
-      rc_ts2_valid_i[l]  = os_beat & rc_rx_ts2;
-      rc_idle_valid_i[l] = os_beat & rc_rx_idle;
+      ep_ts1_valid_i[l]  = os_beat & is_tsos(rc_ordered_set_o[l], TS1);
+      ep_ts2_valid_i[l]  = os_beat & is_tsos(rc_ordered_set_o[l], TS2);
+      ep_idle_valid_i[l] = os_beat & rc_gen_os_ctrl_o.gen_idle;
+      rc_ts1_valid_i[l]  = os_beat & is_tsos(ep_ordered_set_o[l], TS1);
+      rc_ts2_valid_i[l]  = os_beat & is_tsos(ep_ordered_set_o[l], TS2);
+      rc_idle_valid_i[l] = os_beat & ep_gen_os_ctrl_o.gen_idle;
     end
   end
 
