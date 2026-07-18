@@ -173,9 +173,16 @@ async def x4_truncation_signature(dut):
             dut._log.info("x4 lane %d decoded OS: %s" % (lane, _fmt(os)))
 
 
-# Step A: expect_fail=True -- current RTL truncates lanes 1-3 at the OS FIFO
-# (Hop 9). Step B flips this to expect_fail=False once the FIFO DATA_WIDTH is
-# widened to 32*MAX_NUM_LANES.
+# Still expect_fail after the Hop-9 FIFO width fix: that fix IS necessary and
+# lands the per-lane DATA all the way to lane_management's output (lm_data_out
+# carries lane_num=0/1/2/3, verified by probe), but a SECOND, independent
+# collapse remains -- lane_management's TX_PHY per-lane K-mask striping
+# (lane_management.sv:405 writes d_k_out_c[byte_] / reads a lane-0-only tuser
+# slice, vs the correct per-lane DATA line just above). Lanes 1-3 thus get
+# K-mask=0, so the scrambler scrambles their COM instead of bypassing and no
+# ordered set appears on the wire. Flip to expect_fail=False only once that
+# lane_management K-mask indexing is also fixed (separate module / behavior
+# change, out of this brief's Hop-9 scope).
 @cocotb.test(expect_fail=True)
 async def x4_all_lanes_ts1(dut):
     """All four lanes must each emit a valid TS1 with lane_num = lane index.
