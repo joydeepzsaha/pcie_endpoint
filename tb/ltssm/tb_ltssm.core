@@ -68,6 +68,11 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_b2b.py : {file_type : user, copyto : .}
 
+  cocotb_b2b_x4:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_b2b_x4.py : {file_type : user, copyto : .}
+
 targets:
   default:
     flow: sim
@@ -150,8 +155,28 @@ targets:
         - --trace-fst
         - -Iincludes/
         - -GSIM_FAST_LINK=1
+        - --public-flat-rw
         - waiver.vlt
     filesets : [rtl_b2b,cocotb_b2b]
+    toplevel : [tb_ltssm_b2b]
+
+  # Back-to-back at x4: RC assigns Lane Numbers 0-3, EP echoes. Asserts the
+  # per-lane assignment content, not just L0. --public-flat-rw exposes the
+  # genvar-scoped counters for the per-lane hang dump.
+  verilate_b2b_x4:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_b2b_x4
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=4
+        - --public-flat-rw
+        - waiver.vlt
+    filesets : [rtl_b2b,cocotb_b2b_x4]
     toplevel : [tb_ltssm_b2b]
 
   # Root-Complex-mode link-up: DUT is the RC (IS_ROOT_PORT=1), x1 link,
