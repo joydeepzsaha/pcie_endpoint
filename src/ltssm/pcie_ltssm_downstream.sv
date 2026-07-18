@@ -225,6 +225,15 @@ module pcie_ltssm_downstream
   logic              [     MAX_NUM_LANES-1:0] speed_change_bit_set;
   logic              [                   7:0] link_number_selected;
   logic              [(MAX_NUM_LANES *8)-1:0] link_number_selected_per_lane;
+  // EP (IS_ROOT_PORT=0) reactive Lane-Number echo: per-lane capture of the
+  // Lane Number the downstream/root peer assigned on each lane, latched in
+  // Configuration.Lanenum from ordered_set_i[lane].lane_num. PAD until an
+  // assignment is received; then the EP transmits it back (see the per-lane
+  // output stage). PURE OUTPUT PATH: written from an input, read only by
+  // ordered_set_o -- never by any FSM exit condition -- so it cannot change
+  // EP state/timing (EP regression stays byte-identical, same argument as the
+  // per-lane output stage itself).
+  logic              [(MAX_NUM_LANES *8)-1:0] lane_num_echo;
   logic              [   MAX_NUM_LANES-1 : 0] lane_link_number_selected;
   logic              [     MAX_NUM_LANES-1:0] link_lanes_formed;
   logic              [     MAX_NUM_LANES-1:0] lane_num_formed;
@@ -1514,6 +1523,7 @@ module pcie_ltssm_downstream
 
     logic [7:0] link_number_selected_per_lane_c;
     logic [7:0] lane_in_save_c;
+    logic [7:0] lane_num_echo_c;
     ts_symbol6_union_t temp_ts6_c;
 
     rate_id_t temp_rate_id_c;
@@ -1583,6 +1593,7 @@ module pcie_ltssm_downstream
         first_ts1                                 <= '0;
         link_number_selected_per_lane[lane*8+:8] <= '0;
         lane_in_save                             <= PAD_;
+        lane_num_echo[lane*8+:8]                  <= PAD_;
         single_idle_received[lane]               <= '0;
         single_ts1_received[lane]                <= '0;
         single_ts2_received[lane]                <= '0;
@@ -1607,6 +1618,7 @@ module pcie_ltssm_downstream
 
         link_number_selected_per_lane[lane*8+:8] <= link_number_selected_per_lane_c;
         lane_in_save <= lane_in_save_c;
+        lane_num_echo[lane*8+:8] <= lane_num_echo_c;
         max_rate_per_lane[lane] <= max_rate_per_lane_c;
         temp_ts6 <= temp_ts6_c;
         temp_rate_id <= temp_rate_id_c;
@@ -1635,6 +1647,7 @@ module pcie_ltssm_downstream
 
       link_number_selected_per_lane_c = link_number_selected_per_lane[lane*8+:8];
       lane_in_save_c = lane_in_save;
+      lane_num_echo_c = lane_num_echo[lane*8+:8];  // hold captured echo value
       max_rate_per_lane_c = max_rate_per_lane[lane];
 
       temp_ts6_c = temp_ts6;
@@ -1671,6 +1684,8 @@ module pcie_ltssm_downstream
             single_idle_received_c ='0;
             single_ts1_received_c  ='0;
             single_ts2_received_c  ='0;
+
+            lane_num_echo_c = PAD_;  // clear echo for a fresh training attempt
           end
 
           // =========================
@@ -1869,8 +1884,17 @@ module pcie_ltssm_downstream
               if ((ordered_set_i[lane].link_num != PAD) &&
                   (ordered_set_i[lane].lane_num != lane_in_save)) begin
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : ts1_cnt + 1;
-              end else begin    
+              end else begin
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : '0;
+              end
+              //EP reactive echo capture (TX-only, see lane_num_echo decl):
+              //latch the Lane Number the downstream/root peer assigned on this
+              //lane. Only a non-PAD value is a real assignment; capturing here
+              //(not earlier) is why the EP transmits PAD until it has actually
+              //been assigned a number -- which structurally prevents it from
+              //announcing while the peer is still in Linkwidth.Accept.
+              if (ordered_set_i[lane].lane_num != PAD) begin
+                lane_num_echo_c = ordered_set_i[lane].lane_num;
               end
             end
           end
@@ -1904,6 +1928,11 @@ module pcie_ltssm_downstream
 
               end else begin
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : '0;
+              end
+              //EP reactive echo capture (continue holding/refreshing the
+              //assigned Lane Number through Lanenum.Accept).
+              if (ordered_set_i[lane].lane_num != PAD) begin
+                lane_num_echo_c = ordered_set_i[lane].lane_num;
               end
             end
           end
@@ -1985,15 +2014,31 @@ module pcie_ltssm_downstream
   //  get physical-index lane numbers, not sequential 0..N-1.
   always_comb begin : per_lane_ordered_set_o
     pcie_tsos_t tmpl;
-    logic       assign_lane;
-    tmpl        = pcie_tsos_t'(ordered_set_r);
-    assign_lane = (gen_os_ctrl_r.gen_ts1 || gen_os_ctrl_r.gen_ts2)
-                && (tmpl.lane_num != train_seq_e'(PAD_));
+    logic       tx_ts;
+    tmpl  = pcie_tsos_t'(ordered_set_r);
+    tx_ts = (gen_os_ctrl_r.gen_ts1 || gen_os_ctrl_r.gen_ts2);
     for (int l = 0; l < MAX_NUM_LANES; l++) begin
       pcie_tsos_t t;
       t = tmpl;
-      if (assign_lane) begin
-        t.lane_num = l[7:0];        // sequential = physical lane index
+      if (IS_ROOT_PORT) begin
+        // Root/downstream port ASSIGNS: each active lane gets its physical
+        // index once the FSM has put a non-PAD lane number in the template
+        // (Lanenum.Wait onward). Sequential 0..N-1 for a contiguous link.
+        if (tx_ts && (tmpl.lane_num != train_seq_e'(PAD_))) begin
+          t.lane_num = l[7:0];
+        end
+      end else begin
+        // Endpoint/upstream port ECHOES: transmit back the Lane Number the
+        // root assigned on this lane (captured in lane_num_echo). PAD until an
+        // assignment has been received -- so the EP never advertises a Lane
+        // Number before it has one, which is what removes the premature-
+        // announcement deadlock. Note: because lane_num_echo == physical index
+        // for a non-reversed contiguous link, the emitted value matches what
+        // the RC assigned by construction; under lane reversal (unsupported)
+        // the captured value would differ and this true echo is required.
+        if (tx_ts && (lane_num_echo[l*8+:8] != train_seq_e'(PAD_))) begin
+          t.lane_num = lane_num_echo[l*8+:8];
+        end
       end
       ordered_set_o[l] = pcie_ordered_set_t'(t);
     end
