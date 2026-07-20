@@ -402,7 +402,15 @@ module lane_management
                 if (byte_ < (pipe_width_r >> 3)) begin
                   data_out_c[(lane*32)+(byte_*8)+:8]   =
                   fifo_phy_axis_tdata[(lane*32)+((byte_+byte_count_r)*8)+:8];
-                  d_k_out_c[byte_] = fifo_phy_axis_tuser[byte_ + byte_count_r];
+                  // Per-lane K-mask destination (was d_k_out_c[byte_], lane-0
+                  // only -- lanes 1..N-1 stayed K=0, so the scrambler scrambled
+                  // their COM instead of bypassing -> dead wire at x4). Mirror
+                  // the DLLP path's dest index (line ~374). SOURCE stays lane 0:
+                  // os_generator emits the ordered-set K-mask only in tuser's
+                  // lane-0 slice (os_generator.sv:214), and it is identical on
+                  // every lane (COM is byte 0 on all), so broadcast it. At x1
+                  // (lane=0) this is the same expression -- provably inert.
+                  d_k_out_c[(lane*4)+(byte_*1)+:1] = fifo_phy_axis_tuser[byte_ + byte_count_r];
                 end
               end
             end
