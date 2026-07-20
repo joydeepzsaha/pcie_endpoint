@@ -181,9 +181,12 @@ module os_generator
               D.special_k[1] = '1;
             end
 
-            if (gen_os_ctrl_i.set_lane) begin
-              D.ordered_set[i].lane_num = i;
-            end else begin
+            // Decision 1: lane_num comes from the per-lane LTSSM ordered set
+            // (ordered_set_i[i], already in Q.ordered_set[i]) -- os_generator no
+            // longer stamps a positional lane_num=i, so the LTSSM's PAD-until-
+            // assigned echo survives. special_k[2] semantics unchanged: mark the
+            // lane-number symbol K when no lane is being assigned (set_lane low).
+            if (!gen_os_ctrl_i.set_lane) begin
               D.special_k[2] = '1;
             end
 
