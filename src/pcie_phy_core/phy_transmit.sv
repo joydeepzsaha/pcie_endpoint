@@ -27,7 +27,11 @@ module phy_transmit
     output logic              [                             5:0] pipe_width_o,
     input  logic              [                             5:0] num_active_lanes_i,
     input  logic                                                 send_ordered_set_i,
-    input  pcie_ordered_set_t                                    ordered_set_i,
+    // Per-lane ordered sets from the LTSSM (LTSSM-authoritative lane numbers,
+    // Decision 1). Each lane carries its own fully-formed OS with lane_num
+    // already inside; os_generator no longer invents it. At MAX_NUM_LANES=1 this
+    // is one pcie_ordered_set_t, identical to the previous single-struct port.
+    input  pcie_ordered_set_t [MAX_NUM_LANES-1:0]                ordered_set_i,
     input  rate_speed_e                                          curr_data_rate_i,
     output logic                                                 ordered_set_tranmitted_o,
     input  gen_os_struct_t                                       gen_os_ctrl_i,

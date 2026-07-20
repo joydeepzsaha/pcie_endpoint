@@ -283,10 +283,10 @@ module pcie_phy_top
       //   .num_active_lanes_o(num_active_lanes_o),
       .num_active_lanes_i      (num_active_lanes_i),
       .send_ordered_set_i      (send_ordered_set),
-      // TODO(x4-integration): os_generator/phy_transmit take a single ordered
-      // set, so lane 0's is used here. Per-lane serialization is Phase 4b;
-      // correct for x1, and the b2b harness bypasses this datapath entirely.
-      .ordered_set_i           (ordered_set[0]),
+      // Decision 1: feed the LTSSM's full per-lane ordered-set array (Hop 3
+      // resolved). phy_transmit.ordered_set_i is now per-lane; each lane's OS
+      // carries the LTSSM-authored lane_num (RC assigns, EP echoes).
+      .ordered_set_i           (ordered_set),
       .curr_data_rate_i        (curr_data_rate),
       .ordered_set_tranmitted_o(ordered_set_tranmitted),
       .s_dllp_axis_tdata       (s_dllp_axis_tdata),

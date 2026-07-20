@@ -56,6 +56,18 @@ def pack_tsos(link_num=PAD, lane_num=PAD, rate_id=GEN1_BASIC, ts_disc=TS1,
     return v
 
 
+TSOS_WIDTH = 128
+
+
+def pack_os_array(per_lane):
+    """Pack a per-lane list of pcie_tsos_t ints into the ordered_set_i array
+    (lane l at bits [l*128 +: 128], lane 0 = LSB)."""
+    v = 0
+    for l, os in enumerate(per_lane):
+        v |= (os & ((1 << TSOS_WIDTH) - 1)) << (l * TSOS_WIDTH)
+    return v
+
+
 async def start_clocks(dut):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     cocotb.start_soon(Clock(dut.pipe_rx_usr_clk_i, 10, units="ns").start())
@@ -121,7 +133,13 @@ def _fmt(pairs):
 
 
 async def drive_ts1(dut, link):
-    dut.ordered_set_i.value = pack_tsos(link_num=link, lane_num=0, ts_disc=TS1)
+    # ordered_set_i is now per-lane (Decision 1): drive each lane its own TS1
+    # with lane_num = its index, mimicking the LTSSM RC output. (Under the
+    # Stage-1 positional stamp this is redundant; after the stamp is removed it
+    # is what carries the lane numbers.)
+    dut.ordered_set_i.value = pack_os_array(
+        [pack_tsos(link_num=link, lane_num=l, ts_disc=TS1)
+         for l in range(NUM_LANES)])
     dut.curr_data_rate_i.value = GEN1
     dut.gen_os_ctrl_i.value = G_VALID | G_GEN_TS1 | G_SET_LANE
     dut.send_ordered_set_i.value = 0
