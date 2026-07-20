@@ -156,10 +156,11 @@ async def x4_lane0_ok(dut):
 
 
 @cocotb.test()
-async def x4_truncation_signature(dut):
-    """DIAGNOSTIC (always passes): record exactly what lanes 1-3 emit on the
-    CURRENT (unfixed) RTL, so a later real x4 regression is distinguishable
-    from this known truncation. Not an assertion of correctness."""
+async def x4_all_lanes_live(dut):
+    """Every active lane must frame a K-coded COM on the wire. Before the
+    lane_management K-mask fix, lanes 1-3 had has_COM=False (their COM was
+    scrambled because K-mask=0); after it, all four are live. Logs each lane's
+    signature so a future x4 regression stays distinguishable."""
     await start_clocks(dut)
     await reset(dut)
     await drive_ts1(dut, 0x05)
@@ -167,27 +168,20 @@ async def x4_truncation_signature(dut):
     for lane in range(NUM_LANES):
         os = find_ordered_set(lanes[lane])
         has_com = any(s == COM and k == 1 for s, k in lanes[lane])
-        dut._log.info("x4 lane %d: has_COM=%s  first16=%s"
-                      % (lane, has_com, _fmt(lanes[lane][:16])))
-        if os:
-            dut._log.info("x4 lane %d decoded OS: %s" % (lane, _fmt(os)))
+        dut._log.info("x4 lane %d: has_COM=%s  decoded=%s"
+                      % (lane, has_com, _fmt(os) if os else "<none>"))
+        assert has_com, "lane %d has no K-coded COM (K-mask dropped?)" % lane
 
 
-# Still expect_fail after the Hop-9 FIFO width fix: that fix IS necessary and
-# lands the per-lane DATA all the way to lane_management's output (lm_data_out
-# carries lane_num=0/1/2/3, verified by probe), but a SECOND, independent
-# collapse remains -- lane_management's TX_PHY per-lane K-mask striping
-# (lane_management.sv:405 writes d_k_out_c[byte_] / reads a lane-0-only tuser
-# slice, vs the correct per-lane DATA line just above). Lanes 1-3 thus get
-# K-mask=0, so the scrambler scrambles their COM instead of bypassing and no
-# ordered set appears on the wire. Flip to expect_fail=False only once that
-# lane_management K-mask indexing is also fixed (separate module / behavior
-# change, out of this brief's Hop-9 scope).
-@cocotb.test(expect_fail=True)
+# Real pass now that BOTH x4 collapses are fixed: the Hop-9 FIFO width
+# (fb84c1e, lands per-lane DATA) and the lane_management:405 per-lane K-mask
+# broadcast (lands per-lane COM bypass). Predicted per-lane output with link
+# 0x05: each lane L emits  bc(K) 05 <lane=L> ff 02 00 4a*10  -- lanes 1-3 go
+# from the pre-fix has_COM=False to this, differing from lane 0 only in the
+# lane_num byte.
+@cocotb.test()
 async def x4_all_lanes_ts1(dut):
-    """All four lanes must each emit a valid TS1 with lane_num = lane index.
-    FAILS on current RTL (lanes 1-3 dropped by the 32-bit OS FIFO); PASSES once
-    the FIFO width fix lands."""
+    """All four lanes must each emit a valid TS1 with lane_num = lane index."""
     await start_clocks(dut)
     await reset(dut)
     link = 0x05
