@@ -209,3 +209,52 @@ async def x4_all_lanes_ts1(dut):
         os = find_ordered_set(lanes[lane])
         dut._log.info("x4 lane %d OS: %s" % (lane, _fmt(os) if os else "<none>"))
         check_lane_ts1(lane, os, link)
+
+
+# ACCEPTANCE GATE for Decision 1 (LTSSM-authoritative lane numbering). A
+# steady-state x4 pass does NOT distinguish "echo preserved" from "positional
+# stamp" -- both emit 0,1,2,3 when every lane is assigned its index. This test
+# drives a MIXED pattern that only the passthrough gets right: lane 2 = PAD
+# (unassigned, as during mid-negotiation), lanes 0/1/3 = assigned to their
+# numbers, with set_lane HIGH (the state where the old stamp fired).
+#
+# Prediction (stated before running, per falsifiability):
+#   lane 0 -> bc(K) 05 00 ff 02 00 4a*10   (lane_num 0x00)
+#   lane 1 -> bc(K) 05 01 ff 02 00 4a*10   (lane_num 0x01)
+#   lane 2 -> bc(K) 05 f7 ff 02 00 4a*10   (lane_num PAD 0xf7, NOT re-stamped 02)
+#   lane 3 -> bc(K) 05 03 ff 02 00 4a*10   (lane_num 0x03)
+# The removed positional stamp would have forced 00/01/02/03 -> lane 2 = 02 and
+# this test would FAIL. Passthrough emits the mixed pattern -> passes.
+@cocotb.test()
+async def x4_mixed_pad_echo(dut):
+    """Decision-1 proof: per-lane lane_num passes through unchanged, incl. PAD
+    on an unassigned lane -- no positional re-stamp."""
+    await start_clocks(dut)
+    await reset(dut)
+    link = 0x05
+    expected = [0x00, 0x01, PAD, 0x03]   # lane 2 unassigned (PAD)
+    dut.ordered_set_i.value = pack_os_array(
+        [pack_tsos(link_num=link, lane_num=expected[l], ts_disc=TS1)
+         for l in range(NUM_LANES)])
+    dut.curr_data_rate_i.value = GEN1
+    # set_lane HIGH: the exact control state under which os_generator used to
+    # overwrite lane_num with the positional index.
+    dut.gen_os_ctrl_i.value = G_VALID | G_GEN_TS1 | G_SET_LANE
+    dut.send_ordered_set_i.value = 0
+
+    lanes = await capture_lanes(dut, 80)
+    for lane in range(NUM_LANES):
+        os = find_ordered_set(lanes[lane])
+        dut._log.info("x4 mixed-PAD lane %d OS: %s"
+                      % (lane, _fmt(os) if os else "<none>"))
+        assert os is not None, "lane %d: no COM-framed ordered set" % lane
+        data = [s for s, k in os]
+        assert data[0] == COM and os[0][1] == 1, "lane %d: no K-COM" % lane
+        assert data[1] == link, "lane %d link: %02x" % (lane, data[1])
+        assert data[2] == expected[lane], (
+            "lane %d lane_num: got %02x want %02x (re-stamp bug?)"
+            % (lane, data[2], expected[lane]))
+        assert all(d == TS1 for d in data[6:16]), "lane %d TS1 disc" % lane
+    # Explicit anti-stamp assertion: lane 2 must be PAD, never its index.
+    os2 = find_ordered_set(lanes[2])
+    assert os2[2][0] == PAD, "lane 2 re-stamped to index instead of PAD"
