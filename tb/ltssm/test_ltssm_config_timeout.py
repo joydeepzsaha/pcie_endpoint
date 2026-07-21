@@ -19,10 +19,7 @@ it is NOT scaled by SIM_FAST_LINK (confirmed: only TwelveMsTimeOut /
 OneMsTimeOut / MinTS1sPolling are) -- it's a real 2,400,000 cycles either
 way. It therefore uses its own LINKWIDTH_START_TIMEOUT_BUDGET (24ms +
 margin) instead of the shared 250_000-cycle (2ms + margin) budget used by
-the other four TwoMsTimeOut substates and the control. The 24ms constant
-itself is left untouched, per the "flag it for Joy" instruction, rather
-than silently shortened to match the others -- see the report for that
-open question.
+the other four TwoMsTimeOut substates and the control. 
 """
 import cocotb
 from cocotb.clock import Clock
