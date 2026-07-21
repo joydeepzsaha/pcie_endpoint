@@ -1,0 +1,105 @@
+CAPI=2:
+name: fusesoc:pcie:tb_ltssm_conformance:1.0.0
+description: >
+  Phase 7B spec-golden LTSSM ordered-set conformance suite. Independent oracle
+  (second, non-identical to the b2b harness): asserts pcie_ltssm_downstream's
+  emitted ordered_set_o against values derived from PCIe Base Spec Rev 2.1,
+  written down in SPEC_PREDICTIONS.md before the DUT was run. tb-only.
+
+filesets:
+  rtl:
+    depend:
+      - fusesoc:pcie:ltssm
+
+  cocotb_conformance:
+    files:
+      # reuse the proven low-level driver/helpers from the ltssm tb dir
+      - ../ltssm/ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_conformance.py   : {file_type : user, copyto : .}
+
+  cocotb_realtimer:
+    files:
+      - ../ltssm/ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_realtimer.py     : {file_type : user, copyto : .}
+
+  cocotb_realtimer_x1:
+    files:
+      - ../ltssm/ltssm_tb_common.py        : {file_type : user, copyto : .}
+      - test_ltssm_realtimer_linkup_x1.py  : {file_type : user, copyto : .}
+
+  cocotb_realtimer_x4:
+    files:
+      - ../ltssm/ltssm_tb_common.py        : {file_type : user, copyto : .}
+      - test_ltssm_realtimer_linkup_x4.py  : {file_type : user, copyto : .}
+
+targets:
+  # x1 Root-Complex-mode ordered-set conformance. --public-flat-rw exposes the
+  # internal ordered_set_sent_cnt_r / single_*_received the 16-after-1 gating
+  # test observes. Param overrides live here (FuseSoC rejects -G on the CLI).
+  verilate_conformance:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_conformance
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GIS_ROOT_PORT=1
+        - -GLINK_NUM=1
+        - -GMAX_NUM_LANES=1
+        - --public-flat-rw
+        - waiver.vlt
+    filesets : [rtl, cocotb_conformance]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Phase 7A -- isolated real-timer (SIM_FAST_LINK=0) timeout test: Detect.Quiet
+  # 12 ms (1,200,000 real cycles). No FST trace (millions of cycles). x1.
+  verilate_realtimer:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_realtimer
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GSIM_FAST_LINK=0
+        - -GIS_ROOT_PORT=1
+        - -GLINK_NUM=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, cocotb_realtimer]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Phase 7A capstone -- real-timer end-to-end link-up, x1 (RC mode).
+  verilate_realtimer_linkup_x1:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_realtimer_linkup_x1
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GSIM_FAST_LINK=0
+        - -GIS_ROOT_PORT=1
+        - -GLINK_NUM=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, cocotb_realtimer_x1]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Phase 7A capstone -- real-timer end-to-end link-up, x4 (default EP mode).
+  verilate_realtimer_linkup_x4:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_realtimer_linkup_x4
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GSIM_FAST_LINK=0
+        - -GMAX_NUM_LANES=4
+        - waiver.vlt
+    filesets : [rtl, cocotb_realtimer_x4]
+    toplevel : [pcie_ltssm_downstream]

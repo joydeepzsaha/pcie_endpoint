@@ -1,0 +1,53 @@
+CAPI=2:
+name: fusesoc:pcie:tb_phy_transmit:1.0.0
+description: TX unit testbench for phy_transmit (Gen1 x1 golden baseline, Phase 4b prep)
+
+filesets:
+  rtl:
+    depend:
+      - fusesoc:pcie:phy_transmit
+
+  cocotb_tx:
+    files:
+      - test_phy_transmit_tx.py : {file_type : user, copyto : .}
+
+  cocotb_tx_x4:
+    files:
+      - test_phy_transmit_tx_x4.py : {file_type : user, copyto : .}
+
+targets:
+  # Gen1 x1 golden-baseline TX bench. phy_transmit as toplevel, MAX_NUM_LANES=1.
+  # Drives ordered-set input into os_generator and observes per-lane PIPE output.
+  # This is the reference the Phase 4b ownership-transition commit must stay
+  # byte-identical against at x1.
+  verilate_tx_golden:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_phy_transmit_tx
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, cocotb_tx]
+    toplevel : [phy_transmit]
+
+  # x4 (MAX_NUM_LANES=4) TX bench. Phase 4b step A/B: exposes the internal
+  # ordered_set_axis_async_fifo DATA_WIDTH=32 truncation (Hop 9) as an observed
+  # per-lane failure, then proves the width fix restores lanes 1-3. Same TS1
+  # template as the golden; asserts each lane emits lane_num = its index.
+  verilate_tx_x4:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_phy_transmit_tx_x4
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GMAX_NUM_LANES=4
+        - waiver.vlt
+    filesets : [rtl, cocotb_tx_x4]
+    toplevel : [phy_transmit]

@@ -27,7 +27,11 @@ module phy_transmit
     output logic              [                             5:0] pipe_width_o,
     input  logic              [                             5:0] num_active_lanes_i,
     input  logic                                                 send_ordered_set_i,
-    input  pcie_ordered_set_t                                    ordered_set_i,
+    // Per-lane ordered sets from the LTSSM (LTSSM-authoritative lane numbers,
+    // Decision 1). Each lane carries its own fully-formed OS with lane_num
+    // already inside; os_generator no longer invents it. At MAX_NUM_LANES=1 this
+    // is one pcie_ordered_set_t, identical to the previous single-struct port.
+    input  pcie_ordered_set_t [MAX_NUM_LANES-1:0]                ordered_set_i,
     input  rate_speed_e                                          curr_data_rate_i,
     output logic                                                 ordered_set_tranmitted_o,
     input  gen_os_struct_t                                       gen_os_ctrl_i,
@@ -295,18 +299,25 @@ module phy_transmit
       .m_axis_tready   (phy_axis_tready)
   );
 
+    // Ordered-set FIFO carries the full per-lane bus (phy_axis_tdata =
+    // DATA_WIDTH*MAX_NUM_LANES). Widen DATA/KEEP/USER to *MAX_NUM_LANES so
+    // lanes 1..N-1 are not truncated to lane 0 (Phase 4b, Hop 9). DEPTH is in
+    // bytes here (word-depth = DEPTH/KEEP_WIDTH inside axis_async_fifo), so it
+    // scales by MAX_NUM_LANES too -- keeping word-depth invariant across widths
+    // and avoiding $clog2(DEPTH/KEEP_WIDTH)=0. At x1 (*1) every value is
+    // identical to the previous 20/32/KEEP/USER -- a provable no-op.
     axis_async_fifo #(
-        .DEPTH      (DEPTH),
-        .DATA_WIDTH (DATA_WIDTH),
+        .DEPTH      (DEPTH * MAX_NUM_LANES),
+        .DATA_WIDTH (DATA_WIDTH * MAX_NUM_LANES),
         .KEEP_ENABLE(KEEP_ENABLE),
-        .KEEP_WIDTH (KEEP_WIDTH),
+        .KEEP_WIDTH (KEEP_WIDTH * MAX_NUM_LANES),
         .LAST_ENABLE(LAST_ENABLE),
         .ID_ENABLE  (ID_ENABLE),
         .ID_WIDTH   (ID_WIDTH),
         .DEST_ENABLE(DEST_ENABLE),
         .DEST_WIDTH (DEST_WIDTH),
         .USER_ENABLE(USER_ENABLE),
-        .USER_WIDTH (USER_WIDTH)
+        .USER_WIDTH (USER_WIDTH * MAX_NUM_LANES)
     ) ordered_set_axis_async_fifo_inst (
         .s_clk        (pipe_rx_usr_clk_i),
         .s_rst        (rst_i),

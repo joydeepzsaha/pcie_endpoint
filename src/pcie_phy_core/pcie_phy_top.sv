@@ -129,7 +129,9 @@ module pcie_phy_top
   logic              [    MAX_NUM_LANES-1:0] polarity_inverted;
   training_ctrl_t    [    MAX_NUM_LANES-1:0] training_ctrl;
   rate_speed_e                               curr_data_rate;
-  pcie_ordered_set_t                         ordered_set;
+  // pcie_ltssm_downstream.ordered_set_o is now per-lane (pcie_ordered_set_t
+  // [MAX_NUM_LANES-1:0]) to support x4 root-port Lane Number assignment.
+  pcie_ordered_set_t [    MAX_NUM_LANES-1:0] ordered_set;
   (* mark_debug = "true", keep = "true" *) logic                                      ordered_set_tranmitted;
   logic                                      send_ordered_set;
   rate_id_t          [    MAX_NUM_LANES-1:0] rate_id;
@@ -281,6 +283,9 @@ module pcie_phy_top
       //   .num_active_lanes_o(num_active_lanes_o),
       .num_active_lanes_i      (num_active_lanes_i),
       .send_ordered_set_i      (send_ordered_set),
+      // Decision 1: feed the LTSSM's full per-lane ordered-set array (Hop 3
+      // resolved). phy_transmit.ordered_set_i is now per-lane; each lane's OS
+      // carries the LTSSM-authored lane_num (RC assigns, EP echoes).
       .ordered_set_i           (ordered_set),
       .curr_data_rate_i        (curr_data_rate),
       .ordered_set_tranmitted_o(ordered_set_tranmitted),
@@ -299,7 +304,9 @@ module pcie_phy_top
       .DATA_WIDTH   (DATA_WIDTH),
       .KEEP_WIDTH   (KEEP_WIDTH),
       .USER_WIDTH   (USER_WIDTH),
-      .SIM_FAST_LINK(SIM_FAST_LINK)
+      .SIM_FAST_LINK(SIM_FAST_LINK),
+      .IS_ROOT_PORT (IS_ROOT_PORT),
+      .LINK_NUM     (LINK_NUM)
   ) pcie_ltssm_downstream_inst (
       .clk_i              (pipe_rx_usr_clk_i),
       .rst_i              (rst_i || phy_phystatus_rst),

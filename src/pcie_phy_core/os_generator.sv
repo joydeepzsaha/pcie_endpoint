@@ -21,7 +21,9 @@ module os_generator
     input  rate_speed_e                                        curr_data_rate_i,
     input  logic                                               send_ltssm_os_i,
     output logic                                               os_sent_o,
-    input  pcie_ordered_set_t                                  ordered_set_i,
+    // Per-lane ordered sets from the LTSSM (Decision 1: LTSSM-authoritative
+    // lane numbers). Lane l's OS already carries its own lane_num.
+    input  pcie_ordered_set_t [             MAX_NUM_LANES-1:0] ordered_set_i,
     input  presets_coeff_t    [             MAX_NUM_LANES-1:0] preset_i,
     input  logic                                               link_up_i,
     //! @virtualbus master_axis_bus @dir out
@@ -145,9 +147,9 @@ module os_generator
         if (gen_os_ctrl_i.valid) begin
           D.skp_cnt = '0;
           for (int i = 0; i < MAX_NUM_LANES; i++) begin
-            D.ordered_set[i] = ordered_set_i;
+            D.ordered_set[i] = ordered_set_i[i];
           end
-          D.temp_ordered_set = ordered_set_i;
+          D.temp_ordered_set = ordered_set_i[0];
           // D.ordered_set = ordered_set_i;
           D.axis_pkt_cnt     = '0;
           D.gen_os_ctrl      = gen_os_ctrl_i;
@@ -179,9 +181,12 @@ module os_generator
               D.special_k[1] = '1;
             end
 
-            if (gen_os_ctrl_i.set_lane) begin
-              D.ordered_set[i].lane_num = i;
-            end else begin
+            // Decision 1: lane_num comes from the per-lane LTSSM ordered set
+            // (ordered_set_i[i], already in Q.ordered_set[i]) -- os_generator no
+            // longer stamps a positional lane_num=i, so the LTSSM's PAD-until-
+            // assigned echo survives. special_k[2] semantics unchanged: mark the
+            // lane-number symbol K when no lane is being assigned (set_lane low).
+            if (!gen_os_ctrl_i.set_lane) begin
               D.special_k[2] = '1;
             end
 
@@ -219,7 +224,7 @@ module os_generator
             //this hack allows for streamin uninterrupted ordered sets
             //required by the GTP/GTX transievers
             if (Q.gen_os_ctrl == gen_os_ctrl_i && !send_ltssm_os_i
-            && (ordered_set_i == Q.temp_ordered_set)) begin
+            && (ordered_set_i[0] == Q.temp_ordered_set)) begin
 
             end else begin
               D.state = ST_IDLE;

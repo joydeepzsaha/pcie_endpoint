@@ -6,6 +6,13 @@
 //! Module does not support upconfig!
 //!
 //! Module does not support crosslink!
+//!
+//! Module does not support autonomous lane-width reconfiguration: a link
+//! width change requires a full retrain from Detect (there is no live-link
+//! path that renegotiates width without first dropping back through
+//! Detect/Configuration).
+//!
+//! Module does not support lane reversal.
 module pcie_ltssm_downstream
   import pcie_phy_pkg::*;
 #(
@@ -75,7 +82,7 @@ module pcie_ltssm_downstream
     //training set configuration signals
     input  pcie_tsos_t        [MAX_NUM_LANES-1:0] ordered_set_i,
     output presets_coeff_t    [MAX_NUM_LANES-1:0] preset_coeff_o,
-    output pcie_ordered_set_t                     ordered_set_o,
+    output pcie_ordered_set_t [MAX_NUM_LANES-1:0] ordered_set_o,
     // input  ts_symbol6_union_t [MAX_NUM_LANES-1:0] symbol6_i,
     // input  training_ctrl_t    [MAX_NUM_LANES-1:0] training_ctrl_i,
     // input  rate_id_t          [MAX_NUM_LANES-1:0] rate_id_i,
@@ -218,6 +225,15 @@ module pcie_ltssm_downstream
   logic              [     MAX_NUM_LANES-1:0] speed_change_bit_set;
   logic              [                   7:0] link_number_selected;
   logic              [(MAX_NUM_LANES *8)-1:0] link_number_selected_per_lane;
+  // EP (IS_ROOT_PORT=0) reactive Lane-Number echo: per-lane capture of the
+  // Lane Number the downstream/root peer assigned on each lane, latched in
+  // Configuration.Lanenum from ordered_set_i[lane].lane_num. PAD until an
+  // assignment is received; then the EP transmits it back (see the per-lane
+  // output stage). PURE OUTPUT PATH: written from an input, read only by
+  // ordered_set_o -- never by any FSM exit condition -- so it cannot change
+  // EP state/timing (EP regression stays byte-identical, same argument as the
+  // per-lane output stage itself).
+  logic              [(MAX_NUM_LANES *8)-1:0] lane_num_echo;
   logic              [   MAX_NUM_LANES-1 : 0] lane_link_number_selected;
   logic              [     MAX_NUM_LANES-1:0] link_lanes_formed;
   logic              [     MAX_NUM_LANES-1:0] lane_num_formed;
@@ -312,7 +328,10 @@ module pcie_ltssm_downstream
 
   always_ff @(posedge clk_i) begin : gen_link_number
     if (rst_i) begin
-      link_number_selected <= '0;
+      // RC (IS_ROOT_PORT=1) originates the Link Number as LINK_NUM; EP
+      // (IS_ROOT_PORT=0) starts at '0 and latches from the RX side below,
+      // unchanged from before.
+      link_number_selected <= IS_ROOT_PORT ? LINK_NUM[7:0] : '0;
       max_rate             <= gen1;
     end else begin
       logic [MAX_NUM_LANES-1:0] flag_lane;
@@ -321,7 +340,10 @@ module pcie_ltssm_downstream
       flag_rate = '0;
       for (int i = 0; i < MAX_NUM_LANES; i++) begin
         if (i == 0) begin
-          if (lane_link_number_selected[i]) begin
+          // !IS_ROOT_PORT guard: RC never re-latches link_number_selected
+          // from the RX side -- it already holds LINK_NUM from reset above.
+          // Fix #6's EP latch (below) is untouched when IS_ROOT_PORT=0.
+          if (!IS_ROOT_PORT && lane_link_number_selected[i]) begin
             link_number_selected <= link_number_selected_per_lane[8*i+:8];
           end
 
@@ -330,7 +352,7 @@ module pcie_ltssm_downstream
           end
         end else begin
 
-          if (lane_link_number_selected[i] && ((flag_lane >> i) == '0)) begin
+          if (!IS_ROOT_PORT && lane_link_number_selected[i] && ((flag_lane >> i) == '0)) begin
             link_number_selected <= link_number_selected_per_lane[8*i+:8];
             flag_lane[i] = '1;
           end
@@ -662,15 +684,35 @@ module pcie_ltssm_downstream
               //goto cofig
               next_state = ST_POLLING_CONFIGURATION;
             end else if (|lanes_ts1_satisfied) begin
-              // TODO: This should be entered when a 24 ms timeout is reached, 1024 TS1s were sent and 
+              // TODO: This should be entered when a 24 ms timeout is reached, 1024 TS1s were sent and
               // Any lane received 8 consecutive TS1s with the copmbliance rceive bit of symbol 5 == 1 and loopback bit == 0
               next_state = ST_POLLING_COMPLIANCE;
+            end else begin
+              // Neither lanes_ts1_satisfied nor lanes_ts2_satisfied is set on
+              // any lane -- the link partner never responded at all during
+              // Polling.Active. next_state is left alone here (still ==
+              // curr_state), so the generic 24ms watchdog below still sends
+              // us to ST_IDLE either way; this just makes sure error_o
+              // distinguishes "no response at all" from the other paths
+              // through this state instead of silently falling through.
+              // (1'b1, not '1 -- Verilator 5.050 hits a parser edge case
+              // with the unsized literal as the sole statement in a bare
+              // else-begin block at this exact position; functionally
+              // identical for a 1-bit reg.)
+              error_c = 1'b1;
             end
           end
-          if (timer_r >= TwentyFourMsTimeOut) begin
-              // If neither are met we go to ST_IDLE (Detect State...)
-              next_state = ST_IDLE;
-          end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        // 24ms Polling watchdog. Must NOT be gated behind ordered_set_tranmitted_i:
+        // a stalled TX handshake is exactly the failure this failsafe exists to
+        // catch, and gating it there defeats its purpose (Bug 4).
+        // The (next_state == curr_state) guard ensures the watchdog only fires
+        // when no success path above has already claimed a transition -- without
+        // it, this check would clobber a legitimate ST_POLLING_CONFIGURATION
+        // transition that happened to occur at >= 24ms.
+        if ((timer_r >= TwentyFourMsTimeOut) && (next_state == curr_state)) begin
+          next_state = ST_IDLE;
         end
       end
       //*********************************************************
@@ -700,7 +742,11 @@ module pcie_ltssm_downstream
           gen_os_ctrl_c.gen_ts1 = '1;
           gen_os_ctrl_c.gen_ts2 = '0;
           transmit_ordered_set = '1;
-          ordered_set_c = gen_ts_os( gen1, TS1);
+          // RC originates LINK_NUM from the first TS1 of Configuration;
+          // EP still offers PAD/PAD until it has something to latch (fix #6).
+          ordered_set_c = IS_ROOT_PORT
+              ? gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected))
+              : gen_ts_os( gen1, TS1);
           //goto wait low
           next_state = ST_CONFIGURATION_LINKWIDTH_START;
         end  //check timeout count
@@ -751,14 +797,14 @@ module pcie_ltssm_downstream
             ordered_set_c = gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
             //goto next pcie ltssm state
             next_state = ST_CONFIGURATION_LINKWIDTH_ACCEPT;
-          end  //check timeout counter
-          else if (timer_r >= TwentyFourMsTimeOut)
-          begin
-            //assert error
-            error_c    = '1;
-            //goto detect
-            next_state = ST_IDLE;
           end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        if ((timer_r >= TwentyFourMsTimeOut) && (next_state == curr_state)) begin
+          //assert error
+          error_c    = '1;
+          //goto detect
+          next_state = ST_IDLE;
         end
       end
       //-----------------------------------------------------------
@@ -770,24 +816,41 @@ module pcie_ltssm_downstream
         gen_os_ctrl_c.valid = '1;
         if ((ordered_set_tranmitted_i)) begin
           ordered_set_sent_cnt_c = ordered_set_sent_cnt_r + 1'b1;
-          //check if pcie state continue scenario satisfied
-          //link lane formed xor was put for some spec reason, removing for single lane test as it
-          //fails to proceed
-          if ((|link_lanes_formed) && /*(!(^link_lanes_formed)) &&*/
+          //check if pcie state continue scenario satisfied.
+          //Advance once any lane has formed (>=2 consecutive matching TS1s);
+          //the responding subset is then selected per-lane via lane_active_r
+          //gating downstream. (The old `!(^link_lanes_formed)` parity gate was
+          //deleted -- see commit message: it required an EVEN number of formed
+          //lanes, which rejects x1, and parity does not express "one contiguous
+          //link" anyway.)
+          //TODO(contiguity): no check that the formed lanes are contiguous from
+          //lane 0 / constitute a single link; needed for fragmentation and
+          //crosslink rejection, unimplemented.
+          if ((|link_lanes_formed) &&
           ordered_set_sent_cnt_r >= 8'h08)
           begin
             ordered_set_sent_cnt_c = '0;
             gen_os_ctrl_c.gen_ts1  = '1;
             gen_os_ctrl_c.gen_ts2  = '0;
             transmit_ordered_set   = '1;
-            ordered_set_c = gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
+            // This exit build feeds the ordered set transmitted during
+            // Configuration.Lanenum.Wait -- the state where a downstream/root
+            // port assigns Lane numbers. RC must therefore already carry an
+            // assigned Lane number here (0 at x1), not PAD, or it sits in
+            // Lanenum.Wait transmitting PAD forever and its peer never changes
+            // its lane number -> 2ms timeout -> error -> ST_IDLE. EP still
+            // offers PAD until Complete (unchanged).
+            // TODO(x4): per-lane lane number assignment requires per-lane TX path.
+            ordered_set_c = IS_ROOT_PORT
+                ? gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected), train_seq_e'(0))
+                : gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
             next_state = ST_CONFIGURATION_LANENUM_WAIT;
-          end  //check timeout counter
-          else if (timer_r >= TwoMsTimeOut)
-          begin
-            error_c    = '1;
-            next_state = ST_IDLE;
           end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
+          error_c    = '1;
+          next_state = ST_IDLE;
         end
       end
       //-----------------------------------------------------------
@@ -811,15 +874,15 @@ module pcie_ltssm_downstream
           else if (|link_lane_reconfig && ordered_set_sent_cnt_r >= 8'h8)
           begin
             next_state = ST_CONFIGURATION_LANENUM_WAIT;
-          end  //check timeout counter
-          else if (timer_r >= TwoMsTimeOut)
-          begin
-            //assert error
-            error_c    = '1;
-            //reset counter
-            //goto detect
-            next_state = ST_IDLE;
           end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
+          //assert error
+          error_c    = '1;
+          //reset counter
+          //goto detect
+          next_state = ST_IDLE;
         end
       end
       //-----------------------------------------------------------
@@ -836,17 +899,22 @@ module pcie_ltssm_downstream
             gen_os_ctrl_c.gen_ts2  = '0;
             transmit_ordered_set   = '1;
             gen_os_ctrl_c.set_lane = '1;
-            ordered_set_c = gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
+            // RC assigns Lane Number 0 here (x1 only -- constant, not
+            // per-lane). EP still offers PAD until COMPLETE (unchanged).
+            // TODO(x4): per-lane lane number assignment requires per-lane TX path.
+            ordered_set_c = IS_ROOT_PORT
+                ? gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected), train_seq_e'(0))
+                : gen_ts_os( gen1, TS1, train_seq_e'(link_number_selected));
             //goto lanenum accept
             next_state = ST_CONFIGURATION_LANENUM_ACCEPT;
-          end  //check timeout counter
-          else if (timer_r >= TwoMsTimeOut)
-          begin
-            //assert error
-            error_c    = '1;
-            //goto detect
-            next_state = ST_IDLE;
           end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
+          //assert error
+          error_c    = '1;
+          //goto detect
+          next_state = ST_IDLE;
         end
       end
       //-----------------------------------------------------------
@@ -870,14 +938,14 @@ module pcie_ltssm_downstream
             gen_os_ctrl_c.gen_idle = '1;
             //goto config idle
             next_state             = ST_CONFIGURATION_IDLE;
-          end  //check timeout counter
-          else if (timer_r >= TwoMsTimeOut)
-          begin
-            //assert error
-            error_c    = '1;
-            //goto idle
-            next_state = ST_IDLE;
           end
+        end  // end of: if (ordered_set_tranmitted_i)
+
+        if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
+          //assert error
+          error_c    = '1;
+          //goto idle
+          next_state = ST_IDLE;
         end
       end
       //-----------------------------------------------------------
@@ -1027,7 +1095,7 @@ module pcie_ltssm_downstream
             // ts2_symbol6.req_equal = '1;
           end
           transmit_ordered_set = '1;
-          ordered_set_c = gen_ts_os( rate_speed_e'(last_data_rate_r.rate), TS2, train_seq_e'(LINK_NUM),
+          ordered_set_c = gen_ts_os( rate_speed_e'(last_data_rate_r.rate), TS2, train_seq_e'(link_number_selected),
                    train_seq_e'(0), last_data_rate_r, '0, ts2_symbol6);
           //goto next pcie ltssm state
           next_state = ST_RECOVERY_RCVR_CFG;
@@ -1035,7 +1103,7 @@ module pcie_ltssm_downstream
           if (!changed_speed_recovery_r && curr_data_rate_r.rate != gen1) begin
             transmit_ordered_set = '1;
             ordered_set_c = gen_ts_os( rate_speed_e'(last_data_rate_r.rate), TS2,
-                     train_seq_e'(LINK_NUM), train_seq_e'(0), last_data_rate_r, '0, ts2_symbol6);
+                     train_seq_e'(link_number_selected), train_seq_e'(0), last_data_rate_r, '0, ts2_symbol6);
             //goto next pcie ltssm state
             next_state = ST_RECOVERY_SPEED;
           end else if (changed_speed_recovery_r) begin
@@ -1405,7 +1473,7 @@ module pcie_ltssm_downstream
             // timer_c                = '0;
             gen_os_ctrl_c.valid    = '0;
             ordered_set_sent_cnt_c = '0;
-            next_state             = ST_DETECT;
+            next_state             = ST_IDLE;
           end
         end
       end
@@ -1455,6 +1523,7 @@ module pcie_ltssm_downstream
 
     logic [7:0] link_number_selected_per_lane_c;
     logic [7:0] lane_in_save_c;
+    logic [7:0] lane_num_echo_c;
     ts_symbol6_union_t temp_ts6_c;
 
     rate_id_t temp_rate_id_c;
@@ -1494,10 +1563,19 @@ module pcie_ltssm_downstream
         link_lane_reconfig[lane]         <= (ts1_cnt >= 8'h2);
         lane_num_formed[lane]            <= lane_active_r[lane] ? (ts2_cnt == 8'h8) : '1;
         //determine if TS1 req satisfied for lane by its count
-        link_idle_satisfied[lane]        <= (ts1_cnt >= 8'h8);
+        //(ts1_cnt is repurposed as the idle count while curr_state ==
+        //ST_CONFIGURATION_IDLE -- see that state's per-lane block, same
+        //convention ST_RECOVERY_IDLE uses for its own counter -- so this is
+        //not a mixup with idle_cnt/lanes_idle_satisfied, which belong to
+        //ST_RECOVERY_IDLE's separate exit condition instead.) Gated by
+        //lane_active_r like its siblings above/below so an inactive lane on
+        //a reduced-width link contributes a trivial '1' to the &-reduction
+        //at ST_CONFIGURATION_IDLE's exit check instead of blocking it
+        //forever.
+        link_idle_satisfied[lane]        <= lane_active_r[lane] ? (ts1_cnt >= 8'h8) : '1;
         ts1_cnt_satisfied[lane]          <= lane_active_r[lane] ? (ts1_cnt == 8'h8) : '1;
         ts2_cnt_satisfied[lane]          <= lane_active_r[lane] ? (ts2_cnt == 8'h8) : '1;
-        at_least_one_ts1_ts2[lane]       <= (ts1_cnt != '0) | (ts2_cnt != '0);
+        at_least_one_ts1_ts2[lane]       <= (ts1_cnt_c != '0) | (ts2_cnt_c != '0);
         //assignments for state exit scenarios
         lanes_ts1_satisfied[lane]        <= receiver_detected_i[lane] ? (ts1_cnt == 8'h8) : '1;
         lanes_ts2_satisfied[lane]        <= receiver_detected_i[lane] ? (ts2_cnt == 8'h8) : '1;
@@ -1515,6 +1593,7 @@ module pcie_ltssm_downstream
         first_ts1                                 <= '0;
         link_number_selected_per_lane[lane*8+:8] <= '0;
         lane_in_save                             <= PAD_;
+        lane_num_echo[lane*8+:8]                  <= PAD_;
         single_idle_received[lane]               <= '0;
         single_ts1_received[lane]                <= '0;
         single_ts2_received[lane]                <= '0;
@@ -1539,6 +1618,7 @@ module pcie_ltssm_downstream
 
         link_number_selected_per_lane[lane*8+:8] <= link_number_selected_per_lane_c;
         lane_in_save <= lane_in_save_c;
+        lane_num_echo[lane*8+:8] <= lane_num_echo_c;
         max_rate_per_lane[lane] <= max_rate_per_lane_c;
         temp_ts6 <= temp_ts6_c;
         temp_rate_id <= temp_rate_id_c;
@@ -1567,6 +1647,7 @@ module pcie_ltssm_downstream
 
       link_number_selected_per_lane_c = link_number_selected_per_lane[lane*8+:8];
       lane_in_save_c = lane_in_save;
+      lane_num_echo_c = lane_num_echo[lane*8+:8];  // hold captured echo value
       max_rate_per_lane_c = max_rate_per_lane[lane];
 
       temp_ts6_c = temp_ts6;
@@ -1603,6 +1684,8 @@ module pcie_ltssm_downstream
             single_idle_received_c ='0;
             single_ts1_received_c  ='0;
             single_ts2_received_c  ='0;
+
+            lane_num_echo_c = PAD_;  // clear echo for a fresh training attempt
           end
 
           // =========================
@@ -1737,11 +1820,15 @@ module pcie_ltssm_downstream
 
               
               //check that link number is not pad and that lane number is pad
-              if ((ordered_set_i[lane].link_num != PAD) &&
+              //RC already knows its own LINK_NUM (originated, not latched --
+              //see gen_link_number) and needs the peer to echo exactly that
+              //value back, not just any non-PAD value; EP shape unchanged.
+              if ((IS_ROOT_PORT ? (ordered_set_i[lane].link_num == link_number_selected)
+                                 : (ordered_set_i[lane].link_num != PAD)) &&
                   (ordered_set_i[lane].lane_num == PAD)) begin
                 //incrment ts1 count
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : ts1_cnt + 1;
-              end else begin    
+              end else begin
                 //reset ts1 cnt... this ensures that the TS1-OS are consecutive per the spec
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 :'0;
               end
@@ -1749,9 +1836,17 @@ module pcie_ltssm_downstream
 
             //check if consecutive TS1's satisfied for this lane
             if (link_width_satisfied[lane]) begin
-              //select link number by choosing lowest significant lane satisfied
-              //ignore all other lanes
-              if ((lane == 0) || (link_width_satisfied[lane:0] == '0)) begin
+              //select link number by choosing the lowest-numbered lane that
+              //is currently satisfied -- not hardcoded to lane 0.
+              //(1<<lane)-1 masks off every bit at position >= lane, leaving
+              //just the lanes below it; for lane==0 this mask is 0 so the
+              //check is trivially true (there is no lower lane), which is
+              //why no separate lane==0 special case is needed here (and
+              //avoids an invalid link_width_satisfied[lane-1:0] part-select
+              //at lane==0, since `lane` is a genvar -- elaborated per
+              //instance, not a runtime index -- and that range would
+              //elaborate to [-1:0] for that instance).
+              if ((link_width_satisfied & ((1 << lane) - 1)) == '0) begin
                 link_number_selected_per_lane_c = ordered_set_i[lane].link_num;
                 lane_link_number_selected_c ='1;
               end
@@ -1789,8 +1884,17 @@ module pcie_ltssm_downstream
               if ((ordered_set_i[lane].link_num != PAD) &&
                   (ordered_set_i[lane].lane_num != lane_in_save)) begin
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : ts1_cnt + 1;
-              end else begin    
+              end else begin
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : '0;
+              end
+              //EP reactive echo capture (TX-only, see lane_num_echo decl):
+              //latch the Lane Number the downstream/root peer assigned on this
+              //lane. Only a non-PAD value is a real assignment; capturing here
+              //(not earlier) is why the EP transmits PAD until it has actually
+              //been assigned a number -- which structurally prevents it from
+              //announcing while the peer is still in Linkwidth.Accept.
+              if (ordered_set_i[lane].lane_num != PAD) begin
+                lane_num_echo_c = ordered_set_i[lane].lane_num;
               end
             end
           end
@@ -1803,8 +1907,14 @@ module pcie_ltssm_downstream
               single_ts2_received_c ='1;
 
             if (ts1_valid_i[lane] || ts2_valid_i[lane]) begin
+              //RC assigned this lane its physical index (see the per-lane
+              //output stage) and confirms the peer echoed exactly that value.
+              //`== lane` generalises the old x1 `== 8'h0` to x4 (lane==0 at x1,
+              //so bit-identical there) and matches the COMPLETE check below.
+              //EP still accepts any non-PAD lane number, unchanged.
               if ((ordered_set_i[lane].link_num == link_number_selected) &&
-                  (ordered_set_i[lane].lane_num != PAD)) begin
+                  (IS_ROOT_PORT ? (ordered_set_i[lane].lane_num == lane)
+                                 : (ordered_set_i[lane].lane_num != PAD))) begin
 
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : ts1_cnt + 1;
 
@@ -1818,6 +1928,11 @@ module pcie_ltssm_downstream
 
               end else begin
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : '0;
+              end
+              //EP reactive echo capture (continue holding/refreshing the
+              //assigned Lane Number through Lanenum.Accept).
+              if (ordered_set_i[lane].lane_num != PAD) begin
+                lane_num_echo_c = ordered_set_i[lane].lane_num;
               end
             end
           end
@@ -1858,7 +1973,77 @@ module pcie_ltssm_downstream
     end
   end
 
-  assign ordered_set_o    = ordered_set_r;
+  // ======================================================================
+  //  Per-lane ordered-set output -- THE SINGLE POINT OF PER-LANE DIVERGENCE
+  // ======================================================================
+  //  The whole FSM builds ONE 128-bit template (ordered_set_r) per cycle; a
+  //  downstream/root port must, however, transmit a DIFFERENT Lane Number on
+  //  each lane during Configuration (PCIe Base, Configuration.Lanenum). This
+  //  block is the only place the single template fans out per-lane, and the
+  //  Lane Number byte is the ONLY field that ever differs between lanes --
+  //  Link Number, rate, TS type, everything else is broadcast identically.
+  //
+  //  Widening the OUTPUT (ordered_set_o -> array) rather than the ~20 build
+  //  sites (ordered_set_c) keeps every gen_ts_os/gen_eios/gen_eieos/gen_zeros
+  //  call untouched and confines x4 to this stage. See the Step-0 design note.
+  //
+  //  When per-lane assignment fires (physical lane index l):
+  //    * gen_ts1|gen_ts2 : only a TS1/TS2 ordered set carries a Lane Number.
+  //      Gating here means idle (gen_idle -> gen_zeros), EIOS and EIEOS are
+  //      NEVER touched -- their byte 2 is pattern data, not a lane number.
+  //    * template lane_num != PAD : the FSM only puts a non-PAD lane number in
+  //      the template once it has decided to assign one. This is what keeps the
+  //      two roles correct WITHOUT an IS_ROOT_PORT test here: the RC exit
+  //      builds carry train_seq_e'(0) (non-PAD) from Lanenum.Wait on, so the RC
+  //      assigns per-lane from Lanenum.Wait; the EP builds carry PAD until its
+  //      COMPLETE-feeding build (line ~853), so the EP only diverges per-lane
+  //      at Complete (which is all a *spec* upstream port needs -- and note the
+  //      repo's EP does not yet advertise lane numbers earlier; that is a
+  //      separate EP-side gap).
+  //
+  //  x1 (MAX_NUM_LANES=1): l is always 0, and every template that reaches this
+  //  block with lane_num != PAD already holds 0, so t.lane_num = 0 is a no-op
+  //  -- bit-identical to the previous `assign ordered_set_o = ordered_set_r`.
+  //
+  //  Lane reversal (optional per spec, unimplemented): a reversed link would
+  //  map assigned-number -> reversed-physical-lane HERE (t.lane_num = f(l))
+  //  and the RX `lane_num == lane` checks would compare against f(l).
+  //  TODO(lane-reversal): not implemented; contiguous, non-reversed only.
+  //  TODO(contiguity): no fragmentation/contiguity check on the forming lanes
+  //  (see the deleted Linkwidth.Accept parity gate); non-contiguous responders
+  //  get physical-index lane numbers, not sequential 0..N-1.
+  always_comb begin : per_lane_ordered_set_o
+    pcie_tsos_t tmpl;
+    logic       tx_ts;
+    tmpl  = pcie_tsos_t'(ordered_set_r);
+    tx_ts = (gen_os_ctrl_r.gen_ts1 || gen_os_ctrl_r.gen_ts2);
+    for (int l = 0; l < MAX_NUM_LANES; l++) begin
+      pcie_tsos_t t;
+      t = tmpl;
+      if (IS_ROOT_PORT) begin
+        // Root/downstream port ASSIGNS: each active lane gets its physical
+        // index once the FSM has put a non-PAD lane number in the template
+        // (Lanenum.Wait onward). Sequential 0..N-1 for a contiguous link.
+        if (tx_ts && (tmpl.lane_num != train_seq_e'(PAD_))) begin
+          t.lane_num = l[7:0];
+        end
+      end else begin
+        // Endpoint/upstream port ECHOES: transmit back the Lane Number the
+        // root assigned on this lane (captured in lane_num_echo). PAD until an
+        // assignment has been received -- so the EP never advertises a Lane
+        // Number before it has one, which is what removes the premature-
+        // announcement deadlock. Note: because lane_num_echo == physical index
+        // for a non-reversed contiguous link, the emitted value matches what
+        // the RC assigned by construction; under lane reversal (unsupported)
+        // the captured value would differ and this true echo is required.
+        if (tx_ts && (lane_num_echo[l*8+:8] != train_seq_e'(PAD_))) begin
+          t.lane_num = lane_num_echo[l*8+:8];
+        end
+      end
+      ordered_set_o[l] = pcie_ordered_set_t'(t);
+    end
+  end
+
   assign curr_data_rate_o = curr_data_rate_r.rate;
   assign gen_os_ctrl_o    = gen_os_ctrl_r;
 
