@@ -17,6 +17,9 @@ module tb_tlp_parser;
   logic payload_tlast;
   logic payload_tready;
   logic malformed;
+  logic error_valid;
+  logic [4:0] error_code;
+  logic ecrc_error;
   tlp_header_t header;
 
   logic [2:0] header_fmt;
@@ -57,6 +60,7 @@ module tb_tlp_parser;
       .header_o(header), .header_valid_o(header_valid), .header_ready_i(header_ready),
       .payload_tdata_o(payload_tdata), .payload_tkeep_o(payload_tkeep),
       .payload_tvalid_o(payload_tvalid), .payload_tlast_o(payload_tlast),
-      .payload_tready_i(payload_tready), .malformed_o(malformed)
+      .payload_tready_i(payload_tready), .malformed_o(malformed),
+      .error_valid_o(error_valid), .error_code_o(error_code), .ecrc_error_o(ecrc_error)
   );
 endmodule

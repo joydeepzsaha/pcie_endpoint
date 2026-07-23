@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 module pcie_dllp_crc8 (
     input  [15:0] crcIn,
     input  [ 7:0] data,

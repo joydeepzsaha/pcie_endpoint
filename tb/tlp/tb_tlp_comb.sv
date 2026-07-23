@@ -26,8 +26,11 @@ module tb_tlp_comb;
   logic unsupported;
 
   logic bar_hit;
+  logic bar_overlap;
   logic bar_number;
   logic [63:0] bar_offset;
+  logic overlap_hit;
+  logic overlap_detected;
   logic config_hit;
   logic config_type_one;
   logic [11:0] config_offset;
@@ -60,8 +63,20 @@ module tb_tlp_comb;
       .BAR_MASK({64'hffff_ffff_ffff_f000, 64'hffff_ffff_ffff_f000}),
       .BAR_ENABLE(2'b11)
   ) bar_inst (
-      .address_i(address), .memory_enable_i(memory_enable),
-      .hit_o(bar_hit), .bar_o(bar_number), .offset_o(bar_offset)
+      .address_i(address), .length_bytes_i(byte_length),
+      .memory_enable_i(memory_enable), .hit_o(bar_hit), .overlap_o(bar_overlap),
+      .bar_o(bar_number), .offset_o(bar_offset)
+  );
+
+  tlp_bar_decoder #(
+      .BAR_COUNT(2),
+      .BAR_BASE({64'h0000_0000_0000_1800, 64'h0000_0000_0000_1000}),
+      .BAR_MASK({64'hffff_ffff_ffff_f800, 64'hffff_ffff_ffff_f000}),
+      .BAR_ENABLE(2'b11)
+  ) overlap_bar_inst (
+      .address_i(address), .length_bytes_i(byte_length),
+      .memory_enable_i(memory_enable), .hit_o(overlap_hit),
+      .overlap_o(overlap_detected), .bar_o(), .offset_o()
   );
 
   tlp_config_decoder config_inst (

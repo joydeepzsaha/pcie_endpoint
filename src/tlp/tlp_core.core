@@ -6,6 +6,8 @@ filesets:
   rtl:
     files:
       - tlp_pkg.sv
+      - tlp_ecrc.sv
+      - tlp_validator.sv
       - tlp_classifier.sv
       - tlp_bar_decoder.sv
       - tlp_config_decoder.sv
@@ -16,6 +18,8 @@ filesets:
       - tlp_completion_generator.sv
       - tlp_control.sv
       - tlp_generator.sv
+      - tlp_credit_manager.sv
+      - tlp_vc_buffer.sv
       - tlp_layer.sv
     file_type: systemVerilogSource
 

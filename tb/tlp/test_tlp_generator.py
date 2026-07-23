@@ -1,4 +1,5 @@
 import cocotb
+import zlib
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
@@ -67,6 +68,14 @@ def expected_dw0(fmt, tlp_type, length, tc=0, attr=0, digest=0):
             | (digest << 23) | ((enc & 0xFF) << 24))
 
 
+def stream_crc(beats):
+    payload = bytearray()
+    for data, keep, _ in beats:
+        raw = data.to_bytes(4, "little")
+        payload.extend(raw[lane] for lane in range(4) if keep & (1 << lane))
+    return zlib.crc32(payload)
+
+
 @cocotb.test()
 async def request_headers_prefix_payload_digest_and_stalls(dut):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
@@ -85,7 +94,7 @@ async def request_headers_prefix_payload_digest_and_stalls(dut):
     # Address offset one inserts an invalid leading payload byte.
     assert result[4] == (0x33221100, 0xE, 0)
     assert result[5] == (0x77665544, 0xF, 0)
-    assert result[6] == (0xDEADBEEF, 0xF, 1)
+    assert result[6] == (stream_crc(result[1:6]), 0xF, 1)
 
 
 @cocotb.test()

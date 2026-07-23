@@ -4,7 +4,9 @@ module tlp_generator
 #(
     parameter int DATA_WIDTH = 32,
     parameter int KEEP_WIDTH = DATA_WIDTH / 8,
-    parameter int USER_WIDTH = 3
+    parameter int USER_WIDTH = 3,
+    // Set when each AXI byte lane must carry the corresponding PCIe wire byte.
+    parameter bit PCIE_WIRE_ORDER = 1'b0
 ) (
     input  logic                  clk_i,
     input  logic                  rst_i,
@@ -35,6 +37,10 @@ module tlp_generator
   logic [31:0] dw0;
   logic [31:0] dw1;
   logic [31:0] dw2;
+  logic [31:0] dw3;
+  logic [31:0] axis_dw1;
+  logic [31:0] axis_dw2;
+  logic [31:0] axis_dw3;
   logic [31:0] formatted_data;
   logic [3:0] formatted_keep;
   logic formatted_valid;
@@ -44,6 +50,11 @@ module tlp_generator
   logic formatter_start_ready;
   logic [9:0] encoded_length;
   logic [1:0] payload_offset;
+  logic [31:0] calculated_ecrc;
+  logic ecrc_valid;
+  logic ecrc_start;
+  logic ecrc_data_valid;
+  logic ecrc_finish;
   wire output_fire = m_axis_tvalid && m_axis_tready;
 
   always_comb begin
@@ -69,6 +80,16 @@ module tlp_generator
       dw1 = {header_r.requester_id, header_r.tag, header_r.last_be, header_r.first_be};
       dw2 = tlp_is_4dw(header_r.fmt) ? header_r.address[63:32] :
             {header_r.address[31:2], 2'b00};
+    end
+
+    dw3 = {header_r.address[31:2], 2'b00};
+    axis_dw1 = dw1;
+    axis_dw2 = dw2;
+    axis_dw3 = dw3;
+    if (PCIE_WIRE_ORDER) begin
+      axis_dw1 = {dw1[7:0], dw1[15:8], dw1[23:16], dw1[31:24]};
+      axis_dw2 = {dw2[7:0], dw2[15:8], dw2[23:16], dw2[31:24]};
+      axis_dw3 = {dw3[7:0], dw3[15:8], dw3[23:16], dw3[31:24]};
     end
   end
 
@@ -96,17 +117,17 @@ module tlp_generator
         m_axis_tvalid = 1'b1;
       end
       TX_DW1: begin
-        m_axis_tdata  = dw1;
+        m_axis_tdata  = axis_dw1;
         m_axis_tvalid = 1'b1;
       end
       TX_DW2: begin
-        m_axis_tdata  = dw2;
+        m_axis_tdata  = axis_dw2;
         m_axis_tvalid = 1'b1;
         m_axis_tlast  = !tlp_is_4dw(header_r.fmt) && !tlp_has_data(header_r.fmt) &&
                         !header_r.digest_present;
       end
       TX_DW3: begin
-        m_axis_tdata  = {header_r.address[31:2], 2'b00};
+        m_axis_tdata  = axis_dw3;
         m_axis_tvalid = 1'b1;
         m_axis_tlast  = !tlp_has_data(header_r.fmt) && !header_r.digest_present;
       end
@@ -118,12 +139,23 @@ module tlp_generator
         formatted_ready = m_axis_tready;
       end
       TX_ECRC: begin
-        m_axis_tdata  = header_r.digest;
+        m_axis_tdata  = calculated_ecrc;
         m_axis_tvalid = 1'b1;
         m_axis_tlast  = 1'b1;
       end
       default: ;
     endcase
+  end
+
+  always_comb begin
+    ecrc_start = output_fire && state_r == TX_DW0 && header_r.digest_present;
+    ecrc_data_valid = output_fire && header_r.digest_present &&
+        (state_r == TX_DW0 || state_r == TX_DW1 || state_r == TX_DW2 ||
+         state_r == TX_DW3 || state_r == TX_PAYLOAD);
+    ecrc_finish = ecrc_data_valid &&
+        ((state_r == TX_DW2 && !tlp_is_4dw(header_r.fmt) && !tlp_has_data(header_r.fmt)) ||
+         (state_r == TX_DW3 && !tlp_has_data(header_r.fmt)) ||
+         (state_r == TX_PAYLOAD && formatted_last));
   end
 
   always_ff @(posedge clk_i) begin
@@ -187,6 +219,13 @@ module tlp_generator
       .m_axis_tvalid(formatted_valid),
       .m_axis_tlast(formatted_last),
       .m_axis_tready(formatted_ready)
+  );
+
+  tlp_ecrc ecrc_inst (
+      .clk_i(clk_i), .rst_i(rst_i), .start_i(ecrc_start),
+      .data_i(m_axis_tdata), .keep_i(m_axis_tkeep),
+      .data_valid_i(ecrc_data_valid), .finish_i(ecrc_finish),
+      .ecrc_o(calculated_ecrc), .ecrc_valid_o(ecrc_valid)
   );
 
 endmodule

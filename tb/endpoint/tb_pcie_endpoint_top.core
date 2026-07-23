@@ -1,0 +1,23 @@
+CAPI=2:
+
+name: fusesoc:pcie:tb_endpoint_protocol:1.0.0
+description: Cocotb verification for the integrated PCIe endpoint protocol layers
+
+filesets:
+  tb:
+    files:
+      - tb_pcie_endpoint_top.sv
+      - test_pcie_endpoint_top.py: {file_type: user, copyto: test_pcie_endpoint_top.py}
+    file_type: systemVerilogSource
+    depend:
+      - fusesoc:pcie:endpoint_protocol:1.0.0
+
+targets:
+  sim:
+    flow: sim
+    flow_options:
+      tool: vcs
+      cocotb_module: test_pcie_endpoint_top
+      timescale: 1ns/1ps
+    filesets: [tb]
+    toplevel: tb_pcie_endpoint_top

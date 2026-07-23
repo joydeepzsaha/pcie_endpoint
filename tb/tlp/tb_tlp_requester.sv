@@ -39,6 +39,7 @@ module tb_tlp_requester;
   logic packet_data_last;
   logic packet_data_ready;
   logic command_error;
+  logic [4:0] command_error_code;
 
   logic [2:0] packet_fmt;
   logic [4:0] packet_type;
@@ -65,8 +66,8 @@ module tb_tlp_requester;
       .command_address_i(command_address), .command_byte_count_i(command_byte_count),
       .command_tc_i(command_tc), .command_attr_i(command_attr),
       .command_context_i(command_context), .command_prefix_valid_i(command_prefix_valid),
-      .command_prefix_i(command_prefix), .command_digest_valid_i(command_digest_valid),
-      .command_digest_i(command_digest), .command_data_i(command_data),
+      .command_prefix_i(command_prefix), .command_ecrc_enable_i(command_digest_valid),
+      .command_data_i(command_data),
       .command_keep_i(command_keep), .command_data_valid_i(command_data_valid),
       .command_data_last_i(command_data_last), .command_data_ready_o(command_data_ready),
       .tag_request_valid_o(tag_request_valid), .tag_request_ready_i(tag_request_ready),
@@ -76,6 +77,7 @@ module tb_tlp_requester;
       .packet_header_valid_o(packet_header_valid), .packet_header_ready_i(packet_header_ready),
       .packet_data_o(packet_data), .packet_keep_o(packet_keep),
       .packet_data_valid_o(packet_data_valid), .packet_data_last_o(packet_data_last),
-      .packet_data_ready_i(packet_data_ready), .command_error_o(command_error)
+      .packet_data_ready_i(packet_data_ready), .command_error_valid_o(command_error),
+      .command_error_code_o(command_error_code)
   );
 endmodule

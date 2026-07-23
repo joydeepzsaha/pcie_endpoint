@@ -18,6 +18,7 @@ async def allocate(dut, requester, count, context, expects_data=True):
     dut.allocate_byte_count.value = count
     dut.allocate_context.value = context
     dut.allocate_expects_data.value = expects_data
+    dut.allocate_address.value = 0
     dut.allocate_valid.value = 1
     await Timer(1, units="ps")
     while not int(dut.allocate_ready.value):
@@ -30,11 +31,13 @@ async def allocate(dut, requester, count, context, expects_data=True):
     return tag
 
 
-async def complete(dut, requester, tag, payload_bytes, status=0):
+async def complete(dut, requester, tag, payload_bytes, status=0, byte_count=None, lower=0):
     dut.completion_requester_id.value = requester
     dut.completion_tag.value = tag
     dut.completion_status.value = status
     dut.completion_payload_bytes.value = payload_bytes
+    dut.completion_byte_count.value = payload_bytes if byte_count is None else byte_count
+    dut.completion_lower_address.value = lower
     dut.completion_valid.value = 1
     await Timer(1, units="ps")
     while not int(dut.completion_ready.value):
@@ -58,13 +61,13 @@ async def exhaustion_split_completion_and_reuse(dut):
     dut.allocate_valid.value = 0
 
     dut.result_ready.value = 1
-    await complete(dut, 0x1234, 0, 16)
+    await complete(dut, 0x1234, 0, 16, byte_count=64)
     await Timer(1, units="ps")
     assert int(dut.result_valid.value) == 1
     assert int(dut.result_last.value) == 0
     assert int(dut.outstanding.value) == 32
     await RisingEdge(dut.clk_i)
-    await complete(dut, 0x1234, 0, 48)
+    await complete(dut, 0x1234, 0, 48, byte_count=48, lower=16)
     await Timer(1, units="ps")
     assert int(dut.result_last.value) == 1
     assert int(dut.outstanding.value) == 31
@@ -89,9 +92,22 @@ async def malformed_completion_and_result_backpressure(dut):
     assert int(dut.unexpected_completion.value) == 1
     assert int(dut.outstanding.value) == 1
 
+    # A matching tag with a false remaining-byte count is also malformed.
+    await complete(dut, 0xABCD, tag, 8, byte_count=31)
+    await Timer(1, units="ps")
+    assert int(dut.unexpected_completion.value) == 1
+    assert int(dut.completion_error_code.value) != 0
+    assert int(dut.outstanding.value) == 1
+
+    # The first completion must begin at the request's recorded lower address.
+    await complete(dut, 0xABCD, tag, 8, byte_count=32, lower=4)
+    await Timer(1, units="ps")
+    assert int(dut.unexpected_completion.value) == 1
+    assert int(dut.outstanding.value) == 1
+
     # Hold result backpressure; completion_ready and result fields must remain stable.
     dut.result_ready.value = 0
-    await complete(dut, 0xABCD, tag, 8)
+    await complete(dut, 0xABCD, tag, 8, byte_count=32)
     await Timer(1, units="ps")
     assert int(dut.result_valid.value) == 1
     snapshot = (int(dut.result_context.value), int(dut.result_status.value), int(dut.result_last.value))

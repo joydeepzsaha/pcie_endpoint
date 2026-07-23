@@ -1,0 +1,18 @@
+CAPI=2:
+
+name: fusesoc:pcie:endpoint_protocol:1.0.0
+description: PCIe endpoint Transaction and Data Link protocol integration
+
+filesets:
+  rtl:
+    files:
+      - pcie_endpoint_top.sv
+    file_type: systemVerilogSource
+    depend:
+      - ::tlp_core:1.0.0
+      - fusesoc:pcie:dllp_core:1.0.0
+
+targets:
+  default:
+    filesets: [rtl]
+    toplevel: pcie_endpoint_top

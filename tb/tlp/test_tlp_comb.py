@@ -98,6 +98,7 @@ async def classifier_all_three_classes(dut):
 @cocotb.test()
 async def bar_and_config_boundaries(dut):
     dut.memory_enable.value = 1
+    dut.byte_length.value = 1
     for address, hit, bar, offset in [
         (0x0FFF, 0, 0, 0),
         (0x1000, 1, 0, 0),
@@ -112,6 +113,22 @@ async def bar_and_config_boundaries(dut):
         if hit:
             assert int(dut.bar_number.value) == bar
             assert int(dut.bar_offset.value) == offset
+
+    # A request must fit wholly inside one aperture; crossing its last byte is rejected.
+    dut.address.value = 0x1FFC
+    dut.byte_length.value = 4
+    await settle()
+    assert int(dut.bar_hit.value) == 1
+    dut.byte_length.value = 5
+    await settle()
+    assert int(dut.bar_hit.value) == 0
+
+    # Ambiguous programming is rejected instead of silently choosing the first BAR.
+    dut.address.value = 0x1800
+    dut.byte_length.value = 4
+    await settle()
+    assert int(dut.overlap_detected.value) == 1
+    assert int(dut.overlap_hit.value) == 0
 
     dut.memory_enable.value = 0
     dut.address.value = 0x1000

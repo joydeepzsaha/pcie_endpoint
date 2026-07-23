@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 module bram_sp #(
        //=============
        // Parameters

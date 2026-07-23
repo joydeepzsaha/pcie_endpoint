@@ -23,6 +23,16 @@ async def init_top(dut):
     dut.memory_enable_i.value = 1
     dut.max_payload_bytes_i.value = 128
     dut.max_read_bytes_i.value = 128
+    dut.fc_initialized_i.value = 1
+    dut.fc_ph_i.value = 32
+    dut.fc_pd_i.value = 256
+    dut.fc_nph_i.value = 32
+    dut.fc_npd_i.value = 256
+    dut.fc_cplh_i.value = 32
+    dut.fc_cpld_i.value = 256
+    dut.fc_update_valid_i.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.fc_update_valid_i.value = 0
     for _ in range(2):
         await RisingEdge(dut.clk_i)
 
@@ -78,6 +88,7 @@ async def layer_routes_requests_and_flags_malformed_timing(dut):
     await send_rx(dut, (2 << 5) | (1 << 24))
     await send_rx(dut, (0xABCD << 16) | (7 << 8) | 0xF)
     await send_rx(dut, 0x0000)
+    await send_rx(dut, 0xDEADBEEF, last=True)
     for _ in range(3):
         await RisingEdge(dut.clk_i)
         assert int(dut.target_request_valid_o.value) == 1
@@ -88,7 +99,6 @@ async def layer_routes_requests_and_flags_malformed_timing(dut):
     await RisingEdge(dut.clk_i)
     dut.target_request_ready_i.value = 0
     dut.target_data_ready_i.value = 0
-    await send_rx(dut, 0xDEADBEEF, last=True)
     for _ in range(3):
         await RisingEdge(dut.clk_i)
         if int(dut.target_data_valid_o.value):
@@ -143,3 +153,46 @@ async def local_nonposted_command_reaches_dllp_axis(dut):
     assert words[0][0] & 0xFF == 0
     assert words[2] == (0x2000, 1)
     assert int(dut.outstanding_o.value) == 1
+
+
+@cocotb.test()
+async def virtual_channel_waits_for_exact_credit_class(dut):
+    await init_top(dut)
+    dut.m_dllp_axis_tready.value = 1
+
+    # Remove NP credits and enqueue a Memory Read.  The complete packet may enter
+    # the VC, but no header DW may reach the DLL until NP credits are advertised.
+    dut.fc_nph_i.value = 0
+    dut.fc_npd_i.value = 0
+    dut.fc_update_valid_i.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.fc_update_valid_i.value = 0
+    dut.command_i.value = 0
+    dut.command_address_i.value = 0x4000
+    dut.command_byte_count_i.value = 4
+    dut.command_valid_i.value = 1
+    while not int(dut.command_ready_o.value):
+        await RisingEdge(dut.clk_i)
+    await RisingEdge(dut.clk_i)
+    dut.command_valid_i.value = 0
+    for _ in range(20):
+        await RisingEdge(dut.clk_i)
+        assert int(dut.m_dllp_axis_tvalid.value) == 0
+        if int(dut.tx_fc_blocked_o.value):
+            break
+    else:
+        raise AssertionError("VC packet did not report NP credit blocking")
+
+    dut.fc_nph_i.value = 1
+    dut.fc_npd_i.value = 0
+    dut.fc_update_valid_i.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.fc_update_valid_i.value = 0
+    observed = 0
+    for _ in range(30):
+        await RisingEdge(dut.clk_i)
+        if int(dut.m_dllp_axis_tvalid.value):
+            observed += 1
+            if int(dut.m_dllp_axis_tlast.value):
+                break
+    assert observed == 3
