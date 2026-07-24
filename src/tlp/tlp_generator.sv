@@ -63,11 +63,13 @@ module tlp_generator
     dw0[7:5]   = header_r.fmt;
     dw0[4:0]   = header_r.tlp_type;
     dw0[8]     = header_r.th;
-    dw0[10]    = header_r.attributes[0];
+    // PCIe Attr[2] (IDO) occupies byte-one bit 2 on this little-endian
+    // AXI representation; Attr[1:0] occupy byte-two bits 5:4.
+    dw0[10]    = header_r.attributes[2];
     dw0[14:12] = header_r.traffic_class;
     dw0[17:16] = encoded_length[9:8];
     dw0[19:18] = header_r.address_type;
-    dw0[21:20] = header_r.attributes[2:1];
+    dw0[21:20] = header_r.attributes[1:0];
     dw0[22]    = header_r.poisoned;
     dw0[23]    = header_r.digest_present;
     dw0[31:24] = encoded_length[7:0];

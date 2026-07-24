@@ -11,6 +11,7 @@ filesets:
     file_type: systemVerilogSource
     depend:
       - fusesoc:pcie:endpoint_protocol:1.0.0
+      - fusesoc:pcie:phy_scrambler:1.0.0
 
 targets:
   sim:

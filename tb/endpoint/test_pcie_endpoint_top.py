@@ -112,11 +112,15 @@ async def capture_target_payload(dut) -> bytes:
 
 
 async def receive_link_tlp(sink: AxiStreamSink) -> bytes:
+    return bytes((await receive_link_frame(sink)).tdata)
+
+
+async def receive_link_frame(sink: AxiStreamSink) -> AxiStreamFrame:
     while True:
         frame = await with_timeout(sink.recv(), 1000, "us")
         data = bytes(frame.tdata)
         if len(data) != 6:
-            return data
+            return frame
 
 
 async def receive_dllp_type(sink: AxiStreamSink, dllp_type: DllpType):
@@ -184,6 +188,12 @@ class EndpointTB:
         d.received_completion_ready_i.value = 1
         d.received_completion_data_ready_i.value = 1
         d.result_ready_i.value = 1
+        d.codec_8b_data_i.value = 0
+        d.codec_8b_disp_i.value = 0
+        d.codec_decode_data_i.value = 0
+        d.codec_decode_disp_i.value = 0
+        d.scrambler_disable_i.value = 0
+        d.scrambler_lfsr_i.value = 0xFFFF
         for _ in range(8):
             await RisingEdge(d.clk_i)
         d.rst_i.value = 0
@@ -213,12 +223,19 @@ class EndpointTB:
         assert int(self.dut.fc_cplh_o.value) == 32
 
     async def submit_command(self, command: int, address: int, byte_count: int,
-                             payload: bytes = b"", context: int = 0x1234):
+                             payload: bytes = b"", context: int = 0x1234,
+                             tc: int = 0, attr: int = 0,
+                             prefix: int | None = None, ecrc: bool = False):
         d = self.dut
         d.command_i.value = command
         d.command_address_i.value = address
         d.command_byte_count_i.value = byte_count
+        d.command_tc_i.value = tc
+        d.command_attr_i.value = attr
         d.command_context_i.value = context
+        d.command_prefix_valid_i.value = prefix is not None
+        d.command_prefix_i.value = 0 if prefix is None else prefix
+        d.command_ecrc_enable_i.value = ecrc
         d.command_valid_i.value = 1
         await wait_high(d.clk_i, d.command_ready_o)
         await RisingEdge(d.clk_i)
@@ -234,6 +251,24 @@ class EndpointTB:
             await RisingEdge(d.clk_i)
         d.command_data_valid_i.value = 0
         d.command_data_last_i.value = 0
+
+
+def scrambler_step_reference(state: int) -> int:
+    q = [(state >> bit) & 1 for bit in range(16)]
+    out = [0] * 16
+    out[0:3] = q[8:11]
+    out[3] = q[8] ^ q[11]
+    out[4] = q[8] ^ q[9] ^ q[12]
+    out[5] = q[8] ^ q[9] ^ q[10] ^ q[13]
+    out[6] = q[9] ^ q[10] ^ q[11] ^ q[14]
+    out[7] = q[10] ^ q[11] ^ q[12] ^ q[15]
+    out[8] = q[0] ^ q[11] ^ q[12] ^ q[13]
+    out[9] = q[1] ^ q[12] ^ q[13] ^ q[14]
+    out[10] = q[2] ^ q[13] ^ q[14] ^ q[15]
+    out[11] = q[3] ^ q[14] ^ q[15]
+    out[12] = q[4] ^ q[15]
+    out[13:16] = q[5:8]
+    return sum(bit << index for index, bit in enumerate(out))
 
 
 @cocotb.test()
@@ -255,6 +290,184 @@ async def application_input_reaches_data_link_output(dut):
     )
     assert payload in mid_tlp
     assert not int(dut.command_error_valid_o.value)
+
+
+@cocotb.test()
+async def exact_outbound_header_sequence_credit_and_classification(dut):
+    """Check every generated request field plus sequence, credits, and tuser."""
+    tb = EndpointTB(dut)
+    await tb.reset()
+    await tb.initialize_flow_control()
+
+    initial_ph = int(dut.tx_posted_header_available.value)
+    initial_pd = int(dut.tx_posted_data_available.value)
+    payload = bytes.fromhex("00112233445566778899aabbccddeeff")
+    await tb.submit_command(
+        CMD_MEM_WRITE, 0x184, len(payload), payload,
+        tc=5, attr=3, context=0xCAFE,
+    )
+
+    frame = await receive_link_frame(tb.phy_sink)
+    link_packet = bytes(frame.tdata)
+    assert int.from_bytes(link_packet[:2], "big") == 0
+    assert all(int(value) == PHY_USER_IS_TLP for value in frame.tuser)
+
+    tlp = Tlp.unpack(link_packet[2:-4])
+    assert tlp.fmt_type == TlpType.MEM_WRITE
+    expected_requester_id = (
+        (int(dut.cfg_bus_number_o.value) << 8)
+        | (int(dut.cfg_device_number_o.value) << 3)
+        | int(dut.cfg_function_number_o.value)
+    )
+    assert int(tlp.requester_id) == expected_requester_id
+    assert tlp.address == 0x184
+    assert tlp.length == 4
+    assert tlp.first_be == 0xF
+    assert tlp.last_be == 0xF
+    assert int(tlp.tc) == 5
+    assert int(tlp.attr) == 3
+    assert not tlp.td
+    assert not tlp.ep
+    assert not tlp.th
+    assert int(tlp.at) == 0
+    assert bytes(tlp.data) == payload
+
+    assert int(dut.tx_posted_header_available.value) == initial_ph - 1
+    # One data credit represents up to 16 payload bytes.
+    assert int(dut.tx_posted_data_available.value) == initial_pd - 1
+
+
+@cocotb.test()
+async def consecutive_unaligned_segmented_and_4dw_writes(dut):
+    """Exercise consecutive writes, unaligned byte enables, MPS splits, and 4-DW."""
+    tb = EndpointTB(dut)
+    await tb.reset()
+    await tb.initialize_flow_control()
+
+    writes = [
+        (0x81, bytes.fromhex("10203040506070")),
+        (0x140, bytes.fromhex("a1b2c3d4")),
+    ]
+    for expected_sequence, (address, payload) in enumerate(writes):
+        await tb.submit_command(CMD_MEM_WRITE, address, len(payload), payload)
+        packet = await receive_link_tlp(tb.phy_sink)
+        assert int.from_bytes(packet[:2], "big") == expected_sequence
+        tlp = Tlp.unpack(packet[2:-4])
+        assert tlp.address == (address & ~3)
+        offset = address & 3
+        assert tlp.first_be == (0xE if offset else 0xF)
+        assert bytes(tlp.data)[offset:offset + len(payload)] == payload
+        await send_axis(
+            tb.phy_source,
+            build_ack_nak(DllpType.ACK, expected_sequence),
+            PHY_USER_IS_DLLP,
+        )
+
+    segmented_payload = bytes(index & 0xFF for index in range(300))
+    await tb.submit_command(
+        CMD_MEM_WRITE, 0x200, len(segmented_payload), segmented_payload
+    )
+    segments = []
+    for expected_sequence in range(2, 5):
+        packet = await receive_link_tlp(tb.phy_sink)
+        assert int.from_bytes(packet[:2], "big") == expected_sequence
+        segments.append(Tlp.unpack(packet[2:-4]))
+        await send_axis(
+            tb.phy_source,
+            build_ack_nak(DllpType.ACK, expected_sequence),
+            PHY_USER_IS_DLLP,
+        )
+    assert [item.length * 4 for item in segments] == [128, 128, 44]
+    assert [item.address for item in segments] == [0x200, 0x280, 0x300]
+    assert b"".join(bytes(item.data) for item in segments) == segmented_payload
+
+    address_64 = 0x1_0000_0400
+    payload_64 = bytes.fromhex("efbeadde78563412")
+    await tb.submit_command(CMD_MEM_WRITE, address_64, len(payload_64), payload_64)
+    packet = await receive_link_tlp(tb.phy_sink)
+    assert int.from_bytes(packet[:2], "big") == 5
+    tlp = Tlp.unpack(packet[2:-4])
+    assert tlp.fmt_type == TlpType.MEM_WRITE_64
+    assert tlp.address == address_64
+    assert bytes(tlp.data) == payload_64
+
+
+@cocotb.test()
+async def outbound_prefix_and_ecrc_are_preserved(dut):
+    """Check prefix placement and the ECRC produced over the unprefixed TLP."""
+    tb = EndpointTB(dut)
+    await tb.reset()
+    await tb.initialize_flow_control()
+
+    prefix = 0xA1B2C480
+    payload = bytes.fromhex("dec0adde")
+    await tb.submit_command(
+        CMD_MEM_WRITE, 0x300, len(payload), payload,
+        prefix=prefix, ecrc=True,
+    )
+    packet = await receive_link_tlp(tb.phy_sink)
+    raw_tlp = packet[2:-4]
+    assert raw_tlp[:4] == prefix.to_bytes(4, "little")
+    assert int.from_bytes(raw_tlp[-4:], "little") == (
+        zlib.crc32(raw_tlp[4:-4]) & 0xFFFFFFFF
+    )
+
+
+@cocotb.test()
+async def existing_scrambler_and_8b10b_primitives_are_checked(dut):
+    """Verify codec round trips/errors and the existing Gen1 LFSR step logic."""
+    tb = EndpointTB(dut)
+    await tb.reset()
+
+    legal_codes = set()
+    for disparity in (0, 1):
+        for byte in range(256):
+            dut.codec_8b_data_i.value = byte
+            dut.codec_8b_disp_i.value = disparity
+            await Timer(1, units="ps")
+            code = int(dut.codec_10b_data.value)
+            legal_codes.add(code)
+            dut.codec_decode_data_i.value = code
+            dut.codec_decode_disp_i.value = disparity
+            await Timer(1, units="ps")
+            assert not int(dut.codec_decode_code_error.value)
+            assert not int(dut.codec_decode_disparity_error.value)
+            assert int(dut.codec_decode_data.value) == byte
+            assert int(dut.codec_decode_disp.value) == int(dut.codec_10b_disp.value)
+
+    legal_k = [0x11C, 0x13C, 0x15C, 0x17C, 0x19C, 0x1BC, 0x1DC, 0x1FC,
+               0x1F7, 0x1FB, 0x1FD, 0x1FE]
+    for disparity in (0, 1):
+        for symbol in legal_k:
+            dut.codec_8b_data_i.value = symbol
+            dut.codec_8b_disp_i.value = disparity
+            await Timer(1, units="ps")
+            code = int(dut.codec_10b_data.value)
+            legal_codes.add(code)
+            dut.codec_decode_data_i.value = code
+            dut.codec_decode_disp_i.value = disparity
+            await Timer(1, units="ps")
+            assert not int(dut.codec_decode_code_error.value)
+            assert not int(dut.codec_decode_disparity_error.value)
+            assert int(dut.codec_decode_data.value) == symbol
+
+    # Every 10-bit value not produced as a legal D/K symbol must be rejected,
+    # or identified as a legal code with the wrong running disparity.
+    for code in range(1024):
+        dut.codec_decode_data_i.value = code
+        dut.codec_decode_disp_i.value = 0
+        await Timer(1, units="ps")
+        if code not in legal_codes:
+            assert int(dut.codec_decode_code_error.value)
+
+    for state in [0, 1, 2, 3, 0x8000, 0xFFFF, 0xACE1, 0x1234, 0x5A5A]:
+        dut.scrambler_disable_i.value = 0
+        dut.scrambler_lfsr_i.value = state
+        await Timer(1, units="ps")
+        assert int(dut.scrambler_lfsr_o.value) == scrambler_step_reference(state)
+        dut.scrambler_disable_i.value = 1
+        await Timer(1, units="ps")
+        assert int(dut.scrambler_lfsr_o.value) == state
 
 
 @cocotb.test()
@@ -295,6 +508,227 @@ async def physical_input_reaches_target_through_mid_layer(dut):
     stripped_tlp = await with_timeout(mid_capture, 500, "us")
     assert stripped_tlp == raw_tlp
     assert await with_timeout(target_payload, 500, "us") == payload
+    ack = await receive_dllp_type(tb.phy_sink, DllpType.ACK)
+    assert ack.seq == 0
+
+
+@cocotb.test()
+async def inbound_header_fields_payload_backpressure_and_poison(dut):
+    """Check all exposed request fields and hold payload stable under backpressure."""
+    tb = EndpointTB(dut)
+    await tb.reset()
+    await tb.initialize_flow_control()
+
+    payload = bytes.fromhex("11223344556677")
+    packet = Tlp()
+    packet.fmt_type = TlpType.MEM_WRITE
+    packet.set_addr_be_data(0x81, payload)
+    packet.requester_id = 0x1234
+    packet.tag = 0xA5
+    packet.tc = 6
+    packet.attr = 3
+    packet.ep = True
+    packet.th = False
+    packet.at = 0
+
+    dut.target_request_ready_i.value = 0
+    dut.target_data_ready_i.value = 0
+    await send_axis(
+        tb.phy_source,
+        add_sequence_and_lcrc(0, bytes(packet.pack())),
+        PHY_USER_IS_TLP,
+    )
+    await wait_high(dut.clk_i, dut.target_request_valid_o)
+
+    assert int(dut.target_header_fmt.value) == 2
+    assert int(dut.target_header_type.value) == 0
+    assert int(dut.target_header_tc.value) == 6
+    assert int(dut.target_header_attr.value) == 3
+    assert int(dut.target_header_td.value) == 0
+    assert int(dut.target_header_ep.value) == 1
+    assert int(dut.target_header_th.value) == 0
+    assert int(dut.target_header_at.value) == 0
+    assert int(dut.target_header_length.value) == 2
+    assert int(dut.target_header_requester_id.value) == 0x1234
+    assert int(dut.target_header_tag.value) == 0xA5
+    assert int(dut.target_header_first_be.value) == 0xE
+    assert int(dut.target_header_last_be.value) == 0xF
+    assert int(dut.target_header_address.value) == 0x80
+    assert int(dut.target_header_prefix_present.value) == 0
+    assert int(dut.target_memory_o.value)
+    assert int(dut.target_write_o.value)
+    # Poison is reported in the header; the current endpoint does not consume
+    # or clear a poisoned request automatically.
+    assert not int(dut.target_unsupported_o.value)
+
+    dut.target_request_ready_i.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.target_request_ready_i.value = 0
+    await wait_high(dut.clk_i, dut.target_data_valid_o)
+    stalled = (
+        int(dut.target_data_o.value),
+        int(dut.target_keep_o.value),
+        int(dut.target_data_last_o.value),
+    )
+    for _ in range(8):
+        await RisingEdge(dut.clk_i)
+        assert int(dut.target_data_valid_o.value)
+        assert stalled == (
+            int(dut.target_data_o.value),
+            int(dut.target_keep_o.value),
+            int(dut.target_data_last_o.value),
+        )
+
+    target_payload = cocotb.start_soon(capture_target_payload(dut))
+    dut.target_data_ready_i.value = 1
+    delivered = await with_timeout(target_payload, 500, "us")
+    assert delivered[1:1 + len(payload)] == payload
+
+
+@cocotb.test()
+async def bar_boundary_memory_disable_and_config_routing(dut):
+    """Reject BAR crossing/disabled memory and route a matching Config Read."""
+    tb = EndpointTB(dut)
+    await tb.reset()
+    await tb.initialize_flow_control()
+    dut.target_request_ready_i.value = 0
+
+    crossing = Tlp()
+    crossing.fmt_type = TlpType.MEM_WRITE
+    crossing.set_addr_be_data(0xFFC, bytes.fromhex("0001020304050607"))
+    crossing.requester_id = 1
+    await send_axis(
+        tb.phy_source,
+        add_sequence_and_lcrc(0, bytes(crossing.pack())),
+        PHY_USER_IS_TLP,
+    )
+    await wait_high(dut.clk_i, dut.target_request_valid_o)
+    assert not int(dut.target_bar_hit_o.value)
+    assert int(dut.target_unsupported_o.value)
+    dut.target_request_ready_i.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.target_request_ready_i.value = 0
+    for _ in range(4):
+        await RisingEdge(dut.clk_i)
+
+    dut.memory_enable_i.value = 0
+    disabled = Tlp()
+    disabled.fmt_type = TlpType.MEM_READ
+    disabled.set_addr_be(0x100, 4)
+    disabled.requester_id = 2
+    disabled.tag = 7
+    await send_axis(
+        tb.phy_source,
+        add_sequence_and_lcrc(1, bytes(disabled.pack())),
+        PHY_USER_IS_TLP,
+    )
+    await wait_high(dut.clk_i, dut.target_request_valid_o)
+    assert not int(dut.target_bar_hit_o.value)
+    assert int(dut.target_unsupported_o.value)
+    dut.target_request_ready_i.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.target_request_ready_i.value = 0
+
+    dut.memory_enable_i.value = 1
+    config = Tlp()
+    config.fmt_type = TlpType.CFG_READ_0
+    config.set_addr_be(0x40, 4)
+    config.requester_id = 3
+    config.tag = 9
+    config.completer_id = (
+        (int(dut.cfg_bus_number_o.value) << 8)
+        | (int(dut.cfg_device_number_o.value) << 3)
+        | int(dut.cfg_function_number_o.value)
+    )
+    await send_axis(
+        tb.phy_source,
+        add_sequence_and_lcrc(2, bytes(config.pack())),
+        PHY_USER_IS_TLP,
+    )
+    await wait_high(dut.clk_i, dut.target_request_valid_o)
+    assert int(dut.target_config_o.value)
+    assert int(dut.target_config_hit_o.value)
+    assert int(dut.target_config_offset_o.value) == 0x40
+    assert int(dut.target_read_o.value)
+    dut.target_request_ready_i.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.target_request_ready_i.value = 0
+
+    config_write = Tlp()
+    config_write.fmt_type = TlpType.CFG_WRITE_0
+    config_write.set_addr_be_data(0x44, bytes.fromhex("78563412"))
+    config_write.requester_id = 3
+    config_write.tag = 10
+    config_write.completer_id = config.completer_id
+    await send_axis(
+        tb.phy_source,
+        add_sequence_and_lcrc(3, bytes(config_write.pack())),
+        PHY_USER_IS_TLP,
+    )
+    await wait_high(dut.clk_i, dut.target_request_valid_o)
+    assert int(dut.target_config_o.value)
+    assert int(dut.target_config_hit_o.value)
+    assert int(dut.target_config_offset_o.value) == 0x44
+    assert int(dut.target_write_o.value)
+
+
+@cocotb.test()
+async def completion_generation_and_multiple_outstanding_requests(dut):
+    """Generate a target completion and retain two independent requester tags."""
+    tb = EndpointTB(dut)
+    await tb.reset()
+    await tb.initialize_flow_control()
+
+    request = Tlp()
+    request.fmt_type = TlpType.MEM_READ
+    request.set_addr_be(0x100, 4)
+    request.requester_id = 0x1234
+    request.tag = 0x44
+    dut.target_request_ready_i.value = 0
+    await send_axis(
+        tb.phy_source,
+        add_sequence_and_lcrc(0, bytes(request.pack())),
+        PHY_USER_IS_TLP,
+    )
+    await wait_high(dut.clk_i, dut.target_request_valid_o)
+    request_header = int(dut.target_request_header_o.value)
+    dut.target_request_ready_i.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.target_request_ready_i.value = 0
+
+    dut.completion_request_header_i.value = request_header
+    dut.completion_request_status_i.value = 0
+    dut.completion_request_byte_count_i.value = 4
+    dut.completion_request_lower_address_i.value = request.get_lower_address()
+    dut.completion_request_valid_i.value = 1
+    await wait_high(dut.clk_i, dut.completion_request_ready_o)
+    await RisingEdge(dut.clk_i)
+    dut.completion_request_valid_i.value = 0
+
+    dut.completion_request_data_i.value = 0x44332211
+    dut.completion_request_keep_i.value = 0xF
+    dut.completion_request_data_last_i.value = 1
+    dut.completion_request_data_valid_i.value = 1
+    await wait_high(dut.clk_i, dut.completion_request_data_ready_o)
+    await RisingEdge(dut.clk_i)
+    dut.completion_request_data_valid_i.value = 0
+    dut.completion_request_data_last_i.value = 0
+
+    completion_link_packet = await receive_link_tlp(tb.phy_sink)
+    completion = Tlp.unpack(completion_link_packet[2:-4])
+    assert completion.fmt_type == TlpType.CPL_DATA
+    assert int(completion.requester_id) == 0x1234
+    assert completion.tag == 0x44
+    assert completion.byte_count == 4
+    assert completion.lower_address == request.get_lower_address()
+    assert bytes(completion.data) == bytes.fromhex("11223344")
+
+    await tb.submit_command(CMD_MEM_READ, 0x400, 4, context=0x1111)
+    first = Tlp.unpack((await receive_link_tlp(tb.phy_sink))[2:-4])
+    await tb.submit_command(CMD_MEM_READ, 0x500, 4, context=0x2222)
+    second = Tlp.unpack((await receive_link_tlp(tb.phy_sink))[2:-4])
+    assert first.tag != second.tag
+    assert int(dut.outstanding_o.value) == 2
 
 
 @cocotb.test()

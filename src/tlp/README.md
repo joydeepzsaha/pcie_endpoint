@@ -47,7 +47,7 @@ assertions.
 | `test_tlp_generator.py` | Request headers, prefixes, payloads, digest insertion, stalls, no-data requests/completions, output stability, and reset. |
 | `test_tlp_completion_control.py` | Completion fields, completion priority, packet locking, and boundary-level round-robin fairness. |
 | `test_tlp_ecrc.py` | Fixed vectors, randomized data, maximum packet length, and reset. |
-| `test_tlp_credit_manager.py` | Exact credit consumption, short updates, and independence of all six credit pools. |
+| `test_tlp_credit_manager.py` | Exact credit consumption, P/NP/Cpl header-only and data-only starvation, short updates, all six independent pools, and blocked-counter wraparound guards. |
 | `test_tlp_vc_buffer.py` | Packet atomicity, credit-class metadata, data-credit calculation, queueing, and backpressure. |
 | `test_tlp_compile.py` | Layer reset, request routing, malformed timing, local command output, and exact credit-class blocking. |
 | `test_tlp_end_to_end.py` | Request families, 3-DW/4-DW formats, prefix/ECRC alignment, segmentation, request-to-completion tracking, malformed traffic, and recovery. |
@@ -158,4 +158,3 @@ interfaces used by this project. Transaction Layer unit-test success does not
 by itself prove Data Link replay, LTSSM operation, Physical Layer encoding, or
 electrical PCIe compliance. Those are tested at their respective layers and at
 the endpoint integration level.
-

@@ -122,7 +122,7 @@ module tlp_parser
             header_r.fmt <= s_axis_tdata[7:5];
             header_r.tlp_type <= s_axis_tdata[4:0];
             header_r.th <= s_axis_tdata[8];
-            header_r.attributes <= {s_axis_tdata[21:20], s_axis_tdata[10]};
+            header_r.attributes <= {s_axis_tdata[10], s_axis_tdata[21:20]};
             header_r.traffic_class <= s_axis_tdata[14:12];
             header_r.address_type <= s_axis_tdata[19:18];
             header_r.poisoned <= s_axis_tdata[22];
@@ -143,7 +143,7 @@ module tlp_parser
           header_r.fmt <= s_axis_tdata[7:5];
           header_r.tlp_type <= s_axis_tdata[4:0];
           header_r.th <= s_axis_tdata[8];
-          header_r.attributes <= {s_axis_tdata[21:20], s_axis_tdata[10]};
+          header_r.attributes <= {s_axis_tdata[10], s_axis_tdata[21:20]};
           header_r.traffic_class <= s_axis_tdata[14:12];
           header_r.address_type <= s_axis_tdata[19:18];
           header_r.poisoned <= s_axis_tdata[22];

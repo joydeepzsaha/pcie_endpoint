@@ -140,7 +140,7 @@ def decode_packet(packet):
         "fmt": fmt,
         "type": tlp_type,
         "tc": (dw0 >> 12) & 0x7,
-        "attr": (((dw0 >> 20) & 0x3) << 1) | ((dw0 >> 10) & 1),
+        "attr": (((dw0 >> 10) & 1) << 2) | ((dw0 >> 20) & 0x3),
         "length_dw": length_dw,
         "tag": (words[index + 1] >> 8) & 0xFF,
         "header_words": header_words,

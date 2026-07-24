@@ -169,6 +169,48 @@ qualification should additionally connect the LTSSM and Physical Layer and
 test enumeration, configuration-space accesses, BAR assignment, completion
 tracking, link recovery, and lane-level behavior.
 
+## Expanded verification plan and ownership
+
+The endpoint target now contains additional test intent. These additions have
+not been executed and must be reviewed before the documented simulation
+command is approved.
+
+| Verification area | Owner and intended check |
+| --- | --- |
+| Exact outbound header, initial sequence, posted decrement, and `tuser` | `exact_outbound_header_sequence_credit_and_classification` decodes every applicable Memory Write field, requires initial sequence zero, checks one header/one 16-byte data-credit decrement, and requires TLP classification on every output byte. |
+| Consecutive, unaligned, segmented, and 4-DW writes | `consecutive_unaligned_segmented_and_4dw_writes` checks two consecutive writes, byte enables and padding at address `0x81`, a 300-byte write split at a 128-byte MPS, consecutive sequence values, and a write above 4 GiB. |
+| Prefix and ECRC | `outbound_prefix_and_ecrc_are_preserved` checks prefix placement and independently recalculates the ECRC. |
+| Every receive-header field and poison propagation | `inbound_header_fields_payload_backpressure_and_poison` checks format, type, TC, attributes, TD, EP, TH, AT, length, requester ID, tag, byte enables, address, and prefix-present state. The current implemented behavior reports EP to the target; it does not automatically discard poisoned traffic. |
+| Payload backpressure | The same test stalls target payload acceptance and requires data, keep, last, and valid to remain stable. |
+| BAR boundary and memory-disable | `bar_boundary_memory_disable_and_config_routing` checks a request crossing the 4-KiB BAR boundary and a request received with memory space disabled. Both are presented as unsupported target requests. |
+| Configuration routing | The same test injects matching Configuration Read and Write TLPs and checks BDF hit, operation, and register offset. It does not model enumeration, mutate the generated configuration register block, or produce an automatic configuration completion. |
+| Completion generation and outstanding tags | `completion_generation_and_multiple_outstanding_requests` turns a received Memory Read into Completion-with-Data and checks two locally issued reads retain different outstanding tags. |
+| Generated ACK sequence | `physical_input_reaches_target_through_mid_layer` explicitly requires ACK sequence zero for the accepted receive TLP. |
+| LCRC rejection and one-packet replay | Existing endpoint tests check bad-LCRC rejection and NAK replay byte equality. |
+| Multi-packet retry corner cases | `tb/dllp/test_dll_comprehensive.py` owns cumulative ACK, go-back-N replay, invalid NAK windows, corrupt ACK/NAK CRC, timeout replay, retry exhaustion, sequence rollover, retry-buffer full behavior, and link-down cleanup. |
+| Credit starvation combinations | `tb/tlp/test_tlp_credit_manager.py` owns independent posted, non-posted, and completion header/data starvation, exact 16-byte credit consumption, and guards against decrement wraparound. Scaled and infinite encodings remain DLLP decode concerns. |
+| BAR overlap | `tb/tlp/test_tlp_comb.py` uses deliberately overlapping BAR masks and requires ambiguity to clear the hit indication. The endpoint fixture retains one BAR, so overlap cannot occur in that fixture. |
+| Multiple queued traffic classes | `tb/tlp/test_tlp_vc_buffer.py` and `tb/tlp/test_tlp_completion_control.py` own queue metadata, packet locking, and request/completion arbitration. The current endpoint exposes only VC0. |
+| Scrambler and 8b/10b | The endpoint harness instantiates verification-only copies of the existing codec primitives. `existing_scrambler_and_8b10b_primitives_are_checked` exhaustively covers all 256 data symbols at both disparities, all legal K symbols, and the 10-bit code space; it also checks disparity behavior and representative reference Gen1 LFSR steps. These instances are not connected to the endpoint datapath. |
+
+## Unsupported or intentionally excluded behavior
+
+The present RTL does not implement automatic Unsupported Request Completion
+generation, Message requests, Atomic operations, locked requests, AER,
+interrupt/MSI/MSI-X generation, request timeouts, power-management DLLPs, or
+Root-Complex enumeration/BAR assignment. Tests must report these as
+capability gaps; they must not claim simulated support.
+
+No new physical functionality is part of this endpoint work. In particular,
+the endpoint does not add or integrate LTSSM/link training, PIPE, serialization,
+receiver detection, lane alignment/reversal, TS1/TS2 or ordered-set handling,
+scrambling in the packet path, or 8b/10b encoding in the packet path. The
+codec checks are standalone tests of existing RTL only.
+
+Functional coverage and code-coverage collection are also not configured.
+Adding coverage goals and simulator coverage-report generation is a separate
+verification-infrastructure task.
+
 ## Running the test
 
 From the repository root, register the repository if it is not already in the
@@ -202,4 +244,3 @@ The endpoint test passes when:
 - BAR targeting and payload delivery are correct.
 - Credit starvation blocks traffic and a valid update releases it.
 - No cocotb assertion or timeout occurs.
-

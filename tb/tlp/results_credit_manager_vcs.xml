@@ -1,0 +1,7 @@
+<testsuites name="results">
+  <testsuite name="all" package="all">
+    <property name="random_seed" value="1784851147" />
+    <testcase name="exact_short_update_and_independent_pools" classname="test_tlp_credit_manager" file="/home/sahajoyd/Desktop/PCIE_All/pcie_datalink_layer/tb/tlp/test_tlp_credit_manager.py" lineno="6" time="0.0044672489166259766" sim_time_ns="60.002" ratio_time="13431.532721780435" />
+    <testcase name="all_starvation_combinations_and_saturating_guards" classname="test_tlp_credit_manager" file="/home/sahajoyd/Desktop/PCIE_All/pcie_datalink_layer/tb/tlp/test_tlp_credit_manager.py" lineno="48" time="0.006300449371337891" sim_time_ns="180.00199999999998" ratio_time="28569.708189207595" />
+  </testsuite>
+</testsuites>
