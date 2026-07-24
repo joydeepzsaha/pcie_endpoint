@@ -1,4 +1,22 @@
 `timescale 1ns/1ps
+// ---------------------------------------------------------------------------
+// command_data_last_i contract
+//
+// command_byte_count_i is authoritative.  The command data source MUST supply
+// exactly that many bytes (summed over command_keep_i) and assert
+// command_data_last_i on the final beat of the WHOLE request -- not per MPS/4KB
+// segment.  This requester owns MPS/4KB segmentation internally; the source
+// must NOT attempt to predict the split points.
+//
+// Asserting command_data_last_i early (before command_byte_count_i is
+// satisfied) is a protocol violation: the header length_dw is computed from the
+// full segment_bytes_r and is already committed on the wire in REQ_HEADER before
+// payload streams, so no data-path action can retroactively shorten it.  The
+// consequence is defined and recoverable, not silent: the packet is closed short
+// (malformed on the wire), command_error_o pulses to flag the disagreement, and
+// the FSM aborts to REQ_IDLE so both interfaces recover for the next command.
+// A sim-only $warning (see `ifndef SYNTHESIS below) flags the violation.
+// ---------------------------------------------------------------------------
 module tlp_requester
   import tlp_pkg::*;
 #(
@@ -154,8 +172,12 @@ module tlp_requester
   // command_data_last_i means "whole request done", so command_error_o must be
   // compared against this, not the per-segment expected_data_last.
   assign request_last = expected_data_last && (remaining_r <= segment_bytes_r);
-  // Always close the transmitted packet if the local producer terminates early;
-  // command_error_o identifies that its length disagreed with the command.
+  // Close the transmitted packet on the expected segment-final beat, OR if the
+  // source terminates early.  The `|| command_data_last_i' term is the recovery
+  // path for that (illegal) early-last case: without it the FSM would wait in
+  // REQ_DATA for beats that never arrive and deadlock -- worse than a short
+  // packet.  command_error_o (compared against request_last above) flags the
+  // early last as the contract violation; do not remove this term.
   assign packet_data_last_o = expected_data_last || command_data_last_i;
   assign command_data_ready_o = state_r == REQ_DATA && packet_data_ready_i;
 
@@ -242,5 +264,22 @@ module tlp_requester
       endcase
     end
   end
+
+`ifndef SYNTHESIS
+  // Sim-only contract check: command_data_last_i asserted before
+  // command_byte_count_i is satisfied (see the header comment).  Concurrent SVA
+  // needs Verilator --assert (not enabled by these .core targets), so use a
+  // procedural severity task under the same synthesis guard.  $warning, not
+  // $error: Verilator maps procedural $error to $stop, which would abort the
+  // whole (multi-test) simulation -- incompatible with the directed negative
+  // test that intentionally exercises this violation to prove recovery.  The
+  // functional flag for the violation is the command_error_o output above; this
+  // message is the supplementary, greppable sim signal.
+  always_ff @(posedge clk_i) begin
+    if (!rst_i && state_r == REQ_DATA && command_data_valid_i &&
+        command_data_ready_o && command_data_last_i && !request_last)
+      $warning("PROTOCOL VIOLATION: command_data_last_i asserted before command_byte_count_i satisfied");
+  end
+`endif
 
 endmodule

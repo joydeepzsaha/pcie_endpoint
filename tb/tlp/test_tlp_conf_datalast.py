@@ -11,13 +11,13 @@ src/tlp/tlp_requester.sv treats command_data_last_i into on-the-wire facts:
               -> command_error_o).
        Prediction: N segments -> N-1 spurious command_error_o pulses, data fine.
 
-  2. Malformed TLP on an early command_data_last_i (host terminates mid-segment).
-       Lines: tlp_requester.sv:125 (length_dw from full segment_bytes_r),
-              tlp_requester.sv:152 (packet_data_last_o = expected||last),
-              tlp_requester.sv:215-219 (early-abort -> REQ_IDLE).
-       Prediction: header declares length_dw=32 (128 B) but only 16 DW of
-       payload beats are emitted -> header length > payload = malformed.  Captured
-       as an xfail carrying the two on-wire numbers.
+  2. Early command_data_last_i (host terminates mid-segment) is a PROTOCOL
+     VIOLATION under the settled contract: length_dw is committed from the full
+     segment_bytes_r (tlp_requester.sv:125) before payload streams, so an early
+     last yields a short/malformed packet (header declares length_dw=32/128 B but
+     only 16 DW/64 B emitted).  The requester's DEFINED response -- command_error_o
+     pulse + recovery to REQ_IDLE -- is asserted here (no longer an xfail); the two
+     measured numbers are preserved as the documented consequence.
 
 Golden values hand-derived from the PCIe spec + the RTL:
   - MEM_WRITE, aligned addr, MPS=128 => segment_bytes=128 => length_dw=32,
@@ -266,55 +266,73 @@ async def valid_stream_three_segments_generalizes(dut):
 # ---------------------------------------------------------------------------
 
 @cocotb.test()
-async def early_last_makes_malformed_tlp(dut):
-    """command_byte_count=256 (=> segment_bytes=128 => header length_dw=32), but
-    the host raises command_data_last_i after only 64 B (16 DW), mid-segment.
+async def early_last_flags_violation_and_recovers(dut):
+    """Early command_data_last_i is a PROTOCOL VIOLATION under the settled
+    command_data_last_i contract (see the header block in tlp_requester.sv):
+    command_byte_count=256 (=> segment_bytes=128 => header length_dw=32 committed
+    in REQ_HEADER), but the host raises command_data_last_i after only 64 B
+    (16 DW), mid-segment.
 
-    PREDICT (xfail): the emitted TLP header declares length_dw=32 (128 B) while
-    only 16 DW of payload beats are actually forwarded with packet_data_last_o
-    -> header length > payload sent = malformed TLP a real completer rejects.
-    The two on-wire numbers are asserted below; the mismatch is the fact."""
+    DOCUMENTED CONSEQUENCE (measured on-wire, preserved below as evidence): the
+    header length_dw=32 (128 B) is already on the wire, so the packet cannot be
+    made well-formed retroactively -- only 16 DW (64 B) of payload are forwarded,
+    i.e. a short/malformed packet a real completer would reject.
+
+    Because that input is now defined as ILLEGAL, this test no longer xfails on
+    the malformed packet; it PASSES by asserting the DEFINED violation behavior:
+    command_error_o fires, the FSM recovers to REQ_IDLE, and a following LEGAL
+    command is handled correctly.
+
+    Commit 2's AXIS wrapper makes this case unreachable by construction: it
+    derives the descriptor (byte count) and the payload from the same logic, so
+    it cannot declare one length and deliver another."""
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     await reset(dut)
     sink = await start_sink(dut)
 
+    # Illegal early last: 256 B commanded, source terminates after 64 B.
     await issue(dut, MEM_WRITE, 0x3000, 256, mps=128)
     accepted = await stream(dut, total_bytes=64, last_at_byte=64)
     for _ in range(4):
         await RisingEdge(dut.clk_i)
-    await stop_sink(dut, sink)
 
-    # On-wire facts, asserted so the numbers are captured whether or not malformed.
+    # Documented consequence: header declares 128 B but only 64 B forwarded.
     assert accepted == 16, f"accepted beats {accepted} != 16"
     assert len(sink.headers) == 1, f"expected 1 header, got {len(sink.headers)}"
     header_len_dw = sink.headers[0][1]
     payload_dw = sink.payload_bytes // 4
-    assert header_len_dw == 32, f"header length_dw {header_len_dw} != 32"
-    assert payload_dw == 16, f"payload DW {payload_dw} != 16"
+    assert header_len_dw == 32, f"header length_dw {header_len_dw} != 32 (128 B declared)"
+    assert payload_dw == 16, f"payload DW {payload_dw} != 16 (64 B sent) -- short/malformed"
     assert sink.last_beats == 1, "expected exactly one terminating beat"
-    assert sink.errors == 1, f"expected 1 command_error_o, got {sink.errors}"
-    # DUT recovered for the next command.
-    assert int(dut.command_ready.value) == 1
+
+    # DEFINED violation behavior: flagged and recovered.
+    assert sink.errors == 1, f"early last must pulse command_error_o once, got {sink.errors}"
+    assert int(dut.command_ready.value) == 1, "FSM must recover to REQ_IDLE after early last"
 
     dut._log.info(
-        "TEST2: on-wire header length_dw=%d (%d B) vs payload beats=%d DW (%d B) "
-        "-> MALFORMED (header length > payload). command_error_o=%d.",
-        header_len_dw, header_len_dw * 4, payload_dw, sink.payload_bytes,
-        sink.errors)
+        "TEST2: early command_data_last_i -> malformed short packet "
+        "(header length_dw=%d/%d B vs payload=%d DW/%d B); command_error_o=%d, "
+        "recovered to REQ_IDLE.", header_len_dw, header_len_dw * 4, payload_dw,
+        sink.payload_bytes, sink.errors)
 
-    # The malformed-TLP fact, recorded as an xfail: header-declared length must
-    # equal payload actually sent; here it does not.
-    assert header_len_dw == payload_dw, (
-        f"MALFORMED TLP (expected fact): header length_dw={header_len_dw} "
-        f"({header_len_dw*4} B) but only payload_dw={payload_dw} "
-        f"({sink.payload_bytes} B) forwarded with packet_data_last_o. "
-        f"Early command_data_last_i -> REQ_IDLE abort keeps the header's "
-        f"length computed from the full segment_bytes_r. See "
-        f"tlp_requester.sv:125,152,215-219.")
+    # Recovery proof: a following LEGAL command streams cleanly with no new error.
+    errors_before = sink.errors
+    await issue(dut, MEM_WRITE, 0x4000, 64, mps=128)
+    accepted2 = await stream(dut, total_bytes=64, last_at_byte=64)
+    for _ in range(4):
+        await RisingEdge(dut.clk_i)
+    await stop_sink(dut, sink)
 
-
-# Register the malformed-TLP result as an expected failure carrying the numbers.
-early_last_makes_malformed_tlp.expect_fail = True
+    assert accepted2 == 16, f"follow-up legal write accepted {accepted2} != 16"
+    assert sink.headers[-1] == (2, 16, 0xF, 0xF, 0x4000), \
+        f"follow-up header {tuple(hex(x) for x in sink.headers[-1])} != (2,16,0xF,0xF,0x4000)"
+    assert sink.errors == errors_before, (
+        f"legal command after recovery must not error; "
+        f"errors {sink.errors} != {errors_before}")
+    assert int(dut.command_ready.value) == 1
+    dut._log.info(
+        "TEST2: subsequent legal MemWr @0x4000 (length_dw=16) handled cleanly "
+        "after recovery; no new command_error_o.")
 
 
 # ---------------------------------------------------------------------------

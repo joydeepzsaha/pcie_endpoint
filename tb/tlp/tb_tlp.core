@@ -343,8 +343,8 @@ targets:
 
   # ---- command_data_last_i contract probe (evidence for Joy) ----
   # Reuses the tb_tlp_requester wrapper (already exposes command_data_last /
-  # packet_data_last / packet_length_dw / command_error).  Test 2 is a registered
-  # xfail carrying the on-wire malformed-TLP numbers.
+  # packet_data_last / packet_length_dw / command_error).  Test 2 asserts the
+  # defined early-last violation behavior (command_error_o + REQ_IDLE recovery).
   verilate_tlp_conf_datalast:
     flow: sim
     flow_options:
