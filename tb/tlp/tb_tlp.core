@@ -1,0 +1,350 @@
+CAPI=2:
+name: fusesoc:pcie:tb_tlp:1.0.0
+description: >
+  Verilator+cocotb baseline harness for Joy's WIP Transaction Layer (src/tlp,
+  introduced "WIP TLP, not yet tested" @ e376b99). Wires the pre-existing but
+  un-runnered tb/tlp/{tb_tlp_*.sv + test_tlp_*.py} benches into kourosh's
+  FuseSoC verilate-golden discipline. Per-module targets; enumeration-spine
+  modules (requester -> generator -> parser -> tracker -> completion) first.
+  RTL comes from ::tlp_core:1.0.0 (Joy's core) unchanged; tb-only, no src edits.
+
+filesets:
+  # Joy's TL RTL (all of src/tlp, tlp_pkg first) + shared Verilator waiver.
+  rtl:
+    depend:
+      - ::tlp_core:1.0.0
+      - fusesoc:pcie:lint
+
+  # Per-module SystemVerilog wrapper benches (flatten struct ports for cocotb).
+  bench_requester:
+    files:
+      - tb_tlp_requester.sv
+    file_type: systemVerilogSource
+  bench_request_tracker:
+    files:
+      - tb_tlp_request_tracker.sv
+    file_type: systemVerilogSource
+  bench_parser:
+    files:
+      - tb_tlp_parser.sv
+    file_type: systemVerilogSource
+  bench_generator:
+    files:
+      - tb_tlp_generator.sv
+    file_type: systemVerilogSource
+  bench_completion_control:
+    files:
+      - tb_tlp_completion_control.sv
+    file_type: systemVerilogSource
+  bench_comb:
+    files:
+      - tb_tlp_comb.sv
+    file_type: systemVerilogSource
+  bench_payload_formatter:
+    files:
+      - tb_tlp_payload_formatter.sv
+    file_type: systemVerilogSource
+
+  # TL conformance sweep: parser wrapper exposing poisoned/attributes/BE.
+  bench_conf_parser:
+    files:
+      - tb_tlp_conf_parser.sv
+    file_type: systemVerilogSource
+
+  # cocotb test modules (copied into the work root at build time).
+  cocotb_requester:
+    files:
+      - test_tlp_requester.py : {file_type : user, copyto : .}
+  cocotb_request_tracker:
+    files:
+      - test_tlp_request_tracker.py : {file_type : user, copyto : .}
+  cocotb_parser:
+    files:
+      - test_tlp_parser.py : {file_type : user, copyto : .}
+  cocotb_generator:
+    files:
+      - test_tlp_generator.py : {file_type : user, copyto : .}
+  cocotb_completion_control:
+    files:
+      - test_tlp_completion_control.py : {file_type : user, copyto : .}
+  cocotb_comb:
+    files:
+      - test_tlp_comb.py : {file_type : user, copyto : .}
+  cocotb_payload_formatter:
+    files:
+      - test_tlp_payload_formatter.py : {file_type : user, copyto : .}
+  cocotb_compile:
+    files:
+      - test_tlp_compile.py : {file_type : user, copyto : .}
+
+  # Commit 1: CFG0 -> CPL spine, driven at the tlp_layer level.
+  cocotb_cfg0_spine:
+    files:
+      - test_tlp_cfg0_spine.py : {file_type : user, copyto : .}
+
+  # TL conformance sweep -- spec-golden, driven at the tlp_layer level.
+  cocotb_conf_requester:
+    files:
+      - test_tlp_conf_requester.py : {file_type : user, copyto : .}
+  cocotb_conf_tracker:
+    files:
+      - test_tlp_conf_tracker.py : {file_type : user, copyto : .}
+  cocotb_conf_parser:
+    files:
+      - test_tlp_conf_parser.py : {file_type : user, copyto : .}
+  cocotb_conf_completion:
+    files:
+      - test_tlp_conf_completion.py : {file_type : user, copyto : .}
+  cocotb_conf_generator:
+    files:
+      - test_tlp_conf_generator.py : {file_type : user, copyto : .}
+  cocotb_conf_classifier:
+    files:
+      - test_tlp_conf_classifier.py : {file_type : user, copyto : .}
+  cocotb_conf_formatter:
+    files:
+      - test_tlp_conf_formatter.py : {file_type : user, copyto : .}
+
+targets:
+  # ---- Enumeration spine (the CfgRd0 -> CPL path RC enumeration needs) ----
+
+  # tlp_requester: originates MemRd/MemWr/IORd/IOWr and CfgRd0/CfgWr0
+  # (src/tlp/tlp_requester.sv:116-118). NOTE: the bundled test drives only
+  # MEM_READ/MEM_WRITE (cmd 0/1) -- a CfgRd0 (cmd 2) stimulus is Commit-1 work.
+  verilate_tlp_requester:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_requester
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_requester, cocotb_requester]
+    toplevel : [tb_tlp_requester]
+
+  # tlp_request_tracker: allocates tags, matches returning CPLs by tag+RID.
+  verilate_tlp_request_tracker:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_request_tracker
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_request_tracker, cocotb_request_tracker]
+    toplevel : [tb_tlp_request_tracker]
+
+  # tlp_parser: deserializes RX TLP incl. completion header layout.
+  verilate_tlp_parser:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_parser
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_parser, cocotb_parser]
+    toplevel : [tb_tlp_parser]
+
+  # tlp_generator (+ tlp_payload_formatter): serializes header+payload to AXIS.
+  verilate_tlp_generator:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_generator
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_generator, cocotb_generator]
+    toplevel : [tb_tlp_generator]
+
+  # tlp_completion_generator + tlp_control: builds CPL and arbitrates the
+  # requester/completion paths into the single generator.
+  verilate_tlp_completion_gen:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_completion_control
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_completion_control, cocotb_completion_control]
+    toplevel : [tb_tlp_completion_control]
+
+  # ---- Secondary (combinational blocks + payload realignment) ----
+
+  # tlp_classifier + tlp_bar_decoder + tlp_config_decoder + tlp_pkg helpers.
+  verilate_tlp_comb:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_comb
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_comb, cocotb_comb]
+    toplevel : [tb_tlp_comb]
+
+  verilate_tlp_payload_formatter:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_payload_formatter
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_payload_formatter, cocotb_payload_formatter]
+    toplevel : [tb_tlp_payload_formatter]
+
+  # ---- Full-layer smoke: only thing that exercises tlp_layer end to end ----
+  # No SV wrapper -- drives tlp_layer's real _i/_o ports directly.
+  verilate_tlp_compile:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_compile
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, cocotb_compile]
+    toplevel : [tlp_layer]
+
+  # ---- Commit 1: first-ever RC CfgRd0/CfgWr0 -> CPL round trip ----
+  # Drives tlp_layer's real command_* / s_dllp_axis ports directly; asserts the
+  # emitted config-request TLP against the PCIe spec and catches a hand-rolled
+  # spec-derived completion in the request tracker.
+  verilate_tlp_cfg0_spine:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_cfg0_spine
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, cocotb_cfg0_spine]
+    toplevel : [tlp_layer]
+
+  # ---- TL conformance sweep, Area 1: requester origination completeness ----
+  # MemRd/MemWr/IORd/IOWr headers, 3DW vs 4DW, first/last-BE, 4KB + MPS/MRRS
+  # segmentation.  All golden hand-derived from the PCIe spec.
+  verilate_tlp_conf_requester:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_conf_requester
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, cocotb_conf_requester]
+    toplevel : [tlp_layer]
+
+  # ---- TL conformance sweep, Area 2: request tracker stress ----
+  # tag exhaustion, out-of-order, multi-CPL byte accounting, duplicate,
+  # unexpected, malformed-CPL rejection, result backpressure.
+  verilate_tlp_conf_tracker:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_conf_tracker
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, cocotb_conf_tracker]
+    toplevel : [tlp_layer]
+
+  # ---- TL conformance sweep, Area 3: parser robustness ----
+  # all classes 3DW/4DW, prefix, ECRC digest, poisoned, truncated/bad-keep
+  # rejection, reset-mid-packet recovery.  Driven through tb_tlp_conf_parser.
+  verilate_tlp_conf_parser:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_conf_parser
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_conf_parser, cocotb_conf_parser]
+    toplevel : [tb_tlp_conf_parser]
+
+  # ---- TL conformance sweep, Area 4 (+ Area 6 control): completion fields ----
+  # CPL vs CPLD, status codes, byte-count/lower-address, tag/RID/CID echo, and
+  # control completion-over-requester arbitration.  Reuses tb_tlp_completion_control.
+  verilate_tlp_conf_completion:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_conf_completion
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_completion_control, cocotb_conf_completion]
+    toplevel : [tb_tlp_completion_control]
+
+  # ---- TL conformance sweep, Area 4b: CPL/CPLD on-wire serialization ----
+  verilate_tlp_conf_generator:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_conf_generator
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_generator, cocotb_conf_generator]
+    toplevel : [tb_tlp_generator]
+
+  # ---- TL conformance sweep, Area 5: classifier ----
+  # posted/NP/CPL routing + unknown/AtomicOp/4DW/over-length/bad-CPL rejections.
+  verilate_tlp_conf_classifier:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_conf_classifier
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_comb, cocotb_conf_classifier]
+    toplevel : [tb_tlp_comb]
+
+  # ---- TL conformance sweep, Area 6: payload_formatter realignment ----
+  verilate_tlp_conf_formatter:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_conf_formatter
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_payload_formatter, cocotb_conf_formatter]
+    toplevel : [tb_tlp_payload_formatter]
