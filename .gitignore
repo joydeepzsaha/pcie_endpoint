@@ -5,3 +5,5 @@ build/*
 *.fsdb
 *.ghw
 __pycache__/
+*.pyc
+*.key

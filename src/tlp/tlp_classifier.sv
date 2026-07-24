@@ -12,6 +12,9 @@ module tlp_classifier
     output logic        unsupported_o
 );
 
+  logic header_valid;
+  tlp_error_e header_error;
+
   always_comb begin
     class_o          = TLP_CLASS_UNSUPPORTED;
     memory_request_o = 1'b0;
@@ -51,16 +54,7 @@ module tlp_classifier
       unsupported_o = 1'b1;
     end
 
-    // IO, Configuration, and Completion TLPs only use 3-DW headers.  A
-    // completion without data must also carry a zero Length field.
-    if (((header_i.tlp_type == TLP_TYPE_IO ||
-          header_i.tlp_type == TLP_TYPE_CFG0 ||
-          header_i.tlp_type == TLP_TYPE_CFG1 ||
-          header_i.tlp_type == TLP_TYPE_CPL ||
-          header_i.tlp_type == TLP_TYPE_CPL_LOCK) && tlp_is_4dw(header_i.fmt)) ||
-        ((header_i.tlp_type == TLP_TYPE_CPL ||
-          header_i.tlp_type == TLP_TYPE_CPL_LOCK) &&
-         !tlp_has_data(header_i.fmt) && header_i.length_dw != 0)) begin
+    if (!header_valid) begin
       class_o          = TLP_CLASS_UNSUPPORTED;
       memory_request_o = 1'b0;
       config_request_o = 1'b0;
@@ -70,5 +64,9 @@ module tlp_classifier
       unsupported_o    = 1'b1;
     end
   end
+
+  tlp_validator validator_inst (
+      .header_i(header_i), .valid_o(header_valid), .error_o(header_error)
+  );
 
 endmodule

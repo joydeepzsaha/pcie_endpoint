@@ -62,6 +62,13 @@ module pcie_datalink_layer
     //Configuration
     input  logic                  phy_link_up_i,
     output logic                  fc_initialized_o,
+    output logic                  fc_update_valid_o,
+    output logic [7:0]            fc_ph_o,
+    output logic [11:0]           fc_pd_o,
+    output logic [7:0]            fc_nph_o,
+    output logic [11:0]           fc_npd_o,
+    output logic [7:0]            fc_cplh_o,
+    output logic [11:0]           fc_cpld_o,
     input  logic                  idle_valid_i,
 
     output logic [7:0] cfg_bus_number_o,
@@ -165,7 +172,14 @@ module pcie_datalink_layer
   logic                               first_tlp_valid;
 
 
-  assign fc_initialized_o = fc2_values_sent;
+  assign fc_initialized_o = fc2_values_sent && fc2_values_stored;
+  assign fc_update_valid_o = update_fc || fc_init_done;
+  assign fc_ph_o = tx_fc_ph;
+  assign fc_pd_o = tx_fc_pd;
+  assign fc_nph_o = tx_fc_nph;
+  assign fc_npd_o = tx_fc_npd;
+  assign fc_cplh_o = tx_fc_cplh;
+  assign fc_cpld_o = tx_fc_cpld;
 
   pcie_datalink_init #() pcie_datalink_init_inst (
       .clk_i              (clk_i),
@@ -382,7 +396,10 @@ module pcie_datalink_layer
   );
 
   always_ff @(posedge clk_i) begin
-    fc2_values_stored_reg <= fc1_values_stored;
+    if (rst_i || soft_reset)
+      fc2_values_stored_reg <= 1'b0;
+    else
+      fc2_values_stored_reg <= fc2_values_stored;
   end
 
 
@@ -393,7 +410,7 @@ module pcie_datalink_layer
   assign max_payload_size_o      = '0;
   assign msix_enable_o           = '0;
   assign msix_mask_o             = '0;
-  assign fc_init_done            = fc1_values_stored && (!fc2_values_stored_reg);
+  assign fc_init_done            = fc2_values_stored && !fc2_values_stored_reg;
 
   //   initial begin
   //     $dumpfile("dllp_core.fst");

@@ -9,29 +9,32 @@ async def reset(dut):
         "completion_request_valid", "request_requester_id", "request_tag",
         "request_tc", "request_attr", "completion_request_status",
         "completion_request_byte_count", "completion_request_lower_address",
-        "completion_request_digest_valid", "completion_request_digest",
+        "completion_request_digest_valid",
         "completion_request_data", "completion_request_keep",
         "completion_request_data_valid", "completion_request_data_last",
         "requester_header_valid", "requester_has_data", "requester_data",
         "requester_keep", "requester_data_valid", "requester_data_last",
         "generator_header_ready", "generator_data_ready",
+        "fair_requester_valid", "fair_completion_valid", "fair_generator_ready",
     ]:
         getattr(dut, name).value = 0
     dut.completer_id.value = 0xCAFE
+    dut.max_payload_bytes.value = 128
+    dut.rcb_128b.value = 1
     for _ in range(3):
         await RisingEdge(dut.clk_i)
     dut.rst_i.value = 0
     await RisingEdge(dut.clk_i)
 
 
-async def submit_completion(dut, count, status=0):
+async def submit_completion(dut, count, status=0, lower=3):
     dut.request_requester_id.value = 0x1234
     dut.request_tag.value = 0x56
     dut.request_tc.value = 3
     dut.request_attr.value = 5
     dut.completion_request_status.value = status
     dut.completion_request_byte_count.value = count
-    dut.completion_request_lower_address.value = 3
+    dut.completion_request_lower_address.value = lower
     dut.completion_request_valid.value = 1
     while not int(dut.completion_request_ready.value):
         await RisingEdge(dut.clk_i)
@@ -108,3 +111,65 @@ async def no_data_error_completion_and_reset_lock(dut):
     dut.rst_i.value = 0
     await RisingEdge(dut.clk_i)
     assert int(dut.generator_data_valid.value) == 0
+
+    # A 200-byte completion is divided at the 128-byte RCB/MPS boundary.
+    await reset(dut)
+    await submit_completion(dut, 200, lower=0)
+    dut.generator_header_ready.value = 1
+    await Timer(1, units="ps")
+    assert int(dut.generator_byte_count.value) == 200
+    await RisingEdge(dut.clk_i)
+    dut.generator_header_ready.value = 0
+    dut.generator_data_ready.value = 1
+    dut.completion_request_data_valid.value = 1
+    dut.completion_request_keep.value = 0xF
+    dut.completion_request_data_last.value = 0
+    for beat in range(32):
+        dut.completion_request_data.value = beat
+        await RisingEdge(dut.clk_i)
+    dut.completion_request_data_valid.value = 0
+    for _ in range(10):
+        await RisingEdge(dut.clk_i)
+        if int(dut.generator_header_valid.value):
+            break
+    else:
+        raise AssertionError("second split-completion header missing")
+    assert int(dut.generator_byte_count.value) == 72
+    dut.generator_header_ready.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.generator_header_ready.value = 0
+    dut.completion_request_data_valid.value = 1
+    for beat in range(18):
+        dut.completion_request_data.value = 0x100 + beat
+        dut.completion_request_data_last.value = beat == 17
+        await RisingEdge(dut.clk_i)
+    dut.completion_request_data_valid.value = 0
+    dut.completion_request_data_last.value = 0
+    await RisingEdge(dut.clk_i)
+    assert int(dut.completion_error_valid.value) == 0
+
+
+@cocotb.test()
+async def packet_boundary_round_robin_prevents_starvation(dut):
+    cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
+    await reset(dut)
+    dut.requester_has_data.value = 0
+    dut.fair_requester_valid.value = 1
+    dut.fair_completion_valid.value = 1
+    dut.fair_generator_ready.value = 1
+
+    # Reset preference is completion, preserving prompt completion service.
+    await Timer(1, units="ps")
+    assert int(dut.fair_generator_valid.value) == 1
+    assert int(dut.fair_generator_type.value) == 10
+    await RisingEdge(dut.clk_i)
+
+    # With both sources continuously pending, the next packet belongs to requester.
+    await Timer(1, units="ps")
+    assert int(dut.fair_generator_type.value) == 0
+    await RisingEdge(dut.clk_i)
+
+    # Completion is selected again on the following packet boundary.
+    await Timer(1, units="ps")
+    assert int(dut.fair_generator_valid.value) == 1
+    assert int(dut.fair_generator_type.value) == 10
