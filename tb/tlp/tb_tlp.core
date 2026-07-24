@@ -105,6 +105,12 @@ filesets:
     files:
       - test_tlp_conf_formatter.py : {file_type : user, copyto : .}
 
+  # command_data_last_i contract probe (evidence for Joy): spurious
+  # command_error_o on valid multi-segment writes + malformed-TLP on early last.
+  cocotb_conf_datalast:
+    files:
+      - test_tlp_conf_datalast.py : {file_type : user, copyto : .}
+
 targets:
   # ---- Enumeration spine (the CfgRd0 -> CPL path RC enumeration needs) ----
 
@@ -334,6 +340,23 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_comb, cocotb_conf_classifier]
     toplevel : [tb_tlp_comb]
+
+  # ---- command_data_last_i contract probe (evidence for Joy) ----
+  # Reuses the tb_tlp_requester wrapper (already exposes command_data_last /
+  # packet_data_last / packet_length_dw / command_error).  Test 2 is a registered
+  # xfail carrying the on-wire malformed-TLP numbers.
+  verilate_tlp_conf_datalast:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_conf_datalast
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_requester, cocotb_conf_datalast]
+    toplevel : [tb_tlp_requester]
 
   # ---- TL conformance sweep, Area 6: payload_formatter realignment ----
   verilate_tlp_conf_formatter:

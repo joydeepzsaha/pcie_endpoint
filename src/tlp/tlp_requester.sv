@@ -70,6 +70,7 @@ module tlp_requester
   logic command_non_posted;
   logic [12:0] accepted_bytes;
   logic expected_data_last;
+  logic request_last;
   integer lane;
 
   function automatic logic [12:0] command_limit(input tlp_cmd_e command);
@@ -147,6 +148,12 @@ module tlp_requester
   assign packet_keep_o = command_keep_i;
   assign packet_data_valid_o = state_r == REQ_DATA && command_data_valid_i;
   assign expected_data_last = segment_sent_r + accepted_bytes >= segment_bytes_r;
+  // End of the whole request: this beat closes the current segment
+  // (expected_data_last) AND there is no further segment to send
+  // (remaining_r <= segment_bytes_r ⇒ this is the final segment).  The host's
+  // command_data_last_i means "whole request done", so command_error_o must be
+  // compared against this, not the per-segment expected_data_last.
+  assign request_last = expected_data_last && (remaining_r <= segment_bytes_r);
   // Always close the transmitted packet if the local producer terminates early;
   // command_error_o identifies that its length disagreed with the command.
   assign packet_data_last_o = expected_data_last || command_data_last_i;
@@ -210,7 +217,7 @@ module tlp_requester
 
         REQ_DATA: if (command_data_valid_i && command_data_ready_o) begin
           segment_sent_r <= segment_sent_r + accepted_bytes;
-          if (command_data_last_i != expected_data_last)
+          if (command_data_last_i != request_last)
             command_error_o <= 1'b1;
           if (command_data_last_i && !expected_data_last) begin
             // The source ended before the byte count promised by the command.
