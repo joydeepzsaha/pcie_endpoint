@@ -56,7 +56,7 @@ module tlp_payload_formatter #(
         end
 
         FMT_LOAD: if (s_axis_tvalid && s_axis_tready) begin
-          append_index = count_r;
+          append_index = {28'd0,count_r};
           for (lane = 0; lane < KEEP_WIDTH; lane = lane + 1) begin
             if (s_axis_tkeep[lane]) begin
               data_r[append_index*8 +: 8] <= s_axis_tdata[lane*8 +: 8];

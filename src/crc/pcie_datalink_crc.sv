@@ -23,6 +23,9 @@
 // CRC width:                   16 bits
 // CRC shift direction:         left (big endian)
 // Input word width:            32 bits
+
+`timescale 1ns/1ps
+
 module pcie_datalink_crc (
     input  [15:0] crcIn,
     input  [31:0] data,

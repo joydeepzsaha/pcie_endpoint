@@ -1,3 +1,5 @@
+`timescale 1ns/1ps
+
 module Crc16Gen (
     input logic [15:0] Data,
     input logic Complement,

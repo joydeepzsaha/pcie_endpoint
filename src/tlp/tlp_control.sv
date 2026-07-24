@@ -38,10 +38,13 @@ module tlp_control
 
   logic locked_r;
   logic select_completion_r;
+  logic prefer_completion_r;
   logic selected_completion;
 
   always_comb begin
-    selected_completion = locked_r ? select_completion_r : completion_header_valid_i;
+    selected_completion = locked_r ? select_completion_r :
+        (completion_header_valid_i &&
+         (!requester_header_valid_i || prefer_completion_r));
     generator_header_o = selected_completion ? completion_header_i : requester_header_i;
     generator_header_valid_o = !locked_r &&
         (selected_completion ? completion_header_valid_i : requester_header_valid_i);
@@ -61,11 +64,14 @@ module tlp_control
     if (rst_i) begin
       locked_r <= 1'b0;
       select_completion_r <= 1'b0;
+      prefer_completion_r <= 1'b1;
     end else begin
-      if (!locked_r && generator_header_valid_o && generator_header_ready_i &&
-          tlp_has_data(generator_header_o.fmt)) begin
-        locked_r <= 1'b1;
-        select_completion_r <= selected_completion;
+      if (!locked_r && generator_header_valid_o && generator_header_ready_i) begin
+        prefer_completion_r <= !selected_completion;
+        if (tlp_has_data(generator_header_o.fmt)) begin
+          locked_r <= 1'b1;
+          select_completion_r <= selected_completion;
+        end
       end
       if (locked_r && generator_data_valid_o && generator_data_ready_i && generator_data_last_o)
         locked_r <= 1'b0;

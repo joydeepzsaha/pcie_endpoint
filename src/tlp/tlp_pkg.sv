@@ -49,6 +49,30 @@ package tlp_pkg;
     TLP_CMD_IO_WRITE
   } tlp_cmd_e;
 
+  typedef enum logic [1:0] {
+    TLP_CREDIT_POSTED,
+    TLP_CREDIT_NON_POSTED,
+    TLP_CREDIT_COMPLETION
+  } tlp_credit_class_e;
+
+  typedef enum logic [4:0] {
+    TLP_ERR_NONE,
+    TLP_ERR_TRUNCATED_HEADER,
+    TLP_ERR_EARLY_EOP,
+    TLP_ERR_LATE_EOP,
+    TLP_ERR_BAD_KEEP,
+    TLP_ERR_BAD_FMT_TYPE,
+    TLP_ERR_BAD_LENGTH,
+    TLP_ERR_BAD_BYTE_ENABLE,
+    TLP_ERR_BAD_ADDRESS_FORMAT,
+    TLP_ERR_ECRC,
+    TLP_ERR_UNEXPECTED_COMPLETION,
+    TLP_ERR_COMPLETION_OVERFLOW,
+    TLP_ERR_CREDIT_UNDERFLOW,
+    TLP_ERR_LOCAL_PAYLOAD,
+    TLP_ERR_VC_OVERFLOW
+  } tlp_error_e;
+
   typedef struct packed {
     logic [2:0]  fmt;
     logic [4:0]  tlp_type;
@@ -90,16 +114,67 @@ package tlp_pkg;
     return encoded == 10'd0 ? 11'd1024 : {1'b0, encoded};
   endfunction
 
+  function automatic logic [12:0] tlp_payload_bytes(input logic [10:0] length_dw);
+    return {length_dw, 2'b00};
+  endfunction
+
+  function automatic logic [11:0] tlp_data_credits(input logic [10:0] length_dw);
+    logic [12:0] bytes;
+    bytes = tlp_payload_bytes(length_dw);
+    return 12'((bytes + 13'd15) >> 4);
+  endfunction
+
+  function automatic tlp_credit_class_e tlp_credit_class(input tlp_class_e packet_class);
+    case (packet_class)
+      TLP_CLASS_POSTED:     return TLP_CREDIT_POSTED;
+      TLP_CLASS_COMPLETION: return TLP_CREDIT_COMPLETION;
+      default:              return TLP_CREDIT_NON_POSTED;
+    endcase
+  endfunction
+
+  function automatic logic [31:0] tlp_crc32_byte(
+      input logic [31:0] crc_in,
+      input logic [7:0] data_in
+  );
+    logic [31:0] crc;
+    integer bit_index;
+    crc = crc_in;
+    for (bit_index = 0; bit_index < 8; bit_index = bit_index + 1) begin
+      if (crc[0] ^ data_in[bit_index])
+        crc = (crc >> 1) ^ 32'hedb8_8320;
+      else
+        crc = crc >> 1;
+    end
+    return crc;
+  endfunction
+
+  function automatic logic [31:0] tlp_crc32_dw(
+      input logic [31:0] crc_in,
+      input logic [31:0] data_in,
+      input logic [3:0] keep_in
+  );
+    logic [31:0] crc;
+    integer byte_index;
+    crc = crc_in;
+    for (byte_index = 0; byte_index < 4; byte_index = byte_index + 1)
+      if (keep_in[byte_index])
+        crc = tlp_crc32_byte(crc, data_in[byte_index*8 +: 8]);
+    return crc;
+  endfunction
+
   function automatic logic [3:0] tlp_first_be(
       input logic [1:0] address_low,
       input logic [12:0] byte_length
   );
     logic [3:0] mask;
     integer lane;
+    integer first_lane;
+    integer end_lane;
     mask = '0;
+    first_lane = address_low;
+    end_lane = address_low + byte_length;
     for (lane = 0; lane < 4; lane = lane + 1)
-      if (lane >= {30'd0, address_low} &&
-          lane < {19'd0, address_low} + byte_length)
+      if (lane >= first_lane && lane < end_lane)
         mask[lane] = 1'b1;
     return mask;
   endfunction
@@ -109,9 +184,11 @@ package tlp_pkg;
       input logic [12:0] byte_length
   );
     logic [2:0] end_offset;
+    logic [13:0] end_position;
     if (({11'd0, address_low} + byte_length) <= 13'd4)
       return 4'b0000;
-    end_offset = ({11'd0, address_low} + byte_length) & 13'd3;
+    end_position = {12'd0,address_low} + {1'b0,byte_length};
+    end_offset = {1'b0,end_position[1:0]};
     return end_offset == 0 ? 4'b1111 : (4'b1111 >> (4-end_offset));
   endfunction
 

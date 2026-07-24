@@ -7,6 +7,8 @@ module tlp_layer
     parameter int USER_WIDTH = 3,
     parameter int TAG_COUNT = 32,
     parameter int CONTEXT_WIDTH = 16,
+    parameter int VC_PACKET_DEPTH = 4,
+    parameter bit PCIE_WIRE_ORDER = 1'b0,
     parameter int BAR_COUNT = 2,
     parameter logic [BAR_COUNT*64-1:0] BAR_BASE = '0,
     parameter logic [BAR_COUNT*64-1:0] BAR_MASK = {{(BAR_COUNT-1){64'd0}}, 64'hffff_ffff_ffff_f000},
@@ -25,6 +27,15 @@ module tlp_layer
     input  logic                     extended_tag_enable_i,
     input  logic [12:0]              max_payload_bytes_i,
     input  logic [12:0]              max_read_bytes_i,
+    input  logic                     rcb_128b_i,
+    input  logic                     fc_initialized_i,
+    input  logic                     fc_update_valid_i,
+    input  logic [7:0]               fc_ph_i,
+    input  logic [11:0]              fc_pd_i,
+    input  logic [7:0]               fc_nph_i,
+    input  logic [11:0]              fc_npd_i,
+    input  logic [7:0]               fc_cplh_i,
+    input  logic [11:0]              fc_cpld_i,
 
     input  logic [DATA_WIDTH-1:0]    s_dllp_axis_tdata,
     input  logic [KEEP_WIDTH-1:0]    s_dllp_axis_tkeep,
@@ -50,14 +61,14 @@ module tlp_layer
     input  logic [CONTEXT_WIDTH-1:0] command_context_i,
     input  logic                     command_prefix_valid_i,
     input  logic [31:0]              command_prefix_i,
-    input  logic                     command_digest_valid_i,
-    input  logic [31:0]              command_digest_i,
+    input  logic                     command_ecrc_enable_i,
     input  logic [DATA_WIDTH-1:0]    command_data_i,
     input  logic [KEEP_WIDTH-1:0]    command_keep_i,
     input  logic                     command_data_valid_i,
     input  logic                     command_data_last_i,
     output logic                     command_data_ready_o,
-    output logic                     command_error_o,
+    output logic                     command_error_valid_o,
+    output tlp_error_e               command_error_code_o,
 
     output logic                     target_request_valid_o,
     input  logic                     target_request_ready_i,
@@ -72,6 +83,7 @@ module tlp_layer
     output logic                     target_write_o,
     output logic                     target_unsupported_o,
     output logic                     target_bar_hit_o,
+    output logic                     target_bar_overlap_o,
     output logic [((BAR_COUNT <= 1) ? 1 : $clog2(BAR_COUNT))-1:0] target_bar_o,
     output logic [63:0]              target_offset_o,
     output logic [DATA_WIDTH-1:0]    target_data_o,
@@ -86,8 +98,7 @@ module tlp_layer
     input  logic [2:0]               completion_request_status_i,
     input  logic [12:0]              completion_request_byte_count_i,
     input  logic [6:0]               completion_request_lower_address_i,
-    input  logic                     completion_request_digest_valid_i,
-    input  logic [31:0]              completion_request_digest_i,
+    input  logic                     completion_request_ecrc_enable_i,
     input  logic [DATA_WIDTH-1:0]    completion_request_data_i,
     input  logic [KEEP_WIDTH-1:0]    completion_request_keep_i,
     input  logic                     completion_request_data_valid_i,
@@ -109,7 +120,16 @@ module tlp_layer
     output logic [2:0]               result_status_o,
     output logic                     result_last_o,
     output logic                     malformed_o,
+    output logic                     rx_error_valid_o,
+    output tlp_error_e               rx_error_code_o,
+    output logic                     rx_ecrc_error_o,
+    output logic                     tx_error_valid_o,
+    output tlp_error_e               tx_error_code_o,
+    output logic                     tx_fc_blocked_o,
+    output logic                     credit_error_o,
+    output logic                     vc_overflow_o,
     output logic                     unexpected_completion_o,
+    output tlp_error_e               completion_error_code_o,
     output logic [$clog2(TAG_COUNT+1)-1:0] outstanding_o
 );
 
@@ -126,6 +146,7 @@ module tlp_layer
   tlp_class_e parsed_class;
   logic parsed_memory, parsed_config, parsed_completion;
   logic parsed_read, parsed_write, parsed_unsupported;
+  logic [12:0] parsed_request_span;
   logic [BAR_INDEX_WIDTH-1:0] decoded_bar;
   logic route_completion_r;
 
@@ -159,6 +180,16 @@ module tlp_layer
   logic generated_axis_valid, generated_axis_last;
   logic [USER_WIDTH-1:0] generated_axis_user;
   logic generated_axis_ready;
+  logic vc_input_ready;
+  logic vc_packet_valid, vc_packet_ready;
+  tlp_credit_class_e vc_packet_credit_class;
+  logic [11:0] vc_packet_data_credits;
+  logic credit_request_ready;
+  tlp_class_e tx_packet_class_r;
+  logic [10:0] tx_packet_length_r;
+  logic tx_packet_has_data_r;
+  logic requester_error_valid, completion_error_valid;
+  tlp_error_e requester_error_code, completion_error_code;
 
   assign layer_reset = rst_i || !link_up_i;
   assign received_completion_header_o = parsed_header;
@@ -172,8 +203,15 @@ module tlp_layer
   assign target_read_o = parsed_read;
   assign target_write_o = parsed_write;
   assign target_unsupported_o = parsed_unsupported ||
-                                (parsed_memory && !target_bar_hit_o) ||
+                                (parsed_memory && (!target_bar_hit_o || target_bar_overlap_o)) ||
                                 (parsed_config && !target_config_hit_o);
+
+  always_comb begin
+    parsed_request_span = {parsed_header.length_dw, 2'b00};
+    if (!tlp_has_data(parsed_header.fmt) && parsed_header.length_dw == 1 &&
+        parsed_header.first_be == 0 && parsed_header.last_be == 0)
+      parsed_request_span = 1;
+  end
 
   assign parsed_header_ready = parsed_completion ?
       (received_completion_ready_i && tracker_completion_ready) : target_request_ready_i;
@@ -207,15 +245,36 @@ module tlp_layer
     end
   end
 
-  assign m_dllp_axis_tdata = generated_axis_data;
-  assign m_dllp_axis_tkeep = generated_axis_keep;
-  assign m_dllp_axis_tvalid = generated_axis_valid && transmit_enable_i && link_up_i;
-  assign m_dllp_axis_tlast = generated_axis_last;
-  assign m_dllp_axis_tuser = generated_axis_user;
-  assign generated_axis_ready = m_dllp_axis_tready && transmit_enable_i && link_up_i;
+  assign generated_axis_ready = vc_input_ready;
+  assign vc_packet_ready = credit_request_ready && transmit_enable_i && link_up_i;
+  assign command_error_valid_o = requester_error_valid;
+  assign command_error_code_o = requester_error_code;
+  assign tx_error_valid_o = requester_error_valid || completion_error_valid || credit_error_o;
+  assign tx_error_code_o = tlp_error_e'(requester_error_valid ? requester_error_code :
+                           completion_error_valid ? completion_error_code :
+                           credit_error_o ? TLP_ERR_CREDIT_UNDERFLOW : TLP_ERR_NONE);
+
+  always_ff @(posedge clk_i) begin
+    if (layer_reset) begin
+      tx_packet_class_r <= TLP_CLASS_NON_POSTED;
+      tx_packet_length_r <= '0;
+      tx_packet_has_data_r <= 1'b0;
+    end else if (generator_header_valid && generator_header_ready) begin
+      tx_packet_length_r <= generator_header.length_dw;
+      tx_packet_has_data_r <= tlp_has_data(generator_header.fmt);
+      if (generator_header.tlp_type == TLP_TYPE_CPL ||
+          generator_header.tlp_type == TLP_TYPE_CPL_LOCK)
+        tx_packet_class_r <= TLP_CLASS_COMPLETION;
+      else if (generator_header.tlp_type == TLP_TYPE_MEM && tlp_has_data(generator_header.fmt))
+        tx_packet_class_r <= TLP_CLASS_POSTED;
+      else
+        tx_packet_class_r <= TLP_CLASS_NON_POSTED;
+    end
+  end
 
   tlp_parser #(
-      .DATA_WIDTH(DATA_WIDTH), .KEEP_WIDTH(KEEP_WIDTH), .USER_WIDTH(USER_WIDTH)
+      .DATA_WIDTH(DATA_WIDTH), .KEEP_WIDTH(KEEP_WIDTH), .USER_WIDTH(USER_WIDTH),
+      .PCIE_WIRE_ORDER(PCIE_WIRE_ORDER)
   ) parser_inst (
       .clk_i(clk_i), .rst_i(layer_reset),
       .s_axis_tdata(s_dllp_axis_tdata), .s_axis_tkeep(s_dllp_axis_tkeep),
@@ -225,7 +284,9 @@ module tlp_layer
       .header_ready_i(parsed_header_ready),
       .payload_tdata_o(parsed_data), .payload_tkeep_o(parsed_keep),
       .payload_tvalid_o(parsed_data_valid), .payload_tlast_o(parsed_data_last),
-      .payload_tready_i(parsed_data_ready), .malformed_o(malformed_o)
+      .payload_tready_i(parsed_data_ready), .malformed_o(malformed_o),
+      .error_valid_o(rx_error_valid_o), .error_code_o(rx_error_code_o),
+      .ecrc_error_o(rx_ecrc_error_o)
   );
 
   tlp_classifier classifier_inst (
@@ -238,8 +299,9 @@ module tlp_layer
   tlp_bar_decoder #(
       .BAR_COUNT(BAR_COUNT), .BAR_BASE(BAR_BASE), .BAR_MASK(BAR_MASK), .BAR_ENABLE(BAR_ENABLE)
   ) bar_decoder_inst (
-      .address_i(parsed_header.address), .memory_enable_i(memory_enable_i),
-      .hit_o(target_bar_hit_o), .bar_o(decoded_bar), .offset_o(target_offset_o)
+      .address_i(parsed_header.address), .length_bytes_i(parsed_request_span),
+      .memory_enable_i(memory_enable_i), .hit_o(target_bar_hit_o),
+      .overlap_o(target_bar_overlap_o), .bar_o(decoded_bar), .offset_o(target_offset_o)
   );
   assign target_bar_o = decoded_bar;
 
@@ -260,7 +322,7 @@ module tlp_layer
       .command_byte_count_i(command_byte_count_i), .command_tc_i(command_tc_i),
       .command_attr_i(command_attr_i), .command_context_i(command_context_i),
       .command_prefix_valid_i(command_prefix_valid_i), .command_prefix_i(command_prefix_i),
-      .command_digest_valid_i(command_digest_valid_i), .command_digest_i(command_digest_i),
+      .command_ecrc_enable_i(command_ecrc_enable_i),
       .command_data_i(command_data_i), .command_keep_i(command_keep_i),
       .command_data_valid_i(command_data_valid_i), .command_data_last_i(command_data_last_i),
       .command_data_ready_o(command_data_ready_o),
@@ -271,7 +333,9 @@ module tlp_layer
       .packet_header_valid_o(requester_header_valid), .packet_header_ready_i(requester_header_ready),
       .packet_data_o(requester_data), .packet_keep_o(requester_keep),
       .packet_data_valid_o(requester_data_valid), .packet_data_last_o(requester_data_last),
-      .packet_data_ready_i(requester_data_ready), .command_error_o(command_error_o)
+      .packet_data_ready_i(requester_data_ready),
+      .command_error_valid_o(requester_error_valid),
+      .command_error_code_o(requester_error_code)
   );
 
   tlp_request_tracker #(
@@ -280,6 +344,7 @@ module tlp_layer
       .clk_i(clk_i), .rst_i(layer_reset), .extended_tag_enable_i(extended_tag_enable_i),
       .allocate_valid_i(tag_valid), .allocate_ready_o(tag_ready),
       .allocate_requester_id_i(tag_requester_id), .allocate_byte_count_i(tag_byte_count),
+      .allocate_address_i(requester_header.address),
       .allocate_context_i(tag_context), .allocate_expects_data_i(tag_expects_data),
       .allocate_tag_o(allocated_tag),
       .completion_valid_i(parsed_header_valid && parsed_completion && received_completion_ready_i),
@@ -288,6 +353,7 @@ module tlp_layer
       .result_valid_o(result_valid_o), .result_ready_i(result_ready_i),
       .result_context_o(result_context_o), .result_status_o(result_status_o),
       .result_last_o(result_last_o), .unexpected_completion_o(unexpected_completion_o),
+      .completion_error_code_o(completion_error_code_o),
       .outstanding_o(outstanding_o)
   );
 
@@ -295,13 +361,13 @@ module tlp_layer
       .DATA_WIDTH(DATA_WIDTH), .KEEP_WIDTH(KEEP_WIDTH)
   ) completion_generator_inst (
       .clk_i(clk_i), .rst_i(layer_reset), .completer_id_i(completer_id_i),
+      .max_payload_bytes_i(max_payload_bytes_i), .rcb_128b_i(rcb_128b_i),
       .request_valid_i(completion_request_valid_i), .request_ready_o(completion_request_ready_o),
       .request_header_i(completion_request_header_i),
       .request_status_i(completion_request_status_i),
       .request_byte_count_i(completion_request_byte_count_i),
       .request_lower_address_i(completion_request_lower_address_i),
-      .request_digest_valid_i(completion_request_digest_valid_i),
-      .request_digest_i(completion_request_digest_i),
+      .request_ecrc_enable_i(completion_request_ecrc_enable_i),
       .request_data_i(completion_request_data_i), .request_keep_i(completion_request_keep_i),
       .request_data_valid_i(completion_request_data_valid_i),
       .request_data_last_i(completion_request_data_last_i),
@@ -309,7 +375,8 @@ module tlp_layer
       .packet_header_o(completion_header), .packet_header_valid_o(completion_header_valid),
       .packet_header_ready_i(completion_header_ready), .packet_data_o(completion_data),
       .packet_keep_o(completion_keep), .packet_data_valid_o(completion_data_valid),
-      .packet_data_last_o(completion_data_last), .packet_data_ready_i(completion_data_ready)
+      .packet_data_last_o(completion_data_last), .packet_data_ready_i(completion_data_ready),
+      .error_valid_o(completion_error_valid), .error_code_o(completion_error_code)
   );
 
   tlp_control #(
@@ -331,7 +398,8 @@ module tlp_layer
   );
 
   tlp_generator #(
-      .DATA_WIDTH(DATA_WIDTH), .KEEP_WIDTH(KEEP_WIDTH), .USER_WIDTH(USER_WIDTH)
+      .DATA_WIDTH(DATA_WIDTH), .KEEP_WIDTH(KEEP_WIDTH), .USER_WIDTH(USER_WIDTH),
+      .PCIE_WIRE_ORDER(PCIE_WIRE_ORDER)
   ) generator_inst (
       .clk_i(clk_i), .rst_i(layer_reset), .header_i(generator_header),
       .header_valid_i(generator_header_valid), .header_ready_o(generator_header_ready),
@@ -341,6 +409,39 @@ module tlp_layer
       .m_axis_tkeep(generated_axis_keep), .m_axis_tvalid(generated_axis_valid),
       .m_axis_tlast(generated_axis_last), .m_axis_tuser(generated_axis_user),
       .m_axis_tready(generated_axis_ready)
+  );
+
+  tlp_vc_buffer #(
+      .DATA_WIDTH(DATA_WIDTH), .KEEP_WIDTH(KEEP_WIDTH), .USER_WIDTH(USER_WIDTH),
+      .PACKET_DEPTH(VC_PACKET_DEPTH)
+  ) vc_buffer_inst (
+      .clk_i(clk_i), .rst_i(layer_reset),
+      .s_axis_tdata(generated_axis_data), .s_axis_tkeep(generated_axis_keep),
+      .s_axis_tvalid(generated_axis_valid), .s_axis_tlast(generated_axis_last),
+      .s_axis_tuser(generated_axis_user), .s_axis_tready(vc_input_ready),
+      .s_packet_class_i(tx_packet_class_r), .s_packet_length_dw_i(tx_packet_length_r),
+      .s_packet_has_data_i(tx_packet_has_data_r),
+      .packet_valid_o(vc_packet_valid), .packet_ready_i(vc_packet_ready),
+      .packet_credit_class_o(vc_packet_credit_class),
+      .packet_data_credits_o(vc_packet_data_credits),
+      .m_axis_tdata(m_dllp_axis_tdata), .m_axis_tkeep(m_dllp_axis_tkeep),
+      .m_axis_tvalid(m_dllp_axis_tvalid), .m_axis_tlast(m_dllp_axis_tlast),
+      .m_axis_tuser(m_dllp_axis_tuser), .m_axis_tready(m_dllp_axis_tready),
+      .overflow_o(vc_overflow_o)
+  );
+
+  tlp_credit_manager credit_manager_inst (
+      .clk_i(clk_i), .rst_i(layer_reset), .fc_initialized_i(fc_initialized_i),
+      .fc_update_valid_i(fc_update_valid_i), .fc_ph_i(fc_ph_i), .fc_pd_i(fc_pd_i),
+      .fc_nph_i(fc_nph_i), .fc_npd_i(fc_npd_i), .fc_cplh_i(fc_cplh_i),
+      .fc_cpld_i(fc_cpld_i),
+      .request_valid_i(vc_packet_valid && transmit_enable_i && link_up_i),
+      .request_ready_o(credit_request_ready), .request_class_i(vc_packet_credit_class),
+      .request_data_credits_i(vc_packet_data_credits), .blocked_o(tx_fc_blocked_o),
+      .error_o(credit_error_o), .posted_header_available_o(),
+      .posted_data_available_o(), .nonposted_header_available_o(),
+      .nonposted_data_available_o(), .completion_header_available_o(),
+      .completion_data_available_o()
   );
 
 endmodule

@@ -17,7 +17,6 @@ async def reset(dut):
     dut.command_prefix_valid.value = 0
     dut.command_prefix.value = 0
     dut.command_digest_valid.value = 0
-    dut.command_digest.value = 0
     dut.command_data_last.value = 0
     for _ in range(3):
         await RisingEdge(dut.clk_i)
@@ -122,6 +121,34 @@ async def posted_write_backpressure_and_reset(dut):
     dut.command_data_last.value = 0
     await RisingEdge(dut.clk_i)
     assert int(dut.command_ready.value) == 1
+
+
+@cocotb.test()
+async def zero_length_read_rejected_write_and_64bit_transition(dut):
+    cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
+    await reset(dut)
+
+    # The PCIe zero-length-read approximation is Length=1 with both BE fields zero.
+    await issue(dut, 0, 0x1000, 0)
+    zero_read = await accept_tag_and_header(dut, 0x31)
+    assert zero_read[0] == 0
+    assert zero_read[1] == 1
+    assert zero_read[3] == 0 and zero_read[4] == 0
+    assert zero_read[6] == 4
+
+    # A zero-length write is illegal and must not emit a header or consume a tag.
+    await issue(dut, 1, 0x2000, 0)
+    await Timer(1, units="ps")
+    assert int(dut.command_error.value) == 1
+    assert int(dut.command_error_code.value) == 6  # TLP_ERR_BAD_LENGTH
+    assert int(dut.packet_header_valid.value) == 0
+    assert int(dut.tag_request_valid.value) == 0
+
+    # The first address above 4 GiB must use the 4-DW no-data format.
+    await issue(dut, 0, 0x1_0000_0000, 4)
+    header = await accept_tag_and_header(dut, 0x32)
+    assert header[0] == 1
+    assert header[5] == 0x1_0000_0000
 
     # An early local EOP used to leave the requester stuck in REQ_DATA.
     await issue(dut, 1, 0x9000, 8)

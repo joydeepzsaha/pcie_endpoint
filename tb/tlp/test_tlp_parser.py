@@ -1,4 +1,5 @@
 import cocotb
+import zlib
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
@@ -10,6 +11,10 @@ def dw0(fmt, tlp_type, length=1, td=0, tc=0, attr=0):
         | (((encoded >> 8) & 3) << 16) | (((attr >> 1) & 3) << 20)
         | (td << 23) | ((encoded & 0xFF) << 24)
     )
+
+
+def packet_crc(words):
+    return zlib.crc32(b"".join(word.to_bytes(4, "little") for word in words))
 
 
 async def reset(dut):
@@ -72,10 +77,11 @@ async def all_three_packet_classes_and_timing(dut):
     await send_beat(dut, dw0(2, 0, 2), gaps=2)
     await send_beat(dut, (0x1234 << 16) | (0x5A << 8) | 0xFF, gaps=1)
     await send_beat(dut, 0x1000)
+    await send_beat(dut, 0x44332211)
+    await send_beat(dut, 0x88776655, last=True)
     header = await accept_header(dut)
     assert header == {**header, "fmt": 2, "type": 0, "length": 2, "requester": 0x1234,
                       "tag": 0x5A, "address": 0x1000}
-    await send_beat(dut, 0x44332211)
     # Hold payload stalled and ensure data is stable.
     for _ in range(3):
         await RisingEdge(dut.clk_i)
@@ -86,7 +92,6 @@ async def all_three_packet_classes_and_timing(dut):
     await RisingEdge(dut.clk_i)
     assert int(dut.payload_tvalid.value) == 1
     observed.append((int(dut.payload_tdata.value), int(dut.payload_tlast.value)))
-    await send_beat(dut, 0x88776655, last=True)
     for _ in range(4):
         await RisingEdge(dut.clk_i)
         if int(dut.payload_tvalid.value):
@@ -108,11 +113,11 @@ async def all_three_packet_classes_and_timing(dut):
     await send_beat(dut, dw0(2, 10, 1))
     await send_beat(dut, (0xCAFE << 16) | 4)
     await send_beat(dut, (0xBEEF << 16) | (0x22 << 8) | 0x40)
+    await send_beat(dut, 0xDEADBEEF, last=True)
     header = await accept_header(dut)
     assert header["completer"] == 0xCAFE and header["requester"] == 0xBEEF
     assert header["count"] == 4 and header["lower"] == 0x40
     dut.payload_tready.value = 1
-    await send_beat(dut, 0xDEADBEEF, last=True)
     for _ in range(4):
         await RisingEdge(dut.clk_i)
         if int(dut.payload_tvalid.value):
@@ -148,8 +153,6 @@ async def malformed_frames_and_recovery(dut):
     await send_beat(dut, dw0(2, 0, 2))
     await send_beat(dut, (1 << 16) | 0xFF)
     await send_beat(dut, 0x2000)
-    await accept_header(dut)
-    dut.payload_tready.value = 1
     await send_beat(dut, 0xA5A5A5A5, last=True)
     assert int(dut.malformed.value) == 1
     for _ in range(3):
@@ -168,17 +171,28 @@ async def prefix_digest_and_reset_mid_packet(dut):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     await reset(dut)
     await send_beat(dut, 0xAABBCC80)
-    await send_beat(dut, dw0(2, 0, 1, td=1))
-    await send_beat(dut, (1 << 16) | 0xF)
-    await send_beat(dut, 0x3000)
+    words = [dw0(2, 0, 1, td=1), (1 << 16) | 0xF, 0x3000, 0x01020304]
+    await send_beat(dut, words[0])
+    await send_beat(dut, words[1])
+    await send_beat(dut, words[2])
+    await send_beat(dut, words[3])
+    digest = packet_crc(words)
+    await send_beat(dut, digest, last=True)
     header = await accept_header(dut)
     assert header["prefix"] == 1
     dut.payload_tready.value = 1
-    await send_beat(dut, 0x01020304)
-    await send_beat(dut, 0x89ABCDEF, last=True)
     for _ in range(5):
         await RisingEdge(dut.clk_i)
-    assert int(dut.header_digest.value) == 0x89ABCDEF
+    assert int(dut.header_digest.value) == digest
+
+    # Any digest bit corruption is rejected before the header reaches target logic.
+    await send_beat(dut, words[0])
+    await send_beat(dut, words[1])
+    await send_beat(dut, words[2])
+    await send_beat(dut, words[3])
+    await send_beat(dut, digest ^ 1, last=True)
+    assert int(dut.ecrc_error.value) == 1
+    assert int(dut.header_valid.value) == 0
 
     # Reset while a second header is incomplete, then confirm idle recovery.
     await send_beat(dut, dw0(3, 0, 1))

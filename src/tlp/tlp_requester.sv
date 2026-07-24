@@ -22,8 +22,7 @@ module tlp_requester
     input  logic [CONTEXT_WIDTH-1:0] command_context_i,
     input  logic                     command_prefix_valid_i,
     input  logic [31:0]              command_prefix_i,
-    input  logic                     command_digest_valid_i,
-    input  logic [31:0]              command_digest_i,
+    input  logic                     command_ecrc_enable_i,
 
     input  logic [DATA_WIDTH-1:0]    command_data_i,
     input  logic [KEEP_WIDTH-1:0]    command_keep_i,
@@ -47,7 +46,8 @@ module tlp_requester
     output logic                     packet_data_valid_o,
     output logic                     packet_data_last_o,
     input  logic                     packet_data_ready_i,
-    output logic                     command_error_o
+    output logic                     command_error_valid_o,
+    output tlp_error_e               command_error_code_o
 );
 
   typedef enum logic [2:0] {REQ_IDLE, REQ_TAG, REQ_HEADER, REQ_DATA} req_state_e;
@@ -63,8 +63,7 @@ module tlp_requester
   logic [7:0] tag_r;
   logic prefix_valid_r;
   logic [31:0] prefix_r;
-  logic digest_valid_r;
-  logic [31:0] digest_r;
+  logic ecrc_enable_r;
   tlp_header_t header_c;
   logic command_has_data;
   logic command_non_posted;
@@ -122,7 +121,8 @@ module tlp_requester
     end
     header_c.traffic_class = tc_r;
     header_c.attributes    = attr_r;
-    header_c.length_dw     = 11'((segment_bytes_r + {11'd0, address_r[1:0]} + 13'd3) >> 2);
+    header_c.length_dw     = segment_bytes_r == 0 ? 11'd1 :
+        11'((segment_bytes_r + {11'd0, address_r[1:0]} + 13'd3) >> 2);
     header_c.requester_id  = requester_id_i;
     header_c.tag           = tag_r;
     header_c.first_be      = tlp_first_be(address_r[1:0], segment_bytes_r);
@@ -130,14 +130,13 @@ module tlp_requester
     header_c.address       = address_r;
     header_c.prefix_present = prefix_valid_r;
     header_c.prefix         = prefix_r;
-    header_c.digest_present = digest_valid_r;
-    header_c.digest         = digest_r;
+    header_c.digest_present = ecrc_enable_r;
   end
 
   assign command_ready_o = state_r == REQ_IDLE;
   assign tag_request_valid_o = state_r == REQ_TAG;
   assign tag_requester_id_o = requester_id_i;
-  assign tag_byte_count_o = segment_bytes_r;
+  assign tag_byte_count_o = segment_bytes_r == 0 ? 13'd4 : segment_bytes_r;
   assign tag_context_o = context_r;
   assign tag_expects_data_o = command_r == TLP_CMD_MEM_READ ||
                               command_r == TLP_CMD_CFG_READ0 || command_r == TLP_CMD_IO_READ;
@@ -166,27 +165,35 @@ module tlp_requester
       tag_r           <= '0;
       prefix_valid_r  <= 1'b0;
       prefix_r        <= '0;
-      digest_valid_r  <= 1'b0;
-      digest_r        <= '0;
-      command_error_o <= 1'b0;
+      ecrc_enable_r   <= 1'b0;
+      command_error_valid_o <= 1'b0;
+      command_error_code_o <= TLP_ERR_NONE;
     end else begin
-      command_error_o <= 1'b0;
+      command_error_valid_o <= 1'b0;
+      command_error_code_o <= TLP_ERR_NONE;
       unique case (state_r)
         REQ_IDLE: if (command_valid_i && command_ready_o) begin
-          command_r   <= command_i;
-          address_r   <= command_address_i;
-          remaining_r <= command_byte_count_i;
-          tc_r        <= command_tc_i;
-          attr_r      <= command_attr_i;
-          context_r   <= command_context_i;
-          prefix_valid_r <= command_prefix_valid_i;
-          prefix_r       <= command_prefix_i;
-          digest_valid_r <= command_digest_valid_i;
-          digest_r       <= command_digest_i;
-          segment_bytes_r <= calculate_segment(command_address_i, command_byte_count_i,
-                                               command_limit(command_i));
-          segment_sent_r <= '0;
-          state_r <= command_i == TLP_CMD_MEM_WRITE ? REQ_HEADER : REQ_TAG;
+          if ((command_byte_count_i == 0 && command_i != TLP_CMD_MEM_READ) ||
+              ((command_i == TLP_CMD_CFG_READ0 || command_i == TLP_CMD_CFG_WRITE0 ||
+                command_i == TLP_CMD_IO_READ || command_i == TLP_CMD_IO_WRITE) &&
+               command_byte_count_i != 4)) begin
+            command_error_valid_o <= 1'b1;
+            command_error_code_o <= TLP_ERR_BAD_LENGTH;
+          end else begin
+            command_r   <= command_i;
+            address_r   <= command_address_i;
+            remaining_r <= command_byte_count_i;
+            tc_r        <= command_tc_i;
+            attr_r      <= command_attr_i;
+            context_r   <= command_context_i;
+            prefix_valid_r <= command_prefix_valid_i;
+            prefix_r       <= command_prefix_i;
+            ecrc_enable_r  <= command_ecrc_enable_i;
+            segment_bytes_r <= calculate_segment(command_address_i, command_byte_count_i,
+                                                 command_limit(command_i));
+            segment_sent_r <= '0;
+            state_r <= command_i == TLP_CMD_MEM_WRITE ? REQ_HEADER : REQ_TAG;
+          end
         end
 
         REQ_TAG: if (tag_request_ready_i) begin
@@ -211,7 +218,10 @@ module tlp_requester
         REQ_DATA: if (command_data_valid_i && command_data_ready_o) begin
           segment_sent_r <= segment_sent_r + accepted_bytes;
           if (command_data_last_i != expected_data_last)
-            command_error_o <= 1'b1;
+            begin
+              command_error_valid_o <= 1'b1;
+              command_error_code_o <= TLP_ERR_LOCAL_PAYLOAD;
+            end
           if (command_data_last_i && !expected_data_last) begin
             // The source ended before the byte count promised by the command.
             // Abort this command after forwarding a terminating beat so that

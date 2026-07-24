@@ -4,6 +4,8 @@ module tb_tlp_completion_control;
   logic clk_i = 0;
   logic rst_i;
   logic [15:0] completer_id;
+  logic [12:0] max_payload_bytes;
+  logic rcb_128b;
   logic completion_request_valid;
   logic completion_request_ready;
   logic [15:0] request_requester_id;
@@ -26,6 +28,8 @@ module tb_tlp_completion_control;
   logic [31:0] completion_data;
   logic [3:0] completion_keep;
   logic completion_data_valid, completion_data_last, completion_data_ready;
+  logic completion_error_valid;
+  logic [4:0] completion_error_code;
 
   logic requester_header_valid, requester_header_ready;
   logic requester_has_data;
@@ -47,6 +51,12 @@ module tb_tlp_completion_control;
   logic [2:0] generator_status;
   logic [12:0] generator_byte_count;
   logic [6:0] generator_lower_address;
+  tlp_header_t fair_completion_header;
+  tlp_header_t fair_generator_header;
+  logic fair_requester_valid, fair_completion_valid;
+  logic fair_requester_ready, fair_completion_ready;
+  logic fair_generator_valid, fair_generator_ready;
+  logic [4:0] fair_generator_type;
 
   always_comb begin
     request_header = '0;
@@ -57,6 +67,9 @@ module tb_tlp_completion_control;
     requester_header = '0;
     requester_header.fmt = requester_has_data ? TLP_FMT_3DW_DATA : TLP_FMT_3DW_NO_DATA;
     requester_header.tlp_type = TLP_TYPE_MEM;
+    fair_completion_header = '0;
+    fair_completion_header.fmt = TLP_FMT_3DW_NO_DATA;
+    fair_completion_header.tlp_type = TLP_TYPE_CPL;
     generator_fmt = generator_header.fmt;
     generator_type = generator_header.tlp_type;
     generator_requester_id = generator_header.requester_id;
@@ -65,16 +78,18 @@ module tb_tlp_completion_control;
     generator_status = generator_header.completion_status;
     generator_byte_count = generator_header.byte_count;
     generator_lower_address = generator_header.lower_address;
+    fair_generator_type = fair_generator_header.tlp_type;
   end
 
   tlp_completion_generator completion_dut (
       .clk_i(clk_i), .rst_i(rst_i), .completer_id_i(completer_id),
+      .max_payload_bytes_i(max_payload_bytes), .rcb_128b_i(rcb_128b),
       .request_valid_i(completion_request_valid), .request_ready_o(completion_request_ready),
       .request_header_i(request_header), .request_status_i(completion_request_status),
       .request_byte_count_i(completion_request_byte_count),
       .request_lower_address_i(completion_request_lower_address),
-      .request_digest_valid_i(completion_request_digest_valid),
-      .request_digest_i(completion_request_digest), .request_data_i(completion_request_data),
+      .request_ecrc_enable_i(completion_request_digest_valid),
+      .request_data_i(completion_request_data),
       .request_keep_i(completion_request_keep),
       .request_data_valid_i(completion_request_data_valid),
       .request_data_last_i(completion_request_data_last),
@@ -82,7 +97,8 @@ module tb_tlp_completion_control;
       .packet_header_o(completion_header), .packet_header_valid_o(completion_header_valid),
       .packet_header_ready_i(completion_header_ready), .packet_data_o(completion_data),
       .packet_keep_o(completion_keep), .packet_data_valid_o(completion_data_valid),
-      .packet_data_last_o(completion_data_last), .packet_data_ready_i(completion_data_ready)
+      .packet_data_last_o(completion_data_last), .packet_data_ready_i(completion_data_ready),
+      .error_valid_o(completion_error_valid), .error_code_o(completion_error_code)
   );
 
   tlp_control control_dut (
@@ -100,5 +116,26 @@ module tb_tlp_completion_control;
       .generator_header_ready_i(generator_header_ready), .generator_data_o(generator_data),
       .generator_keep_o(generator_keep), .generator_data_valid_o(generator_data_valid),
       .generator_data_last_o(generator_data_last), .generator_data_ready_i(generator_data_ready)
+  );
+
+  tlp_control fair_control_dut (
+      .clk_i(clk_i), .rst_i(rst_i),
+      .requester_header_i(requester_header),
+      .requester_header_valid_i(fair_requester_valid),
+      .requester_header_ready_o(fair_requester_ready),
+      .requester_data_i('0), .requester_keep_i('0),
+      .requester_data_valid_i(1'b0), .requester_data_last_i(1'b0),
+      .requester_data_ready_o(),
+      .completion_header_i(fair_completion_header),
+      .completion_header_valid_i(fair_completion_valid),
+      .completion_header_ready_o(fair_completion_ready),
+      .completion_data_i('0), .completion_keep_i('0),
+      .completion_data_valid_i(1'b0), .completion_data_last_i(1'b0),
+      .completion_data_ready_o(),
+      .generator_header_o(fair_generator_header),
+      .generator_header_valid_o(fair_generator_valid),
+      .generator_header_ready_i(fair_generator_ready),
+      .generator_data_o(), .generator_keep_o(), .generator_data_valid_o(),
+      .generator_data_last_o(), .generator_data_ready_i(1'b0)
   );
 endmodule

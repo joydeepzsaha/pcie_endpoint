@@ -13,6 +13,7 @@ module tlp_request_tracker
     output logic                     allocate_ready_o,
     input  logic [15:0]              allocate_requester_id_i,
     input  logic [12:0]              allocate_byte_count_i,
+    input  logic [63:0]              allocate_address_i,
     input  logic [CONTEXT_WIDTH-1:0] allocate_context_i,
     input  logic                     allocate_expects_data_i,
     output logic [7:0]               allocate_tag_o,
@@ -28,6 +29,7 @@ module tlp_request_tracker
     output logic [2:0]               result_status_o,
     output logic                     result_last_o,
     output logic                     unexpected_completion_o,
+    output tlp_error_e               completion_error_code_o,
     output logic [$clog2(TAG_COUNT+1)-1:0] outstanding_o
 );
 
@@ -36,6 +38,7 @@ module tlp_request_tracker
   logic [12:0] remaining_r [0:TAG_COUNT-1];
   logic [CONTEXT_WIDTH-1:0] context_r [0:TAG_COUNT-1];
   logic expects_data_r [0:TAG_COUNT-1];
+  logic [6:0] next_lower_address_r [0:TAG_COUNT-1];
   logic result_valid_r;
   logic [CONTEXT_WIDTH-1:0] result_context_r;
   logic [2:0] result_status_r;
@@ -93,14 +96,17 @@ module tlp_request_tracker
       result_status_r  <= '0;
       result_last_r    <= 1'b0;
       unexpected_r     <= 1'b0;
+      completion_error_code_o <= TLP_ERR_NONE;
       for (reset_index = 0; reset_index < TAG_COUNT; reset_index = reset_index + 1) begin
         requester_id_r[reset_index] <= '0;
         remaining_r[reset_index]    <= '0;
         context_r[reset_index]      <= '0;
         expects_data_r[reset_index] <= 1'b0;
+        next_lower_address_r[reset_index] <= '0;
       end
     end else begin
       unexpected_r <= 1'b0;
+      completion_error_code_o <= TLP_ERR_NONE;
       if (result_valid_r && result_ready_i)
         result_valid_r <= 1'b0;
 
@@ -110,11 +116,23 @@ module tlp_request_tracker
         remaining_r[allocate_tag_o[TAG_INDEX_WIDTH-1:0]]    <= allocate_byte_count_i;
         context_r[allocate_tag_o[TAG_INDEX_WIDTH-1:0]]      <= allocate_context_i;
         expects_data_r[allocate_tag_o[TAG_INDEX_WIDTH-1:0]] <= allocate_expects_data_i;
+        next_lower_address_r[allocate_tag_o[TAG_INDEX_WIDTH-1:0]] <=
+            allocate_address_i[6:0];
       end
 
       if (completion_valid_i && completion_ready_o) begin
         if (!completion_match) begin
           unexpected_r <= 1'b1;
+          completion_error_code_o <= TLP_ERR_UNEXPECTED_COMPLETION;
+        end else if ((expects_data_r[completion_index] &&
+                      completion_header_i.completion_status == TLP_CPL_SC &&
+                      (completion_payload_bytes_i == 0 ||
+                       completion_payload_bytes_i > remaining_r[completion_index] ||
+                       completion_header_i.byte_count != remaining_r[completion_index] ||
+                       completion_header_i.lower_address != next_lower_address_r[completion_index])) ||
+                     (!expects_data_r[completion_index] && completion_payload_bytes_i != 0)) begin
+          unexpected_r <= 1'b1;
+          completion_error_code_o <= TLP_ERR_COMPLETION_OVERFLOW;
         end else begin
           result_valid_r   <= 1'b1;
           result_context_r <= context_r[completion_index];
@@ -131,6 +149,8 @@ module tlp_request_tracker
           end else begin
             remaining_r[completion_index] <=
                 remaining_r[completion_index] - completion_payload_bytes_i;
+            next_lower_address_r[completion_index] <=
+                next_lower_address_r[completion_index] + completion_payload_bytes_i[6:0];
           end
         end
       end
