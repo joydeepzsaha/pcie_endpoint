@@ -36,6 +36,16 @@ filesets:
     files:
       - test_pcie_rq_if.py : {file_type : user, copyto : .}
 
+  # 2a-i integration: pcie_rq_if in front of a real tlp_layer.
+  bench_rq_if_tlp:
+    files:
+      - tb_pcie_rq_if_tlp.sv
+    file_type: systemVerilogSource
+
+  cocotb_rq_if_tlp:
+    files:
+      - test_pcie_rq_if_tlp.py : {file_type : user, copyto : .}
+
 targets:
   # 2a-0: pcie_axis_dw_downsize / pcie_axis_dw_upsize, G1..G10.
   verilate_axis_gearbox:
@@ -64,3 +74,18 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_rq_if, cocotb_rq_if]
     toplevel : [tb_pcie_rq_if]
+
+  # 2a-i integration: T12..T15, on-wire TLP goldens through a real tlp_layer.
+  # This one MUST initialise FC credits (see test_pcie_rq_if_tlp.py).
+  verilate_rq_if_tlp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_rq_if_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_rq_if_tlp, cocotb_rq_if_tlp]
+    toplevel : [tb_pcie_rq_if_tlp]

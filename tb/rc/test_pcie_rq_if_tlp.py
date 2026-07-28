@@ -1,0 +1,409 @@
+"""Commit 2a-i -- pcie_rq_if driving a real tlp_layer (T12..T15).
+
+Same wire, new interface.  T12/T13 re-derive the Commit-1 config goldens and
+assert them through the PG213 descriptor path, so a change in the front end
+that altered what leaves the chip would show up here.  T14 is the Commit-2b
+gate: a single-byte config write at offset 0x19 must emit exactly one TLP with
+first_be=0010.  T15 checks that a well-formed multi-segment write produces zero
+command_error_valid_o pulses -- the 0277358 property, now guaranteed upstream by
+construction.
+
+! FLOW CONTROL.  tlp_layer transmits nothing at all -- and reports no error --
+until link_up_i, transmit_enable_i and fc_initialized_i are set and at least
+one fc_update_valid_i pulse has loaded non-zero credits (tlp_layer.sv:249,
+tlp_credit_manager.sv:53-54, 66-83).  Config requests consume NPH/NPD.  Every
+"zero packets" result in this file would otherwise be meaningless.
+
+RTL cited (read, not assumed):
+  DW0 assembly ................... src/tlp/tlp_generator.sv:60-73
+  DW1 = {rid, tag, last_be, first_be} .. src/tlp/tlp_generator.sv:80
+  config DW2 = {address[31:2],00} .. src/tlp/tlp_generator.sv:81-82
+  length encode .................. src/tlp/tlp_pkg.sv:85-87
+  fmt/type encodings ............. src/tlp/tlp_pkg.sv:8-27
+  command_error_valid_o .......... src/tlp/tlp_requester.sv:225-231
+"""
+
+import random
+
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import ReadOnly, RisingEdge
+
+CLK_NS = 4
+
+RQ_MEM_WRITE = 0b0001
+RQ_CFG_READ0 = 0b1000
+RQ_CFG_WRITE0 = 0b1010
+
+# tlp_fmt_e / tlp_type_e (tlp_pkg.sv:8-27)
+FMT_3DW_NO_DATA = 0b000
+FMT_3DW_DATA = 0b010
+TYPE_MEM = 0b00000
+TYPE_CFG0 = 0b00100
+
+RID = 0x1234
+
+
+# --------------------------------------------------------------------------
+# Spec goldens, hand-derived
+# --------------------------------------------------------------------------
+def enc_len(length_dw):
+    """PCIe Length field: 1..1023 verbatim, 1024 -> 0 (tlp_pkg.sv:85-87)."""
+    assert 1 <= length_dw <= 1024
+    return 0 if length_dw == 1024 else (length_dw & 0x3FF)
+
+
+def golden_dw0(fmt, typ, length_dw, tc=0, attr=0):
+    """DW0 per the generator bit map (tlp_generator.sv:60-73)."""
+    enc = enc_len(length_dw)
+    v = 0
+    v |= (fmt & 0x7) << 5
+    v |= (typ & 0x1F)
+    v |= (attr & 0x1) << 10
+    v |= (tc & 0x7) << 12
+    v |= ((enc >> 8) & 0x3) << 16
+    v |= ((attr >> 1) & 0x3) << 20
+    v |= (enc & 0xFF) << 24
+    return v & 0xFFFFFFFF
+
+
+def dw1_fields(dw1):
+    """Unpack DW1: {rid[31:16], tag[15:8], last_be[7:4], first_be[3:0]}."""
+    return {
+        "rid": (dw1 >> 16) & 0xFFFF,
+        "tag": (dw1 >> 8) & 0xFF,
+        "last_be": (dw1 >> 4) & 0xF,
+        "first_be": dw1 & 0xF,
+    }
+
+
+def dw0_length(dw0):
+    """Recover length_dw from DW0 (inverse of golden_dw0's encoding)."""
+    enc = ((dw0 >> 24) & 0xFF) | (((dw0 >> 16) & 0x3) << 8)
+    return 1024 if enc == 0 else enc
+
+
+def rq_desc(req_type, dword_count, address=0, completer_id=0, tag=0,
+            poisoned=0, tc=0, attr=0):
+    v = address & ((1 << 64) - 1)
+    v |= (dword_count & 0x7FF) << 64
+    v |= (req_type & 0xF) << 75
+    v |= (poisoned & 1) << 79
+    v |= (tag & 0xFF) << 96
+    v |= (completer_id & 0xFFFF) << 104
+    v |= (tc & 0x7) << 121
+    v |= (attr & 0x7) << 124
+    return v
+
+
+def cfg_desc_address(reg_num, ext_reg=0):
+    return ((ext_reg & 0xF) << 8) | ((reg_num & 0x3F) << 2)
+
+
+def tuser(first_be, last_be):
+    return ((last_be & 0xF) << 4) | (first_be & 0xF)
+
+
+def cfg_wire_dw2(bus, dev, fn, reg_num, ext_reg=0):
+    """The config-request address DW as the generator emits it: [1:0] forced 0."""
+    return (((bus & 0xFF) << 24) | ((dev & 0x1F) << 19) | ((fn & 0x7) << 16)
+            | ((ext_reg & 0xF) << 8) | ((reg_num & 0x3F) << 2))
+
+
+# --------------------------------------------------------------------------
+# Harness
+# --------------------------------------------------------------------------
+def init_flow_control(dut):
+    """Advertise "FC initialized, credits saturated" on tlp_layer's VC0 inputs.
+
+    Without this the credit manager holds request_ready_o low forever
+    (tlp_credit_manager.sv:53-54, registers reset to zero at :66-72 and load
+    only on fc_update_valid_i at :76-83) and tlp_layer transmits nothing.  This
+    target exercises request origination, not flow control -- which has its own
+    tb_tlp_credit_manager bench -- so the pool is held saturated and must never
+    be the limiter.
+    """
+    dut.fc_initialized_i.value = 1
+    dut.fc_update_valid_i.value = 1
+    dut.fc_ph_i.value = 0xFF
+    dut.fc_pd_i.value = 0xFFF
+    dut.fc_nph_i.value = 0xFF
+    dut.fc_npd_i.value = 0xFFF
+    dut.fc_cplh_i.value = 0xFF
+    dut.fc_cpld_i.value = 0xFFF
+
+
+class Tx:
+    """Records TX packets, RQ rejects and TL command errors, concurrently."""
+
+    def __init__(self, dut):
+        self.dut = dut
+        self.packets = []
+        self._cur = []
+        self.command_errors = []
+        self.rq_errors = []
+
+    def start(self):
+        cocotb.start_soon(self._run())
+
+    async def _run(self):
+        d = self.dut
+        while True:
+            await RisingEdge(d.clk_i)
+            await ReadOnly()
+            if int(d.rst_i.value):
+                continue
+            if int(d.m_dllp_axis_tvalid.value) and int(d.m_dllp_axis_tready.value):
+                self._cur.append(int(d.m_dllp_axis_tdata.value))
+                if int(d.m_dllp_axis_tlast.value):
+                    self.packets.append(self._cur)
+                    self._cur = []
+            if int(d.command_error_valid_o.value):
+                self.command_errors.append(int(d.command_error_code_flat.value))
+            if int(d.rq_protocol_error_o.value):
+                self.rq_errors.append(int(d.rq_error_code_o.value))
+
+    def clear(self):
+        self.packets.clear()
+        self.command_errors.clear()
+        self.rq_errors.clear()
+
+
+async def init(dut, max_payload=128, max_read=128):
+    cocotb.start_soon(Clock(dut.clk_i, CLK_NS, units="ns").start())
+    dut.rst_i.value = 1
+    dut.link_up_i.value = 0
+    dut.transmit_enable_i.value = 0
+    dut.s_axis_rq_tdata.value = 0
+    dut.s_axis_rq_tkeep.value = 0
+    dut.s_axis_rq_tvalid.value = 0
+    dut.s_axis_rq_tlast.value = 0
+    dut.s_axis_rq_tuser.value = 0
+    dut.rq_tag_i.value = 0
+    dut.m_dllp_axis_tready.value = 1
+    dut.requester_id_i.value = RID
+    dut.max_payload_bytes_i.value = max_payload
+    dut.max_read_bytes_i.value = max_read
+    dut.fc_initialized_i.value = 0
+    dut.fc_update_valid_i.value = 0
+    dut.fc_ph_i.value = 0
+    dut.fc_pd_i.value = 0
+    dut.fc_nph_i.value = 0
+    dut.fc_npd_i.value = 0
+    dut.fc_cplh_i.value = 0
+    dut.fc_cpld_i.value = 0
+    for _ in range(4):
+        await RisingEdge(dut.clk_i)
+    dut.rst_i.value = 0
+    dut.link_up_i.value = 1
+    dut.transmit_enable_i.value = 1
+    init_flow_control(dut)
+    for _ in range(4):
+        await RisingEdge(dut.clk_i)
+    tx = Tx(dut)
+    tx.start()
+    await RisingEdge(dut.clk_i)
+    return tx
+
+
+async def send(dut, beats):
+    for data, keep, last, user in beats:
+        dut.s_axis_rq_tdata.value = data
+        dut.s_axis_rq_tkeep.value = keep
+        dut.s_axis_rq_tlast.value = 1 if last else 0
+        dut.s_axis_rq_tuser.value = user
+        dut.s_axis_rq_tvalid.value = 1
+        for _ in range(4000):
+            await ReadOnly()
+            fired = int(dut.s_axis_rq_tready.value) == 1
+            await RisingEdge(dut.clk_i)
+            if fired:
+                break
+        else:
+            raise AssertionError("s_axis_rq_tready never asserted -- DUT stalled")
+    dut.s_axis_rq_tvalid.value = 0
+    dut.s_axis_rq_tlast.value = 0
+
+
+def payload_beats(dwords, first_be, last_be):
+    beats = []
+    for base in range(0, len(dwords), 4):
+        chunk = dwords[base:base + 4]
+        data = 0
+        for i, dw in enumerate(chunk):
+            data |= (dw & 0xFFFFFFFF) << (32 * i)
+        beats.append((data, (1 << len(chunk)) - 1,
+                      base + 4 >= len(dwords), tuser(first_be, last_be)))
+    return beats
+
+
+async def settle(dut, cycles=64):
+    dut.s_axis_rq_tvalid.value = 0
+    for _ in range(cycles):
+        await RisingEdge(dut.clk_i)
+
+
+# ==========================================================================
+# T12 -- CfgRd0 on the wire
+# ==========================================================================
+@cocotb.test()
+async def test_t12_cfgrd0_on_wire(dut):
+    """T12: a CfgRd0 descriptor still produces DW0 = 0x01000004.
+
+    The Commit-1 golden, reached through the RQ descriptor path instead of the
+    raw command port.  fmt=000 (3DW no data), type=00100 (CFG0) -> dw0[7:0]=0x04;
+    length_dw=1 -> dw0[31:24]=0x01.
+    """
+    tx = await init(dut)
+    bus, dev, fn, reg, ext = 0x01, 0x02, 0x03, 0x06, 0x0
+    bdf = (bus << 8) | (dev << 3) | fn
+    dut.rq_tag_i.value = 0x00
+
+    await send(dut, [(rq_desc(RQ_CFG_READ0, 1, address=cfg_desc_address(reg, ext),
+                              completer_id=bdf, tag=0xA5),
+                      0xF, True, tuser(0xF, 0x0))])
+    await settle(dut)
+
+    assert tx.rq_errors == [], f"wrapper rejected a legal CfgRd0: {tx.rq_errors}"
+    assert len(tx.packets) == 1, f"expected 1 TLP, got {len(tx.packets)}"
+    p = tx.packets[0]
+    want = golden_dw0(FMT_3DW_NO_DATA, TYPE_CFG0, 1)
+    assert want == 0x01000004, "the hand-derived golden must be the Commit-1 one"
+    assert p[0] == want, f"DW0 {p[0]:#010x} != {want:#010x}"
+
+    f = dw1_fields(p[1])
+    assert f["rid"] == RID, "the TL supplies the Requester ID, not the descriptor"
+    assert f["first_be"] == 0xF and f["last_be"] == 0x0
+    assert p[2] == cfg_wire_dw2(bus, dev, fn, reg, ext), \
+        f"config DW2 {p[2]:#010x} != {cfg_wire_dw2(bus, dev, fn, reg, ext):#010x}"
+    assert len(p) == 3, f"a config read is 3 Dwords, got {len(p)}"
+    assert tx.command_errors == []
+
+
+# ==========================================================================
+# T13 -- CfgWr0 on the wire, with payload
+# ==========================================================================
+@cocotb.test()
+async def test_t13_cfgwr0_on_wire(dut):
+    """T13: a CfgWr0 descriptor still produces DW0 = 0x01000044 + its payload."""
+    tx = await init(dut)
+    bus, dev, fn, reg = 0x01, 0x02, 0x03, 0x06
+    bdf = (bus << 8) | (dev << 3) | fn
+    value = 0xDEADBEEF
+
+    tx.clear()
+    await send(dut, [(rq_desc(RQ_CFG_WRITE0, 1, address=cfg_desc_address(reg),
+                              completer_id=bdf),
+                      0xF, False, tuser(0xF, 0x0)),
+                     (value, 0x1, True, tuser(0xF, 0x0))])
+    await settle(dut)
+
+    assert tx.rq_errors == []
+    assert len(tx.packets) == 1, f"expected 1 TLP, got {len(tx.packets)}"
+    p = tx.packets[0]
+    want = golden_dw0(FMT_3DW_DATA, TYPE_CFG0, 1)
+    assert want == 0x01000044, "the hand-derived golden must be the Commit-1 one"
+    assert p[0] == want, f"DW0 {p[0]:#010x} != {want:#010x}"
+
+    f = dw1_fields(p[1])
+    assert f["first_be"] == 0xF and f["last_be"] == 0x0
+    assert p[2] == cfg_wire_dw2(bus, dev, fn, reg)
+    assert len(p) == 4, f"a config write is 4 Dwords, got {len(p)}"
+    assert p[3] == value, f"payload {p[3]:#010x} != {value:#010x}"
+    assert tx.command_errors == []
+
+
+# ==========================================================================
+# T14 -- byte-granular CfgWr0 at offset 0x19 (the Commit-2b gate)
+# ==========================================================================
+@cocotb.test()
+async def test_t14_byte_granular_cfgwr(dut):
+    """T14: a single-byte config write at 0x19 emits ONE TLP with first_be=0010.
+
+    Secondary Bus Number.  Before d5a4253 the TL refused this command outright
+    (TLP_ERR_BAD_LENGTH, zero packets); at byte_count=4 it split into two
+    spec-illegal config TLPs.  Both are gone: byte_count + address[1:0] <= 4 for
+    every admitted shape, so length_dw is 1 by construction and
+    calculate_segment cannot split (tlp_requester.sv:93-94, 125-126).
+    """
+    tx = await init(dut)
+    bus, dev, fn = 0x01, 0x00, 0x00
+    bdf = (bus << 8) | (dev << 3) | fn
+    reg = 0x18 >> 2                 # register number of config Dword 0x18
+    bus_number = 0x02
+
+    tx.clear()
+    # first_be=0010 selects byte 1 of Dword 0x18, i.e. config offset 0x19.
+    await send(dut, [(rq_desc(RQ_CFG_WRITE0, 1, address=cfg_desc_address(reg),
+                              completer_id=bdf),
+                      0xF, False, tuser(0x2, 0x0)),
+                     (bus_number << 8, 0x1, True, tuser(0x2, 0x0))])
+    await settle(dut)
+
+    assert tx.rq_errors == [], \
+        f"wrapper refused a byte-granular config write: {tx.rq_errors}"
+    assert len(tx.packets) == 1, \
+        f"expected exactly ONE TLP (no split), got {len(tx.packets)}"
+    p = tx.packets[0]
+    assert p[0] == golden_dw0(FMT_3DW_DATA, TYPE_CFG0, 1), f"DW0 {p[0]:#010x}"
+    assert dw0_length(p[0]) == 1, "config Length must be exactly 1 Dword"
+
+    f = dw1_fields(p[1])
+    assert f["first_be"] == 0b0010, f"first_be {f['first_be']:#06b} != 0010"
+    assert f["last_be"] == 0b0000, f"last_be {f['last_be']:#06b} != 0000"
+    assert p[2] == cfg_wire_dw2(bus, dev, fn, reg), \
+        "the byte offset must not corrupt the register number on the wire"
+    assert p[2] & 0x3 == 0, "the emitted config Dword's low bits are forced to 0"
+    assert len(p) == 4
+    # The payload byte must be realigned into lane 1 by the formatter.
+    assert (p[3] >> 8) & 0xFF == bus_number, \
+        f"payload {p[3]:#010x}: byte not placed in lane 1"
+    assert tx.command_errors == []
+
+
+# ==========================================================================
+# T15 -- multi-segment MemWr, zero command errors
+# ==========================================================================
+@cocotb.test()
+async def test_t15_multisegment_memwr(dut):
+    """T15: a 64-Dword MemWr across several MPS segments raises no TL error.
+
+    max_payload_bytes_i = 64 forces four segments, so command_data_last_o must
+    be compared against END OF REQUEST, not end of segment (tlp_requester.sv:
+    153-158).  Getting that wrong is exactly the 0277358 regression; the
+    wrapper now makes it unreachable by deriving last from the descriptor's
+    Dword Count.
+    """
+    tx = await init(dut, max_payload=64, max_read=64)
+    rng = random.Random(0x1515)
+    n = 64
+    dwords = [rng.randrange(1 << 32) for _ in range(n)]
+
+    tx.clear()
+    beats = [(rq_desc(RQ_MEM_WRITE, n, address=0x10000), 0xF, False,
+              tuser(0xF, 0xF))] + payload_beats(dwords, 0xF, 0xF)
+    await send(dut, beats)
+    await settle(dut, 400)
+
+    assert tx.rq_errors == [], f"wrapper errors {tx.rq_errors}"
+    assert tx.command_errors == [], \
+        f"command_error_valid_o pulsed {len(tx.command_errors)} times: {tx.command_errors}"
+    assert len(tx.packets) == 4, \
+        f"64 Dwords at MPS=64 B is 4 segments, got {len(tx.packets)}"
+
+    # Every segment is a 3DW MemWr header plus its payload, and the payload
+    # Dwords concatenate back to exactly what was sent, in order.
+    got = []
+    for p in tx.packets:
+        assert p[0] == golden_dw0(FMT_3DW_DATA, TYPE_MEM, 16), f"DW0 {p[0]:#010x}"
+        assert len(p) == 3 + 16, f"segment length {len(p)}"
+        got.extend(p[3:])
+    assert got == dwords, "payload differs from what the host wrote"
+
+    # And a second request straight afterwards still works.
+    tx.clear()
+    await send(dut, [(rq_desc(RQ_CFG_READ0, 1, address=cfg_desc_address(0x06),
+                              completer_id=0x0100),
+                      0xF, True, tuser(0xF, 0x0))])
+    await settle(dut)
+    assert len(tx.packets) == 1 and tx.command_errors == []
