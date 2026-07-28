@@ -50,6 +50,29 @@ def cfg_addr(bus, dev, fn, reg_byte_offset, ext_reg=0):
             | ((ext_reg & 0xF) << 8) | (reg_byte_offset & 0xFC))
 
 
+def init_flow_control(dut):
+    """Advertise "FC initialized, credits saturated" on tlp_layer's VC0 inputs.
+
+    The merged tlp_layer gates every TX packet on the credit manager:
+      tlp_layer.sv:249   vc_packet_ready = credit_request_ready && ...
+      tlp_credit_manager.sv:53  request_ready_o = fc_initialized_i &&
+                                selected_header_available && selected_data_available
+    The credit registers reset to zero (tlp_credit_manager.sv:67-73) and only
+    load on fc_update_valid_i, so a harness that leaves these at 0 never
+    transmits a single packet.  These targets exercise TL origination/tracking,
+    not flow control -- which has its own tb_tlp_credit_manager bench -- so the
+    credit pool is held saturated and must never be the limiter.
+    """
+    dut.fc_initialized_i.value = 1
+    dut.fc_update_valid_i.value = 1
+    dut.fc_ph_i.value = 0xFF
+    dut.fc_pd_i.value = 0xFFF
+    dut.fc_nph_i.value = 0xFF
+    dut.fc_npd_i.value = 0xFFF
+    dut.fc_cplh_i.value = 0xFF
+    dut.fc_cpld_i.value = 0xFFF
+
+
 async def init_top(dut):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     for handle in dut:
@@ -65,6 +88,7 @@ async def init_top(dut):
     dut.rst_i.value = 0
     dut.link_up_i.value = 1
     dut.transmit_enable_i.value = 1
+    init_flow_control(dut)
     dut.requester_id_i.value = RID
     dut.completer_id_i.value = 0x5678
     dut.memory_enable_i.value = 1
