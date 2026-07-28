@@ -180,10 +180,19 @@ module tlp_requester
       command_error_code_o <= TLP_ERR_NONE;
       unique case (state_r)
         REQ_IDLE: if (command_valid_i && command_ready_o) begin
+          // Config and IO requests must be exactly one DW long (PCIe Base 2.1
+          // SS2.2.7), but the spec constrains the Length field, not the byte
+          // enables: a single-byte config write with first_be=0010 is legal.
+          // So admit any request that fits inside the addressed DW -- i.e.
+          // byte_count <= 4 - address[1:0], with byte_count == 0 still
+          // rejected by the first clause below.  Every admitted shape then has
+          // byte_count + address[1:0] <= 4, so length_dw (:125-126) is 1 by
+          // construction, and calculate_segment's clamp to 4 - address[1:0]
+          // (:93-94) can no longer split the request across two config TLPs.
           if ((command_byte_count_i == 0 && command_i != TLP_CMD_MEM_READ) ||
               ((command_i == TLP_CMD_CFG_READ0 || command_i == TLP_CMD_CFG_WRITE0 ||
                 command_i == TLP_CMD_IO_READ || command_i == TLP_CMD_IO_WRITE) &&
-               command_byte_count_i != 4)) begin
+               command_byte_count_i > (13'd4 - {11'd0, command_address_i[1:0]}))) begin
             command_error_valid_o <= 1'b1;
             command_error_code_o <= TLP_ERR_BAD_LENGTH;
           end else begin
