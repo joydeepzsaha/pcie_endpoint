@@ -13,6 +13,8 @@
 //                                 addendum -- cited as such, not read from the
 //                                 PDF, which is still unavailable.
 //   Request Type encodings ...... PG213 v1.3, Table 57.
+//   RC descriptor field map ..... PG213 v1.3, Fig 56 / Table 65, via the
+//                                 addendum -- cited as such.
 //   Byte-enable rules ........... PCIe Base Spec 2.1 SS2.2.7.
 //
 // The byte-count arithmetic here is the wrapper's half of the contract with
@@ -96,6 +98,100 @@ package pcie_rq_rc_pkg;
     RQ_ERR_EARLY_LAST      = 4'd11, // tlast before the Dword Count was met
     RQ_ERR_MISSING_LAST    = 4'd12  // beats continue past the Dword Count
   } rq_error_e;
+
+  // -------------------------------------------------------------------------
+  // RC descriptor -- 96 b / 3 Dwords, PG213 v1.3 Table 65.
+  //
+  // Declared MSB-first for the same reason as rq_descriptor_t: the packed
+  // struct's bit numbering is literally the table's, so a field's position can
+  // be checked against the table by eye.
+  //
+  // Three Dwords into a four-Dword beat is deliberate. pcie_rc_if pushes
+  // desc[31:0], desc[63:32], desc[95:64], payload0, payload1, ... into
+  // pcie_axis_dw_upsize in that order and the gearbox's plain concatenation
+  // reproduces PG213's Dword-aligned layout -- beat 0 is
+  // {payload DW0, desc DW2, desc DW1, desc DW0} and every later beat is offset
+  // by one Dword. There is no rotation logic and no DESC_DW parameter anywhere;
+  // the gearbox stays descriptor-blind (pcie_axis_dw_upsize.sv:22-25).
+  // -------------------------------------------------------------------------
+  typedef struct packed {
+    logic        rsvd3;              // [95]
+    logic [2:0]  attr;               // [94:92] 92 No Snoop, 93 RO, 94 IDO
+    logic [2:0]  tc;                 // [91:89]
+    logic        rsvd2;              // [88]
+    logic [15:0] completer_id;       // [87:72]
+    logic [7:0]  tag;                // [71:64]
+    logic [15:0] requester_id;       // [63:48]
+    logic        rsvd1;              // [47]
+    logic        poisoned;           // [46]
+    logic [2:0]  completion_status;  // [45:43] rc_cpl_status_e
+    logic [10:0] dword_count;        // [42:32] payload Dwords IN THIS packet
+    logic        rsvd0;              // [31]
+    logic        request_completed;  // [30]    last CPL of the REQUEST
+    logic        locked_read;        // [29]
+    logic [12:0] byte_count;         // [28:16] remaining, including this CPL
+    logic [3:0]  error_code;         // [15:12] rc_desc_error_e
+    logic [11:0] lower_address;      // [11:0]
+  } rc_descriptor_t;
+
+  // -------------------------------------------------------------------------
+  // Completion Status, RC descriptor [45:43].
+  //
+  // Bit-identical to tlp_pkg::tlp_cpl_status_e (tlp_pkg.sv:36-41) and to the
+  // PCIe CPL header's Completion Status field, so pcie_rc_if forwards the
+  // parsed header's field verbatim with no recoding. Minted here anyway because
+  // the RC surface owns its own descriptor field types -- the same rule that
+  // keeps rq_req_type_e out of tlp_pkg -- and because a reader checking the
+  // descriptor against Table 65 should find the encoding named next to the
+  // struct rather than one package away.
+  //
+  // CRS (010) is NOT an oddity to be folded into "some error": an NVMe device
+  // may legally answer early Configuration reads with CRS, and Commit 2b's
+  // enumeration FSM has to see it to know to retry. It is carried faithfully.
+  // -------------------------------------------------------------------------
+  typedef enum logic [2:0] {
+    RC_CPL_SC  = 3'b000,  // Successful Completion
+    RC_CPL_UR  = 3'b001,  // Unsupported Request
+    RC_CPL_CRS = 3'b010,  // Configuration Request Retry Status
+    RC_CPL_CA  = 3'b100   // Completer Abort
+  } rc_cpl_status_e;
+
+  // -------------------------------------------------------------------------
+  // Error Code, RC descriptor [15:12], PG213 v1.3 Table 65.
+  //
+  // RC_DESC_ERR_BAD_LENGTH IS UNREACHABLE THROUGH tlp_layer, by construction
+  // rather than by omission -- see the KNOWN_GAPS block in pcie_rc_if.sv. The
+  // request tracker refuses to produce a result at all for a completion with no
+  // data when data was expected, or with a byte count that overruns what is
+  // outstanding (tlp_request_tracker.sv:127-135): it raises unexpected_r and
+  // reports TLP_ERR_COMPLETION_OVERFLOW on completion_error_code_o instead. A
+  // completion that would earn Error Code 0011 therefore never becomes an RC
+  // packet. The encoding is named so the field is total and so the standalone
+  // bench can drive the condition directly.
+  // -------------------------------------------------------------------------
+  typedef enum logic [3:0] {
+    RC_DESC_ERR_NORMAL     = 4'b0000,  // no error
+    RC_DESC_ERR_POISONED   = 4'b0001,  // the CPL was poisoned (EP set)
+    RC_DESC_ERR_BAD_STATUS = 4'b0010,  // terminated by UR / CA / CRS
+    RC_DESC_ERR_BAD_LENGTH = 4'b0011   // no data, or byte count overrun
+  } rc_desc_error_e;
+
+  // -------------------------------------------------------------------------
+  // Why pcie_rc_if flagged the completion stream. Reported on rc_error_code_o
+  // alongside the one-cycle rc_protocol_error_o pulse; the counterpart of
+  // rq_error_e on the requester side. RC_ERR_NONE is never presented with the
+  // pulse asserted.
+  //
+  // These describe the TL-facing PAYLOAD stream, not the completion itself: a
+  // malformed completion is the tracker's business and arrives on
+  // rc_unexpected_completion_o / rc_completion_error_code_o instead.
+  // -------------------------------------------------------------------------
+  typedef enum logic [3:0] {
+    RC_ERR_NONE         = 4'd0,
+    RC_ERR_EARLY_LAST   = 4'd1,  // payload ended before the header's Dword Count
+    RC_ERR_MISSING_LAST = 4'd2,  // payload beats continued past the Dword Count
+    RC_ERR_ORPHAN_DATA  = 4'd3   // payload with no result behind it -- drained
+  } rc_error_e;
 
   // -------------------------------------------------------------------------
   // Byte-enable arithmetic

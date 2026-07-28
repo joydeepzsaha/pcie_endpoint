@@ -9,8 +9,11 @@ description: >
   here -- tlp_pkg stays untouched) and pcie_rq_if, the Requester Request slave.
   From 2a-i on this core depends on ::tlp_core, because pcie_rq_if drives the
   TL's tlp_cmd_e command port and reuses tlp_pkg's byte-enable functions to
-  check that the byte enables it forwards are ones the TL can reproduce.
-  pcie_rc_if (2a-ii) is not here yet.
+  check that the byte enables it forwards are ones the TL can reproduce. 2a-ii
+  adds pcie_rc_if, the Requester Completion master: it registers the parsed
+  completion header into alignment with the request tracker's one-cycle-later
+  result digest, builds the 96-bit RC descriptor, and streams it ahead of the
+  payload through pcie_axis_dw_upsize.
 
 filesets:
   rtl:
@@ -22,6 +25,7 @@ filesets:
       - pcie_axis_dw_upsize.sv
       - pcie_rq_rc_pkg.sv
       - pcie_rq_if.sv
+      - pcie_rc_if.sv
     file_type: systemVerilogSource
 
 targets:

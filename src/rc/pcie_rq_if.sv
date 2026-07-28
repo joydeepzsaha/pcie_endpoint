@@ -336,6 +336,7 @@ module pcie_rq_if
   logic [63:0] addr_r;
   logic [12:0] bc_r;
   logic [2:0]  tc_r, attr_r;
+  logic        mem_read_r;   // context[12]: addr_r[11:0] is a real byte address
   logic [10:0] n_r;          // descriptor Dword Count
   logic [3:0]  first_be_r, last_be_r;
   logic [11:0] dw_rem_r;     // payload Dwords not yet handed to the gearbox
@@ -427,7 +428,22 @@ module pcie_rq_if
   // Echoed back on the completion so pcie_rc_if (2a-ii) can rebuild the RC
   // descriptor's Lower Address [11:7], which the parsed header only carries
   // down to [6:0] (tlp_parser.sv:188).
-  assign command_context_o      = {{(CONTEXT_WIDTH-12){1'b0}}, addr_r[11:0]};
+  //
+  // [11:0] is the request's address[11:0]; [12] says whether those bits are a
+  // BYTE ADDRESS at all. They are only for Memory Reads: PCIe defines Lower
+  // Address solely for Memory Read Completions and every other completion
+  // carries 0 (the same rule tlp_layer.sv:371-378 applies when it seeds the
+  // tracker), and a Configuration request's addr_r is a
+  // {BDF, ExtReg, Register#, offset} Dword rather than a byte address, so
+  // echoing its [11:7] into a Lower Address would be inventing a value. This
+  // bit is what lets pcie_rc_if drive Lower Address [11:7] from the echo for a
+  // memory read and hard 0 for everything else without guessing.
+  //
+  // Posted memory writes never produce a completion, so [12] is set for
+  // TLP_CMD_MEM_READ only -- the one command whose completion has a Lower
+  // Address the RC descriptor must reproduce.
+  assign command_context_o      = {{(CONTEXT_WIDTH-13){1'b0}}, mem_read_r,
+                                   addr_r[11:0]};
   assign command_prefix_valid_o = 1'b0;   // TLP prefixes out of scope
   assign command_prefix_o       = 32'd0;
   assign command_ecrc_enable_o  = 1'b0;   // the TL computes ECRC itself
@@ -459,6 +475,7 @@ module pcie_rq_if
       bc_r                <= '0;
       tc_r                <= '0;
       attr_r              <= '0;
+      mem_read_r          <= 1'b0;
       n_r                 <= 11'd1;
       first_be_r          <= 4'h0;
       last_be_r           <= 4'h0;
@@ -504,6 +521,7 @@ module pcie_rq_if
             bc_r          <= desc_bc;
             tc_r          <= desc.tc;
             attr_r        <= desc.attr;
+            mem_read_r    <= desc_cmd == TLP_CMD_MEM_READ;
             n_r           <= desc_n;
             first_be_r    <= desc_first_be;
             last_be_r     <= desc_last_be;

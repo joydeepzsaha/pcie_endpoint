@@ -46,6 +46,19 @@ filesets:
     files:
       - test_pcie_rq_if_tlp.py : {file_type : user, copyto : .}
 
+  # 2a-ii: pcie_rc_if standalone -- the bench plays tlp_layer's received-
+  # completion surface, including the one-cycle offset between the
+  # combinational header and the registered tracker result. That offset is the
+  # whole subject of U10 and cannot be reproduced with the TL in the loop.
+  bench_rc_if:
+    files:
+      - tb_pcie_rc_if.sv
+    file_type: systemVerilogSource
+
+  cocotb_rc_if:
+    files:
+      - test_pcie_rc_if.py : {file_type : user, copyto : .}
+
 targets:
   # 2a-0: pcie_axis_dw_downsize / pcie_axis_dw_upsize, G1..G10.
   verilate_axis_gearbox:
@@ -89,3 +102,17 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_rq_if_tlp, cocotb_rq_if_tlp]
     toplevel : [tb_pcie_rq_if_tlp]
+
+  # 2a-ii: pcie_rc_if standalone, U1..U11.
+  verilate_rc_if:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_rc_if
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_rc_if, cocotb_rc_if]
+    toplevel : [tb_pcie_rc_if]
