@@ -1,9 +1,0 @@
-<testsuites name="results">
-  <testsuite name="all" package="all">
-    <property name="random_seed" value="1785200063" />
-    <testcase name="all_request_families_and_header_formats" classname="test_tlp_end_to_end" file="/home/sahajoyd/Desktop/PCIE_All/pcie_datalink_layer/tb/tlp/test_tlp_end_to_end.py" lineno="322" time="0.18708086013793945" sim_time_ns="1360.002" ratio_time="7269.59454322177" />
-    <testcase name="prefix_ecrc_alignment_maximum_and_segmentation" classname="test_tlp_end_to_end" file="/home/sahajoyd/Desktop/PCIE_All/pcie_datalink_layer/tb/tlp/test_tlp_end_to_end.py" lineno="372" time="0.6113982200622559" sim_time_ns="21160.001" ratio_time="34609.19627447619" />
-    <testcase name="request_to_completion_to_tag_retirement" classname="test_tlp_end_to_end" file="/home/sahajoyd/Desktop/PCIE_All/pcie_datalink_layer/tb/tlp/test_tlp_end_to_end.py" lineno="436" time="0.017170429229736328" sim_time_ns="540.0020000000004" ratio_time="31449.53412491324" />
-    <testcase name="malformed_protocol_timing_ecrc_and_recovery" classname="test_tlp_end_to_end" file="/home/sahajoyd/Desktop/PCIE_All/pcie_datalink_layer/tb/tlp/test_tlp_end_to_end.py" lineno="490" time="0.022877216339111328" sim_time_ns="620.0020000000004" ratio_time="27101.286747900052" />
-  </testsuite>
-</testsuites>
