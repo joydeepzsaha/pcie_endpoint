@@ -28,11 +28,11 @@ TYPE_CPL = 0b01010
 TYPE_SWAP = 0b01101       # AtomicOp -- present in enum, not classified -> unsupported
 
 
-async def classify(dut, fmt, typ, length_dw=1):
+async def classify(dut, fmt, typ, length_dw=1, address=0):
     dut.fmt.value = fmt
     dut.tlp_type.value = typ
     dut.length_dw.value = length_dw
-    dut.address.value = 0
+    dut.address.value = address
     dut.memory_enable.value = 1
     dut.address_low.value = 0
     dut.byte_length.value = 4
@@ -62,7 +62,10 @@ async def mem_write_posted(dut):
 
 @cocotb.test()
 async def mem64_read_non_posted(dut):
-    r = await classify(dut, FMT_4DW_NO_DATA, TYPE_MEM)
+    # PCIe Base 2.2.4.1: a request below 4GB must use the 32-bit (3DW) format, so
+    # a 4DW header with address[63:32]==0 is a Malformed TLP and tlp_validator.sv
+    # :39-41 rightly rejects it.  A genuine 64-bit MemRd carries a >4GB address.
+    r = await classify(dut, FMT_4DW_NO_DATA, TYPE_MEM, address=0x1_0000_0000)
     assert r["cls"] == NON_POSTED and r["mem"] and r["rd"], r
 
 
