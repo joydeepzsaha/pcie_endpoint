@@ -2,9 +2,13 @@ CAPI=2:
 name: fusesoc:pcie:tb_rc:1.0.0
 description: >
   Verilator+cocotb benches for the RC-owned RTL (Commit 2a). 2a-0 covers the
-  descriptor-agnostic AXI-Stream width gearboxes standalone -- no Transaction
-  Layer in the loop, so no FC-credit initialisation is required here (that
-  starts at 2a-i, where tlp_layer gates all TX on the credit manager).
+  descriptor-agnostic AXI-Stream width gearboxes standalone. 2a-i covers
+  pcie_rq_if twice: verilate_rq_if drives its command port from the bench, and
+  verilate_rq_if_tlp puts a real tlp_layer behind it to check the on-wire TLPs.
+  Only the latter needs FC-credit initialisation -- tlp_layer emits zero packets
+  and no error until link_up_i, transmit_enable_i, fc_initialized_i and one
+  fc_update_valid_i pulse with non-zero credits are all present
+  (tlp_layer.sv:249, tlp_credit_manager.sv:53-54).
 
 filesets:
   rtl:
@@ -22,6 +26,16 @@ filesets:
     files:
       - test_axis_dw_gearbox.py : {file_type : user, copyto : .}
 
+  # 2a-i: pcie_rq_if standalone -- the bench plays tlp_requester's command port.
+  bench_rq_if:
+    files:
+      - tb_pcie_rq_if.sv
+    file_type: systemVerilogSource
+
+  cocotb_rq_if:
+    files:
+      - test_pcie_rq_if.py : {file_type : user, copyto : .}
+
 targets:
   # 2a-0: pcie_axis_dw_downsize / pcie_axis_dw_upsize, G1..G10.
   verilate_axis_gearbox:
@@ -36,3 +50,17 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_axis_gearbox, cocotb_axis_gearbox]
     toplevel : [tb_pcie_axis_gearbox]
+
+  # 2a-i: pcie_rq_if standalone, T1..T11.
+  verilate_rq_if:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_rq_if
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_rq_if, cocotb_rq_if]
+    toplevel : [tb_pcie_rq_if]
