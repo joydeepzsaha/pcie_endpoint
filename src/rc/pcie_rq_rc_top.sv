@@ -103,20 +103,21 @@
 //
 // From this level (2a-iii):
 //
-//  * NO COMPLETION TIMEOUT ANYWHERE. Neither tlp_request_tracker nor tlp_layer
-//    nor tlp_requester contains a timer, a counter or an expiry path -- a tag
-//    is freed only by a matching completion arriving (tlp_request_tracker.sv:
-//    123-155) or by reset. A request to a device that never answers holds its
-//    tag FOREVER, outstanding_o never returns to 0, and after TAG_COUNT such
-//    requests the requester stalls in REQ_TAG with no tag available and
-//    s_axis_rq_tready stays low. There is no error output for this.
-//    PCIe Base 2.1 SS2.8 makes the Completion Timeout mechanism the requester's
-//    responsibility. Commit 2b MUST implement one: enumeration probes absent
-//    devices constantly and every unanswered probe is a permanently lost tag.
-//    Deliberately not built here -- it needs a policy (timeout value, what to
-//    do with the tag, how to report it) that belongs with the FSM that has the
-//    context to choose it, and building it here would mean modifying
-//    src/tlp/, which this commit does not do.
+//  * RESOLVED (post-2a-iii): COMPLETION TIMEOUT now exists. It lives in
+//    tlp_request_tracker.sv (see that module's header for the policy and the
+//    PCIe Base 2.1 SS2.8 / SS7.8.16 citations) and surfaces here as
+//    cpl_timeout_valid_o / cpl_timeout_tag_o and late_cpl_valid_o /
+//    late_cpl_tag_o. A timed-out tag is QUARANTINED, not recycled: it stops
+//    being allocatable, silently drains any late completion, and returns to
+//    the pool on that late completion's last CPL or after a second timeout
+//    interval. outstanding_o counts quarantined tags.
+//    Residual gap: CPL_TIMEOUT_CYCLES defaults to 4096 cycles, which is a
+//    simulation convenience roughly two orders of magnitude below the 10 ms
+//    the spec recommends. A real value, and the Device Control 2 register that
+//    would program it (SS7.8.16 bits 3:0 and bit 4), are Stage-H work.
+//    Also not built: a PG213-style SYNTHESIZED ERROR COMPLETION on m_axis_rc
+//    for a timed-out request. A client learns of the failure from the strobe,
+//    not from a descriptor. Deliberate -- see the tracker header.
 //
 //  * CQ/CC tied off -- see above.
 //
@@ -178,7 +179,9 @@ module pcie_rq_rc_top
     parameter int TL_KEEP_WIDTH   = TL_DATA_WIDTH / 8,
     parameter int TL_USER_WIDTH   = 3,
     parameter int CONTEXT_WIDTH   = 16,
-    parameter int TAG_COUNT       = 32
+    parameter int TAG_COUNT       = 32,
+    // Completion Timeout; 0 disables. See tlp_request_tracker.sv header.
+    parameter int unsigned CPL_TIMEOUT_CYCLES = 32'd4096
 ) (
     input  logic                        clk_i,
     input  logic                        rst_i,
@@ -282,9 +285,23 @@ module pcie_rq_rc_top
     output logic                        tx_fc_blocked_o,
     output logic                        credit_error_o,
     output logic                        vc_overflow_o,
-    // Non-posted requests currently holding a tag. Returns to 0 when every
-    // outstanding request has been answered -- and, absent a completion
-    // timeout, only then. See KNOWN_GAPS.
+    // ---- Completion Timeout surface (tlp_request_tracker) ------------------
+    // One-cycle strobes with the tag valid in the same cycle, correlated
+    // against the earlier pcie_rq_tag_o / pcie_rq_tag_vld_o allocation strobe.
+    // cpl_timeout_*: a non-posted request was never answered; its tag is now
+    // quarantined and the request has FAILED. late_cpl_*: a completion arrived
+    // for an already-timed-out tag and was drained -- no RC packet accompanies
+    // it. Both exist for the Commit 2b enumeration FSM, which probes absent
+    // devices constantly and cannot free a tag it did not allocate.
+    output logic                        cpl_timeout_valid_o,
+    output logic [7:0]                  cpl_timeout_tag_o,
+    output logic                        late_cpl_valid_o,
+    output logic [7:0]                  late_cpl_tag_o,
+
+    // Non-posted requests currently holding a tag, INCLUDING tags quarantined
+    // by a completion timeout -- a quarantined tag is still unallocatable.
+    // Returns to 0 when every outstanding request has been answered or has
+    // timed out and been released.
     output logic [$clog2(TAG_COUNT+1)-1:0] outstanding_o
 );
 
@@ -396,7 +413,8 @@ module pcie_rq_rc_top
       .KEEP_WIDTH   (TL_KEEP_WIDTH),
       .USER_WIDTH   (TL_USER_WIDTH),
       .TAG_COUNT    (TAG_COUNT),
-      .CONTEXT_WIDTH(CONTEXT_WIDTH)
+      .CONTEXT_WIDTH(CONTEXT_WIDTH),
+      .CPL_TIMEOUT_CYCLES(CPL_TIMEOUT_CYCLES)
   ) u_tlp_layer (
       .clk_i(clk_i),
       .rst_i(rst_i),
@@ -517,6 +535,10 @@ module pcie_rq_rc_top
       .vc_overflow_o          (vc_overflow_o),
       .unexpected_completion_o(unexpected_completion),
       .completion_error_code_o(completion_error_code),
+      .cpl_timeout_valid_o    (cpl_timeout_valid_o),
+      .cpl_timeout_tag_o      (cpl_timeout_tag_o),
+      .late_cpl_valid_o       (late_cpl_valid_o),
+      .late_cpl_tag_o         (late_cpl_tag_o),
       .outstanding_o          (outstanding_o)
   );
 

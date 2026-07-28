@@ -112,6 +112,10 @@ module tb_pcie_rc_if_tlp
   logic tx_fc_blocked_o;
   logic credit_error_o;
   logic unexpected_completion_o;
+  logic       cpl_timeout_valid_o;
+  logic [7:0] cpl_timeout_tag_o;
+  logic       late_cpl_valid_o;
+  logic [7:0] late_cpl_tag_o;
   logic [$clog2(TAG_COUNT+1)-1:0] outstanding_o;
 
   // ---- wrapper <-> TL command port ----------------------------------------
@@ -300,6 +304,8 @@ module tb_pcie_rc_if_tlp
       .credit_error_o(credit_error_o),
       .vc_overflow_o(),
       .unexpected_completion_o(unexpected_completion_o),
+      .cpl_timeout_valid_o(cpl_timeout_valid_o), .cpl_timeout_tag_o(cpl_timeout_tag_o),
+      .late_cpl_valid_o(late_cpl_valid_o), .late_cpl_tag_o(late_cpl_tag_o),
       .completion_error_code_o(completion_error_code),
       .outstanding_o(outstanding_o)
   );

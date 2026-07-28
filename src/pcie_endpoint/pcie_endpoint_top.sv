@@ -10,6 +10,8 @@ module pcie_endpoint_top
     parameter int USER_WIDTH = 3,
     parameter int TAG_COUNT = 32,
     parameter int CONTEXT_WIDTH = 16,
+    // Completion Timeout; 0 disables. See tlp_request_tracker.sv header.
+    parameter int unsigned CPL_TIMEOUT_CYCLES = 32'd4096,
     parameter int VC_PACKET_DEPTH = 4,
     parameter int BAR_COUNT = 2,
     parameter logic [BAR_COUNT*64-1:0] BAR_BASE = '0,
@@ -139,6 +141,11 @@ module pcie_endpoint_top
     output logic                     vc_overflow_o,
     output logic                     unexpected_completion_o,
     output tlp_error_e               completion_error_code_o,
+    // Completion Timeout sideband. See tlp_request_tracker.sv header.
+    output logic                     cpl_timeout_valid_o,
+    output logic [7:0]               cpl_timeout_tag_o,
+    output logic                     late_cpl_valid_o,
+    output logic [7:0]               late_cpl_tag_o,
     output logic [$clog2(TAG_COUNT+1)-1:0] outstanding_o
 );
 
@@ -168,6 +175,7 @@ module pcie_endpoint_top
       .USER_WIDTH(USER_WIDTH),
       .TAG_COUNT(TAG_COUNT),
       .CONTEXT_WIDTH(CONTEXT_WIDTH),
+      .CPL_TIMEOUT_CYCLES(CPL_TIMEOUT_CYCLES),
       .VC_PACKET_DEPTH(VC_PACKET_DEPTH),
       .PCIE_WIRE_ORDER(1'b1),
       .BAR_COUNT(BAR_COUNT),
@@ -284,6 +292,8 @@ module pcie_endpoint_top
       .vc_overflow_o(vc_overflow_o),
       .unexpected_completion_o(unexpected_completion_o),
       .completion_error_code_o(completion_error_code_o),
+      .cpl_timeout_valid_o(cpl_timeout_valid_o), .cpl_timeout_tag_o(cpl_timeout_tag_o),
+      .late_cpl_valid_o(late_cpl_valid_o), .late_cpl_tag_o(late_cpl_tag_o),
       .outstanding_o(outstanding_o)
   );
 

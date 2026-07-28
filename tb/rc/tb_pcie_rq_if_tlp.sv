@@ -241,7 +241,10 @@ module tb_pcie_rq_if_tlp
       .tx_fc_blocked_o(tx_fc_blocked_o),
       .credit_error_o(credit_error_o),
       .vc_overflow_o(), .unexpected_completion_o(),
-      .completion_error_code_o(), .outstanding_o()
+      .completion_error_code_o(),
+      .cpl_timeout_valid_o(), .cpl_timeout_tag_o(),
+      .late_cpl_valid_o(), .late_cpl_tag_o(),
+      .outstanding_o()
   );
 
 endmodule

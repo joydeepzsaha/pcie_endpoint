@@ -7,6 +7,8 @@ module tlp_layer
     parameter int USER_WIDTH = 3,
     parameter int TAG_COUNT = 32,
     parameter int CONTEXT_WIDTH = 16,
+    // Completion Timeout; 0 disables. See tlp_request_tracker.sv header.
+    parameter int unsigned CPL_TIMEOUT_CYCLES = 32'd4096,
     parameter int VC_PACKET_DEPTH = 4,
     parameter bit PCIE_WIRE_ORDER = 1'b0,
     parameter int BAR_COUNT = 2,
@@ -147,6 +149,11 @@ module tlp_layer
     output logic                     vc_overflow_o,
     output logic                     unexpected_completion_o,
     output tlp_error_e               completion_error_code_o,
+    // Completion Timeout sideband, raised straight out of the tracker.
+    output logic                     cpl_timeout_valid_o,
+    output logic [7:0]               cpl_timeout_tag_o,
+    output logic                     late_cpl_valid_o,
+    output logic [7:0]               late_cpl_tag_o,
     output logic [$clog2(TAG_COUNT+1)-1:0] outstanding_o
 );
 
@@ -363,7 +370,8 @@ module tlp_layer
   );
 
   tlp_request_tracker #(
-      .TAG_COUNT(TAG_COUNT), .CONTEXT_WIDTH(CONTEXT_WIDTH)
+      .TAG_COUNT(TAG_COUNT), .CONTEXT_WIDTH(CONTEXT_WIDTH),
+      .CPL_TIMEOUT_CYCLES(CPL_TIMEOUT_CYCLES)
   ) tracker_inst (
       .clk_i(clk_i), .rst_i(layer_reset), .extended_tag_enable_i(extended_tag_enable_i),
       .allocate_valid_i(tag_valid), .allocate_ready_o(tag_ready),
@@ -385,6 +393,8 @@ module tlp_layer
       .result_context_o(result_context_o), .result_status_o(result_status_o),
       .result_last_o(result_last_o), .unexpected_completion_o(unexpected_completion_o),
       .completion_error_code_o(completion_error_code_o),
+      .cpl_timeout_valid_o(cpl_timeout_valid_o), .cpl_timeout_tag_o(cpl_timeout_tag_o),
+      .late_cpl_valid_o(late_cpl_valid_o), .late_cpl_tag_o(late_cpl_tag_o),
       .outstanding_o(outstanding_o)
   );
 

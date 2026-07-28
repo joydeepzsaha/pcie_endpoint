@@ -132,6 +132,10 @@ module tb_pcie_rq_rc_top
   logic credit_error_o;
   logic vc_overflow_o;
 
+  logic       cpl_timeout_valid_o;
+  logic [7:0] cpl_timeout_tag_o;
+  logic       late_cpl_valid_o;
+  logic [7:0] late_cpl_tag_o;
   logic [$clog2(TAG_COUNT+1)-1:0] outstanding_o;
 
   pcie_rq_rc_top #(
@@ -217,6 +221,10 @@ module tb_pcie_rq_rc_top
       .tx_fc_blocked_o      (tx_fc_blocked_o),
       .credit_error_o       (credit_error_o),
       .vc_overflow_o        (vc_overflow_o),
+      .cpl_timeout_valid_o  (cpl_timeout_valid_o),
+      .cpl_timeout_tag_o    (cpl_timeout_tag_o),
+      .late_cpl_valid_o     (late_cpl_valid_o),
+      .late_cpl_tag_o       (late_cpl_tag_o),
       .outstanding_o        (outstanding_o)
   );
 
