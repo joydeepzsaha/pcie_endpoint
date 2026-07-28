@@ -6,23 +6,28 @@ Every load-bearing answer is a quoted `file:line`. Inferences are marked as such
 > 🔁 **RE-ANCHORED 2026-07-28 (Phase B) against `50542d1`.** Every `file:line` below was written
 > against the pre-merge tree (`f3160d0`) and has been re-verified post-merge. Anchors are
 > corrected in place and each finding carries a **CONFIRMED / MOVED / INVALIDATED** tag.
-> **One headline claim is INVALIDATED — see §B.3.** Full status table: **§P (Phase-B re-anchor)**
-> at the end of this file.
+> Full status table: **§P (Phase-B re-anchor)** at the end of this file.
 
-> **Headline (as written 2026-07-27; ⚠️ amended by §P):** The TL command port is a clean landing
-> surface for the RQ wrapper. The
+> ✅ **CORRECTION 2026-07-28 (later the same day, post-`d5a4253`) — read this before anything else.**
+> Phase B's headline "byte-granular config is no longer expressible" was written against the
+> merge-era admission guard. **`d5a4253` ("tlp_requester: admit any config/IO request that fits
+> inside one DW") removed it**, and `67220b5` locked the replacement admission matrix in the TL
+> testbench. Admission is now **`byte_count <= 4 − address[1:0]`**, not `byte_count == 4`.
+> ⇒ **byte-granular config IS expressible; R1 holds on all paths; T5 is REOPEN; no stop-and-report
+> trigger stands.** Sections corrected: **§A.2 (rule 2), §B.3 (reinstated), §B.3a (superseded),
+> §B.4 (bullet withdrawn), §P (B1 row + narrative), §Q.** The struck-through merge-era text is
+> retained throughout for the record — **do not act on it.**
+
+> **Headline (as written 2026-07-27; amended by §P, then restored by the correction above):**
+> The TL command port is a clean landing surface for the RQ wrapper. The
 > §4.3 byte-enable collision **resolves to R1 (byte-offset semantics)** and byte-granular
-> config access ~~**is expressible today**~~ **is NO LONGER expressible** (⛔ INVALIDATED — the
-> merged requester rejects any CFG/IO command whose `command_byte_count_i != 4`,
-> `tlp_requester.sv:183-188`; R1 survives **only on the memory path**) — the generator masks the
-> emitted config DW's low
+> config access **is expressible today** — the generator masks the emitted config DW's low
 > two bits, so the byte offset in `command_address[1:0]` drives the BE and payload
 > alignment without corrupting the register number. The RC gap is **much smaller than v2
 > feared**: `tlp_layer` exposes the *entire* parsed completion header (`received_completion_header_o`,
 > a full `tlp_header_t`) plus a separate DW-serial payload stream — not just the tracker's
 > digested `result_*`. RC bit 30 (`Request Completed`) is available as `result_last_o`.
-> No `src/tlp/` change is required. ~~**No stop-and-report trigger fired.**~~ **A stop-and-report
-> trigger HAS now fired (T5 / §4.3 config granularity) — see §P.**
+> No `src/tlp/` change is required. **No stop-and-report trigger fired.**
 
 ---
 
@@ -90,12 +95,16 @@ fc_cplh_i/fc_cpld_i` (`tlp_layer.sv:31-38`). TX is gated on
   (~~`:174`~~ → **`:155`**), i.e. **end-of-whole-request**, not per-segment. Mismatch → `command_error_valid_o`
   pulse (~~`:242-243`~~ → **`:227-231`**, code `TLP_ERR_LOCAL_PAYLOAD`); early last → abort to `REQ_IDLE`
   (~~`:244-248`~~ → **`:232-236`**).
-- ⛔ **NEW (merge-added, `tlp_requester.sv:183-188`) — a command-admission guard that did not exist
-  pre-merge.** Before latching anything, the FSM rejects the command outright
-  (`command_error_valid_o` + `TLP_ERR_BAD_LENGTH`, **no TLP emitted**, stays in `REQ_IDLE`) when:
+- **NEW (merge-added, then relaxed by `d5a4253`; now `tlp_requester.sv:183-199`) — a
+  command-admission guard that did not exist pre-merge.** Before latching anything, the FSM
+  rejects the command outright (`command_error_valid_o` + `TLP_ERR_BAD_LENGTH`, **no TLP emitted**,
+  stays in `REQ_IDLE`) when:
   1. `command_byte_count_i == 0` and the command is not `TLP_CMD_MEM_READ`; **or**
-  2. the command is `CFG_READ0`/`CFG_WRITE0`/`IO_READ`/`IO_WRITE` and `command_byte_count_i != 4`.
-  Rule 2 is what invalidates §B.3 — see there.
+  2. the command is `CFG_READ0`/`CFG_WRITE0`/`IO_READ`/`IO_WRITE` and
+     ~~`command_byte_count_i != 4`~~ → ✅ **`command_byte_count_i > (4 − command_address_i[1:0])`**
+     (corrected 2026-07-28, `d5a4253`).
+  Rule 2 as originally written is what invalidated §B.3; **in its current form it does not** — §B.3
+  is reinstated. This is the wrapper's config/IO fit check verbatim.
 
 ### A.3 `tlp_cmd_e` members (Q3) — **B2: CONFIRMED verbatim** (2026-07-28)
 `tlp_pkg.sv:43-50`: `MEM_READ=0, MEM_WRITE=1, CFG_READ0=2, CFG_WRITE0=3, IO_READ=4, IO_WRITE=5`.
@@ -183,74 +192,93 @@ And the register number lives in `address[7:2]`, **disjoint** from the byte offs
 case (whole-DW access, `first_be=1111`), **not** a hard constraint. v1's §4.3 (pin `[1:0]=00`) was
 wrong; the wrapper must drive `command_address[1:0] = byte offset`.
 
-### B.3 ~~Byte-granular config IS expressible (Q7) — the T5 gate is OPEN~~ — ⛔ **INVALIDATED 2026-07-28**
+### B.3 Byte-granular config IS expressible (Q7) — the T5 gate is OPEN — ✅ **REINSTATED 2026-07-28 (post-`d5a4253`)**
 
-> **SUPERSEDED TEXT — retained for the record, DO NOT act on it.** The reasoning below is still
-> arithmetically correct about the BE functions; what changed is that the merged requester now
-> **refuses to accept the command in the first place**. See §B.3a for the current truth.
+> **This section is LIVE again.** It was struck through earlier the same day against the merge-era
+> admission guard; `d5a4253` ("tlp_requester: admit any config/IO request that fits inside one DW")
+> removed that guard's `byte_count == 4` requirement, and `67220b5` locked the new admission matrix
+> in the TL testbench. The reasoning below was never arithmetically wrong — the TL simply refused
+> the command. It no longer does. **See §B.3a for the current-truth guard text.**
 
-> ~~To write **Secondary Bus Number at config offset `0x19`** (`first_be=4'b0010`):~~
-> - ~~`command_address[7:2]` = Reg# = `0x18>>2 = 0x06`; `command_address[1:0] = 2'b01` (byte offset 1);
->   `command_byte_count_i = 1`.~~
-> - ~~⇒ `tlp_first_be(2'b01, 13'd1) = 4'b0010` (`tlp_pkg.sv:100-103`, lane∈[1,2)).~~
-> - ~~⇒ `length_dw = (1 + 1 + 3) >> 2 = 1` (`tlp_requester.sv:144`). Config DwordCount = 1. ✔~~
-> - ~~⇒ emitted config DW = `{address[31:2], 2'b00}` — register number intact, `[1:0]=00` on the wire. ✔~~
-> - ~~⇒ payload realigned to the same offset: `payload_offset = header_r.address[1:0]` feeds the
->   payload formatter (`tlp_generator.sv:79, 179`), so the single write byte lands in lane 1. ✔~~
->
-> ~~The byte offset coherently drives **BE + payload alignment + a zeroed on-wire DW**. **T5 is
-> achievable; Commit 2b's bus-number assignment is unblocked.** No stop trigger.~~
+To write **Secondary Bus Number at config offset `0x19`** (`first_be=4'b0010`):
+- `command_address[7:2]` = Reg# = `0x18>>2 = 0x06`; `command_address[1:0] = 2'b01` (byte offset 1);
+  `command_byte_count_i = 1`.
+- ⇒ `tlp_first_be(2'b01, 13'd1) = 4'b0010` (~~`tlp_pkg.sv:100-103`~~ → **`tlp_pkg.sv:165-180`**, lane∈[1,2)).
+- ⇒ `length_dw = 1` (~~`tlp_requester.sv:144`~~ → **`:125-126`**). Config DwordCount = 1. ✔
+- ⇒ emitted config DW = `{address[31:2], 2'b00}` — register number intact, `[1:0]=00` on the wire. ✔
+- ⇒ payload realigned to the same offset: `payload_offset = header_r.address[1:0]` feeds the
+  payload formatter (~~`tlp_generator.sv:79, 179`~~ → **`:98-100`, `:211`**), so the single write
+  byte lands in lane 1. ✔
 
-### B.3a **Current truth (2026-07-28): byte-granular config is NOT expressible** ⛔ STOP-AND-REPORT
+The byte offset coherently drives **BE + payload alignment + a zeroed on-wire DW**. **T5 is
+achievable; Commit 2b's bus-number assignment is unblocked.** No stop trigger.
 
-**Cause:** the merge (`0e88ac1`, via `b0d3971`) added a command-admission guard at
-**`tlp_requester.sv:183-188`** that did not exist at `f3160d0`:
+### B.3a ~~Current truth: byte-granular config is NOT expressible~~ — ✅ **SUPERSEDED 2026-07-28 by `d5a4253`**
+
+> **This section's blocking claim is DEAD.** It was written against the merge-era guard, *before*
+> `d5a4253` relaxed it. The superseded analysis is retained, struck through, at the end of the
+> section. **T5 is REOPEN; Commit 2b's Secondary-Bus-Number write needs no read-modify-write.**
+
+**Current truth (post-`d5a4253`, locked by `67220b5`'s admission matrix).** The guard at
+**`tlp_requester.sv:183-199`** now reads:
 
 ```systemverilog
 REQ_IDLE: if (command_valid_i && command_ready_o) begin
   if ((command_byte_count_i == 0 && command_i != TLP_CMD_MEM_READ) ||
       ((command_i == TLP_CMD_CFG_READ0 || command_i == TLP_CMD_CFG_WRITE0 ||
-        command_i == TLP_CMD_IO_READ   || command_i == TLP_CMD_IO_WRITE) &&
-       command_byte_count_i != 4)) begin
+        command_i == TLP_CMD_IO_READ || command_i == TLP_CMD_IO_WRITE) &&
+       command_byte_count_i > (13'd4 - {11'd0, command_address_i[1:0]}))) begin
     command_error_valid_o <= 1'b1;
-    command_error_code_o  <= TLP_ERR_BAD_LENGTH;
+    command_error_code_o <= TLP_ERR_BAD_LENGTH;
 ```
 
-A CFG/IO command is admitted **only** when `command_byte_count_i == 4` exactly. `byte_count = 1`
-— the entire basis of the old §B.3 — is rejected with `TLP_ERR_BAD_LENGTH` and **no TLP is
-emitted**.
+Admission is **`byte_count <= 4 − address[1:0]`**, *not* `byte_count == 4`. PCIe Base 2.1 §2.2.7
+constrains the config *Length* field, not the byte enables, so a single-byte config write with
+`first_be=0010` is legal — and is now admitted. §B.3's worked example is live again:
+`CFG_WRITE0 addr=0x19 bc=1` ⇒ `first_be=0010, last_be=0000, length_dw=1`, **one** TLP.
 
-**And `byte_count = 4` is not a workaround.** `calculate_segment` (`tlp_requester.sv:84-101`)
-clamps the segment to `limit - address[1:0]` (`:93-94`), so a CFG command at byte offset 1 with
-`byte_count = 4` splits into **two** config TLPs. Verified by direct simulation of the merged
-`tlp_requester` (scratchpad harness, Verilator 5.050 — no `src/`/`tb/` files touched):
+**The two-TLP split is gone by construction.** Every admitted config/IO shape satisfies
+`byte_count + address[1:0] <= 4`, so `calculate_segment`'s clamp to `limit − address[1:0]`
+(`tlp_requester.sv:93-94`) can no longer split the request, and `length_dw` (`:125-126`) is 1 by
+construction. The `bc=4 @ off=1` shape is now **rejected at admission** instead of split.
 
-| stimulus | `command_error_code_o` | TLPs emitted | header fields |
-|---|---|---|---|
-| `CFG_WRITE0 addr=0x19 bc=1` | **`TLP_ERR_BAD_LENGTH`** | **0** | — |
-| `CFG_READ0  addr=0x19 bc=1` | **`TLP_ERR_BAD_LENGTH`** | **0** | — |
-| `IO_WRITE   addr=0x19 bc=1` | **`TLP_ERR_BAD_LENGTH`** | **0** | — |
-| `CFG_WRITE0 addr=0x19 bc=4` | none at admission | **2** ⚠️ | `#0 addr=0x19 first_be=1110 len=1`, `#1 addr=0x1c first_be=0001 len=1` |
-| `CFG_WRITE0 addr=0x18 bc=4` | none | 1 | `addr=0x18 first_be=1111 last_be=0000 len=1` ✔ |
-| `MEM_WRITE  addr=0x1019 bc=1` | none | 1 | `first_be=0010 last_be=0000 len=1` ✔ |
-| `MEM_WRITE  addr=0x101a bc=2` | none | 1 | `first_be=1100 last_be=0000 len=1` ✔ |
-| `MEM_READ   addr=0x1019 bc=1` | none | 1 | `first_be=0010 last_be=0000 len=1` ✔ |
+**Consequences for the RQ wrapper (Commit 2a-i):**
+1. **R1 (byte-offset semantics) holds on *all* paths** — memory, memory-read, config and I/O.
+   The §D.2 byte-offset derivation is universal; there is no config special case.
+2. The wrapper's config/IO legality check is **`byte_count > (4 − off)` ⇒ reject**.
+   ⛔ **Do NOT code the `byte_count != 4` / `first_be != 4'hF` check** — it would re-impose a
+   restriction the TL no longer has, and would fail T3/T14.
+3. **T5 is UNBLOCKED**, and with it Commit 2b's Secondary-Bus-Number assignment as a direct
+   single-byte write.
+4. The "two config TLPs" latent RTL defect (old point 5) is **fixed** — the shape that produced it
+   is no longer admitted.
 
-**Consequences, precisely scoped:**
-1. **R1 (byte-offset semantics) is NOT downgraded to R2/R3 — it survives intact on the memory and
-   memory-read paths** (last three rows). B1's three structural points all still hold.
-2. **For CFG0/CFG1/IO the only self-consistent command is `command_byte_count_i == 4` AND
-   `command_address[1:0] == 2'b00`** ⇒ `first_be = 4'b1111`, `last_be = 4'b0000`, `length_dw = 1`,
-   one TLP. Any other config/IO shape is either rejected or emits an illegal split.
-3. **T5 (single-byte config write at offset `0x19`) is BLOCKED at the TL command port.** The RQ
-   wrapper cannot express it, and no wrapper-side encoding recovers it — the guard is upstream of
-   everything the wrapper controls.
-4. **Commit 2b's Secondary-Bus-Number assignment is affected**: a bus-number write must now be
-   done as a **whole-DW read-modify-write of config DW `0x18`**, not a single-byte write. That is
-   a Commit-2b design change, decided by the operator.
-5. The two-TLP split at row 4 is a **latent RTL defect** (PCIe Base 2.1 §2.2.7: a Configuration
-   Request is always exactly 1 DW). **Reported only — not fixed in this session.** The RQ wrapper
-   must never emit that shape (see §Q/§4.5).
+<details><summary>~~Superseded analysis (merge-era guard, pre-<code>d5a4253</code>) — retained for the record, DO NOT act on it~~</summary>
+
+> ~~**Cause:** the merge (`0e88ac1`, via `b0d3971`) added a command-admission guard at
+> `tlp_requester.sv:183-188` that did not exist at `f3160d0`, admitting a CFG/IO command **only**
+> when `command_byte_count_i == 4` exactly. `byte_count = 1` — the entire basis of §B.3 — was
+> rejected with `TLP_ERR_BAD_LENGTH`, no TLP emitted. And `byte_count = 4` was no workaround:
+> `calculate_segment` (`:84-101`) clamped the segment to `limit - address[1:0]` (`:93-94`), so a
+> CFG command at byte offset 1 with `byte_count = 4` split into **two** config TLPs.~~
+> Simulated on the merge-era RTL (scratchpad harness, Verilator 5.050 — no `src/`/`tb/` touched):
+
+| stimulus | ~~`command_error_code_o`~~ (merge-era) | ~~TLPs~~ | ~~header fields~~ | **post-`d5a4253`** |
+|---|---|---|---|---|
+| `CFG_WRITE0 addr=0x19 bc=1` | ~~`TLP_ERR_BAD_LENGTH`~~ | ~~0~~ | — | ✅ admitted, 1 TLP, `first_be=0010 len=1` |
+| `CFG_READ0  addr=0x19 bc=1` | ~~`TLP_ERR_BAD_LENGTH`~~ | ~~0~~ | — | ✅ admitted, 1 TLP |
+| `IO_WRITE   addr=0x19 bc=1` | ~~`TLP_ERR_BAD_LENGTH`~~ | ~~0~~ | — | ✅ admitted, 1 TLP |
+| `CFG_WRITE0 addr=0x19 bc=4` | ~~none at admission~~ | ~~2 ⚠️~~ | ~~`#0 first_be=1110`, `#1 first_be=0001`~~ | ⛔ rejected (`4 > 4−1`) — split defect gone |
+| `CFG_WRITE0 addr=0x18 bc=4` | none | 1 | `first_be=1111 last_be=0000 len=1` ✔ | unchanged ✔ |
+| `MEM_WRITE  addr=0x1019 bc=1` | none | 1 | `first_be=0010 last_be=0000 len=1` ✔ | unchanged ✔ |
+| `MEM_WRITE  addr=0x101a bc=2` | none | 1 | `first_be=1100 last_be=0000 len=1` ✔ | unchanged ✔ |
+| `MEM_READ   addr=0x1019 bc=1` | none | 1 | `first_be=0010 last_be=0000 len=1` ✔ | unchanged ✔ |
+
+> ~~**Merge-era consequences (all now void):** CFG0/CFG1/IO restricted to `bc == 4` and
+> `address[1:0] == 2'b00`; T5 blocked at the TL command port; Commit 2b forced into a whole-DW
+> read-modify-write of config DW `0x18`; the two-TLP split a latent RTL defect.~~
+
+</details>
 
 ### B.4 What is NOT expressible (Q9) → rejects, listed in KNOWN_GAPS — **MOVED + EXTENDED**
 - **Non-contiguous BEs** (e.g. `first_be=4'b1001`): `tlp_first_be`/`tlp_last_be` only produce
@@ -265,9 +293,12 @@ clamps the segment to `limit - address[1:0]` (`:93-94`), so a CFG command at byt
   admission guard (`:183-188`) *permits* `byte_count == 0` **only** for `TLP_CMD_MEM_READ`. So a
   zero-length **memory** read is now cleanly expressible (`length_dw = 1`, `first_be = 0`,
   `last_be = 0`); zero-length CFG/IO is rejected. **Re-decide this KNOWN_GAP in Phase 1.**
-- ⛔ **NEW (from §B.3a) — byte-granular CFG0/IO of any width other than a full aligned DW.**
-  Not expressible; the wrapper must reject `is_cfg_or_io && (byte_count != 4 || addr[1:0] != 0)`
-  *before* driving the TL, so the TL's own `TLP_ERR_BAD_LENGTH` is never the first line of defence.
+- ~~⛔ **NEW (from §B.3a) — byte-granular CFG0/IO of any width other than a full aligned DW.**
+  Not expressible; the wrapper must reject `is_cfg_or_io && (byte_count != 4 || addr[1:0] != 0)`~~
+  ✅ **WITHDRAWN 2026-07-28 (`d5a4253`).** Byte-granular CFG0/IO **is** expressible. The wrapper's
+  check is instead the fit condition **`is_cfg_or_io && byte_count > (4 − off)` ⇒ reject**, still
+  applied *before* driving the TL so that `TLP_ERR_BAD_LENGTH` is never the first line of defence.
+  This is **not** a KNOWN_GAP — it is a legality check on genuinely illegal shapes.
 - **§4.3 BE-consistency check:** the wrapper still compares descriptor-implied access vs the
   `s_axis_rq_tuser` BEs; disagreement → `rq_protocol_error_o` rather than silently preferring one.
 
@@ -460,8 +491,8 @@ shapes).
 | Trigger | Fired? (pre-merge `f3160d0`) | **Re-evaluated post-merge `50542d1`** |
 |---|---|---|
 | Wrapper needs `src/tlp/` change | **No** — landing surface sufficient | **No** — surface still sufficient |
-| §4.3 = R3 (byte-granular config impossible) | **No** — resolves to R1, expressible | ⛔ **PARTIALLY YES** — R1 holds on memory; **config is R3** (§B.3a) |
-| T5 (single-byte config write) blocked | **No** — achievable (§B.3) | ⛔ **YES — BLOCKED** (§B.3a) |
+| §4.3 = R3 (byte-granular config impossible) | **No** — resolves to R1, expressible | ~~⛔ PARTIALLY YES~~ → ✅ **No** (corrected 2026-07-28, `d5a4253`): R1 holds on **all** paths |
+| T5 (single-byte config write) blocked | **No** — achievable (§B.3) | ~~⛔ YES — BLOCKED~~ → ✅ **No — REOPEN** (corrected 2026-07-28, `d5a4253`) |
 | TL can't express RC bit 30 / split accounting | **No** — `result_last_o` + tracker (§D.3) | **No** — confirmed intact (§D.3) |
 | Pre-existing test red | **No** — 78/78 + conformance 1/1 | **No** — 17 targets / 81 tests + conformance 1/1 |
 | New Verilator warning class | N/A (no RTL yet) | N/A (no RTL yet) |
@@ -597,7 +628,7 @@ from a scratchpad-only harness.
 | **B1.1** | BEs computed unconditionally from `address_r[1:0]` + segment length, no config special case | **MOVED** | `tlp_requester.sv:129-130` (was `:147-148`); fns `tlp_pkg.sv:165-193` (was `:93-116`) |
 | **B1.2** | Generator masks the emitted config DW to `{address[31:2],2'b00}` | **MOVED** | `tlp_generator.sv:81-82` (was `:70-71`); 4DW DW3 `:85` (was `:109`), emitted via `axis_dw3` `:130` |
 | **B1.3** | Payload realigned by the same offset | **MOVED** | `tlp_generator.sv:98-100` (was `:79`) — now a CPL/non-CPL ternary; non-CPL arm = `address[1:0]`, unchanged for requests. Formatter hookup `:211` (was `:179`) |
-| **B1 ⭐ consequence** | *Byte-granular config access is expressible* | ⛔ **INVALIDATED** | New admission guard `tlp_requester.sv:183-188` rejects CFG/IO with `byte_count != 4`. Simulated: `bc=1` → `TLP_ERR_BAD_LENGTH`, 0 TLPs. `bc=4` @ offset 1 → **2** TLPs. §B.3a |
+| **B1 ⭐ consequence** | *Byte-granular config access is expressible* | ~~⛔ INVALIDATED~~ → ✅ **CONFIRMED** (corrected 2026-07-28) | ~~Merge-era guard `:183-188` rejected CFG/IO with `byte_count != 4`.~~ **`d5a4253` relaxed it to `byte_count <= 4 − address[1:0]` (`tlp_requester.sv:183-199`); `67220b5` locked the admission matrix.** `CFG_WRITE0 0x19 bc=1` is admitted → 1 TLP, `first_be=0010 len=1`. §B.3/§B.3a |
 | **B1 (memory path)** | R1 byte-offset semantics on Mem Rd/Wr | **CONFIRMED** | Simulated `MEM_WRITE 0x1019 bc=1` → `first_be=0010 len_dw=1`; `0x101a bc=2` → `1100`. §B.3a |
 | **B2** | `tlp_cmd_e` members/encodings; no CFG1 command | **CONFIRMED** (verbatim) | `tlp_pkg.sv:43-50`, `TLP_TYPE_CFG1` `:21`. Diff proves **append-only**: no member inserted or reordered in any pre-existing enum. §A.3 |
 | **B3** | Command port + launch handshake; `command_byte_count_i` authoritative | **MOVED** (+2 port changes, +8 new layer inputs) | Ports `tlp_requester.sv:15-31,49-50` / `tlp_layer.sv:54-71`. `command_digest_valid_i`+`command_digest_i` → **`command_ecrc_enable_i`**; `command_error_o` → **`command_error_valid_o`+`command_error_code_o`**. New TX gating inputs `tlp_layer.sv:19-20,31-38`. §A.1–A.2 |
@@ -614,13 +645,17 @@ from a scratchpad-only harness.
   re-verified unchanged: `DATA_WIDTH=32`/`KEEP_WIDTH=4`, per-beat `keep` popcount accounting,
   partial-final-beat handling, combinational `command_data_ready_o`, and the end-of-request
   `command_data_last` contract. The gearboxes do not touch config-request semantics, so the B1
-  invalidation does not reach them. **No change to the 2a-0 brief is required.**
-- **RQ wrapper (2a-i): one real design change.** Config/IO command construction must be
-  `byte_count = 4` + `address[1:0] = 2'b00` (whole aligned DW) and must **reject** every other
-  config/IO shape locally. Byte-granular config, and therefore **T5, is removed from Commit 2a's
-  scope** — it is not a wrapper deficiency and no wrapper encoding recovers it.
-- **Commit 2b (bus-number assignment) inherits this**: writing Secondary Bus Number becomes a
-  whole-DW read-modify-write of config DW `0x18`. **Operator decision required.**
+  question never reached them. **No change to the 2a-0 brief is required.** *(Built at `ccb2a52`.)*
+- ~~**RQ wrapper (2a-i): one real design change.** Config/IO command construction must be
+  `byte_count = 4` + `address[1:0] = 2'b00` (whole aligned DW)…~~
+  ✅ **WITHDRAWN 2026-07-28 (`d5a4253`). No design change.** Config/IO command construction uses
+  the **same** byte-offset derivation as memory (`address[1:0] = off`, `byte_count` from the BE
+  popcounts). The wrapper's local check is the **fit** condition
+  `is_cfg_or_io && byte_count > (4 − off)` ⇒ reject — mirroring `tlp_requester.sv:183-199` so the
+  TL's `TLP_ERR_BAD_LENGTH` is never the first line of defence. **T5 is back in Commit 2a's scope.**
+- **Commit 2b (bus-number assignment):** ~~whole-DW read-modify-write of config DW `0x18`~~ →
+  ✅ a **direct single-byte write** at offset `0x19` (`first_be=0010`, `N=1`). No operator decision
+  outstanding.
 - **RC wrapper (2a-ii): no design change.** All descriptor sources hold; add `completion_error_code_o`
   to the error surface, and keep the split-read Lower Address gap documented (§D.4).
 - **Port renames to propagate everywhere**: `command_error_o` → `command_error_valid_o` /
@@ -644,12 +679,13 @@ the same rules, so the wrapper must satisfy them **by construction**. Rules, in 
 | `tlp_type` ∈ {MEM, IO, CFG0, CFG1, CPL, CPL_LOCK} | `:123-129` | `BAD_FMT_TYPE` | No — requester emits only MEM/IO/CFG0 |
 | Config/IO/completion must **not** be 4DW | `:130-132` | `BAD_FMT_TYPE` | No — requester forces 3DW for CFG/IO (`:118`, `:121`) |
 | 4DW memory with `address[63:32] == 0` | `:133-136` | `BAD_ADDRESS_FORMAT` | No — fmt is chosen *from* `address[63:32]` (`:113-114`). (This is the RC4 case.) |
-| **Config/IO `length_dw` must be exactly 1** | `:137` | `BAD_LENGTH` | ⚠️ **YES** — via the `bc=4` + nonzero-offset split (§B.3a). **Wrapper must never emit it.** |
+| **Config/IO `length_dw` must be exactly 1** | `:137` | `BAD_LENGTH` | ~~⚠️ YES — via the `bc=4` + nonzero-offset split~~ → ✅ **No** (2026-07-28, `d5a4253`): every admitted config/IO shape has `byte_count + address[1:0] <= 4`, so `length_dw == 1` **by construction** (`tlp_requester.sv:125-126`) and the split is unreachable. The wrapper's fit check keeps it that way. |
 | non-completion `length_dw == 0`; `has_data && length_dw == 0`; `length_dw > 1024` | `:137-141` | `BAD_LENGTH` | No — `length_dw` floors at 1 (`tlp_requester.sv:125-126`) and segmentation caps well under 1024 |
 | **`length_dw == 1` ⇒ `last_be` must be 0** | `:144-146` | `BAD_BYTE_ENABLE` | No — `tlp_last_be` returns 0 whenever `offset+len <= 4` (`tlp_pkg.sv:188-189`) |
 | **`length_dw > 1` ⇒ `first_be != 0` AND `last_be != 0`** | `:147-150` | `BAD_BYTE_ENABLE` | ⚠️ **Watch** — holds for contiguous BEs, which is all the wrapper may emit anyway (§B.4) |
 
-**⇒ New §4.5 wrapper checks:** reject `is_cfg_or_io && (byte_count != 4 || address[1:0] != 0)`;
+**⇒ New §4.5 wrapper checks:** ~~reject `is_cfg_or_io && (byte_count != 4 || address[1:0] != 0)`~~
+→ ✅ **corrected 2026-07-28 (`d5a4253`):** reject `is_cfg_or_io && byte_count > (4 − off)`;
 keep the existing contiguous-BE and `DwordCount ∈ [1,1024]` checks.
 
 ### Q.2 `tlp_credit_manager.sv` + flow-control gating — what the RQ path must satisfy to transmit

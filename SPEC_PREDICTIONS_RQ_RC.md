@@ -7,15 +7,28 @@ Companion to `RECON_commit2a.md`. This is the golden reference the RTL and tbs a
 > the six reconciliation fixes. Every RTL `file:line` citation below was written against the
 > pre-merge tree and has been re-verified; stale anchors are corrected in place with
 > ~~strikethrough~~ → **bold**. **Two substantive changes:**
-> 1. ⛔ **§D is amended: byte-granular CONFIG access is no longer expressible** — the merged
->    requester rejects any CFG/IO command with `command_byte_count_i != 4`
->    (`tlp_requester.sv:183-188`). **R1 survives on the memory path only.** **T5 is dead** (§A, §D.3).
+> 1. ~~⛔ **§D is amended: byte-granular CONFIG access is no longer expressible**~~ →
+>    ✅ **RETRACTED — see the correction block below.**
 > 2. Two command ports were renamed by the merge: `command_error_o` →
 >    `command_error_valid_o` + `command_error_code_o` (`tlp_requester.sv:49-50`), and
 >    `command_digest_valid_i`/`command_digest_i` → `command_ecrc_enable_i` (`:25`).
 >
 > Full status table and the new §4.5 constraints: `RECON_commit2a.md` **§P** and **§Q**.
 > **PG213-sourced constants are untouched by this pass** — they still await the PDF.
+
+> ✅ **CORRECTION 2026-07-28 (later the same day, post-`d5a4253`) — read this before anything else.**
+> Change 1 above was written against the merge-era admission guard. **`d5a4253` ("tlp_requester:
+> admit any config/IO request that fits inside one DW") removed it**; `67220b5` locked the
+> replacement admission matrix in the TL testbench. The guard (`tlp_requester.sv:183-199`) now
+> admits any config/IO request satisfying **`byte_count <= 4 − address[1:0]`** — the spec
+> constrains the config *Length* field, not the byte enables (PCIe Base 2.1 §2.2.7).
+>
+> ⇒ **§D's R1 byte-offset mapping applies to memory, I/O AND config alike. There is no config
+> special case. T5 is REOPEN and back in the Commit-2a test plan; T5′ is withdrawn.** The RQ
+> wrapper's config/IO check is the **fit** condition `byte_count > (4 − off)` ⇒ reject.
+> ⛔ **Do not code a `byte_count != 4` or `first_be != 4'hF` check.**
+> Sections corrected: **§A (rows + T5), §B (memory/IO split), §D header, §D.2, §D.3, §D.3a, §D.4,
+> §F table, §H/§verdict.** Struck-through merge-era text is retained for the record.
 
 ### Provenance (read before trusting any constant)
 Descriptor field maps are transcribed from **PG213 v1.3 (20 Nov 2025), Chapter 4**, via the
@@ -49,8 +62,8 @@ BEs are in `s_axis_rq_tuser` (§D), not the descriptor.
 | `[103:96]` | Tag | **ignored** (core-managed, §E/Recon Q15) → `pcie_rq_tag`/`pcie_rq_tag_vld` exposed instead | tracker allocates ~~`tlp_request_tracker.sv:52-62`~~ → **`:55-65`** |
 | `[127]` | Force ECRC | ignored (ECRC out of scope; ~~`command_digest_valid_i=0`~~ → **`command_ecrc_enable_i = 0`**, `tlp_requester.sv:25`) | brief §1; RECON §Q.3 |
 | `command_address[15:12]` | (reserved) | `4'h0` | config DW reserved field |
-| ~~`command_address[1:0]` (byte offset) — **from `first_be` (§D)**~~ | ⛔ **`command_address[1:0]` must be `2'b00` for CFG/IO** | **AMENDED 2026-07-28** | `tlp_requester.sv:183-188` admits CFG/IO only at `byte_count == 4`; at `[1:0] != 0` that splits into 2 TLPs (RECON §B.3a) |
-| — | ⛔ **`command_byte_count_i` must be exactly `13'd4` for CFG/IO** | **NEW hard constraint** | `tlp_requester.sv:183-188`, `TLP_ERR_BAD_LENGTH` |
+| `command_address[1:0]` (byte offset) — **from `first_be` (§D)** | ~~⛔ must be `2'b00` for CFG/IO~~ → ✅ **byte offset, same as memory** | **RESTORED 2026-07-28 (`d5a4253`)** | `tlp_requester.sv:183-199` admits CFG/IO whenever `byte_count <= 4 − address[1:0]`; the split shape is now rejected at admission, not emitted |
+| — | ~~⛔ `command_byte_count_i` must be exactly `13'd4` for CFG/IO~~ → ✅ **`byte_count <= 4 − off`** | **CORRECTED 2026-07-28 (`d5a4253`)** | `tlp_requester.sv:183-199`, `TLP_ERR_BAD_LENGTH` only outside that range |
 
 **Predicted on-wire goldens (RTL-anchored, from ~~`tlp_generator.sv:49-71`~~ → **`tlp_generator.sv:60-85`**):**
 - **T3 — CfgRd0 DW0 = `0x01000004`.** `fmt=000`(3DW-no-data)`, type=00100`(CFG0) → `dw0[7:0]=0x04`;
@@ -61,14 +74,16 @@ BEs are in `s_axis_rq_tuser` (§D), not the descriptor.
   ⚠️ emitted as `axis_dw1` (`:120`), which byte-swaps when `PCIE_WIRE_ORDER=1` (`:9`, `:89-93`).
   **`tlp_layer` defaults it to 0** (`tlp_layer.sv:11`) — assert that in the T-plan rather than assuming it.
 - **DW2 (config) = `{command_address[31:2], 2'b00}`** (~~`:70-71`~~ → **`tlp_generator.sv:81-82`**).
-- ⛔ ~~**T5 — byte-granular CfgWr0 at offset `0x19`:** DW0=`0x01000044`, DW1 low nibble `first_be=0x2`,
-  DW2 = the config DW with `[1:0]=00`, payload byte in lane 1. (Derivation in §D.3.)~~
-  **T5 IS DEAD (2026-07-28).** The TL rejects the command before any TLP is generated
-  (`TLP_ERR_BAD_LENGTH`, 0 packets — simulated, RECON §B.3a). **Remove T5 from the Commit-2a test
-  plan.** The only valid config golden is the aligned whole-DW form: `byte_count=4`,
-  `address[1:0]=00` ⇒ `first_be=4'b1111`, `last_be=4'b0000`, `length_dw=1`.
-  **Replacement test (T5′):** assert the wrapper *rejects* a byte-granular config descriptor with
-  `rq_protocol_error_o` and emits no TLP — never forwards it to the TL.
+- ✅ **T5 — byte-granular CfgWr0 at offset `0x19`** (**REINSTATED 2026-07-28, `d5a4253`**):
+  DW0=`0x01000044`, DW1 low nibble `first_be=0x2` and `last_be=0x0`, DW2 = the config DW with
+  `[1:0]=00`, payload byte in lane 1, **exactly one TLP** (no split). (Derivation in §D.3.)
+  > ~~**T5 IS DEAD (2026-07-28).** The TL rejects the command before any TLP is generated
+  > (`TLP_ERR_BAD_LENGTH`, 0 packets — simulated, RECON §B.3a). The only valid config golden is
+  > the aligned whole-DW form `byte_count=4`, `address[1:0]=00`. **Replacement test (T5′):**
+  > assert the wrapper *rejects* a byte-granular config descriptor.~~
+  > **Retracted:** the guard was relaxed to `byte_count <= 4 − address[1:0]`. **T5′ is withdrawn**
+  > — a byte-granular config descriptor is legal input and must be *forwarded*, not rejected.
+  > What the wrapper still rejects is only the **misfit** case, `byte_count > 4 − off` (§F).
 
 ## B. RQ Memory/IO-Request descriptor → `command_*`
 **Source:** PG213 v1.3, Fig 41 / Table 60 (via addendum).
@@ -87,10 +102,12 @@ BEs are in `s_axis_rq_tuser` (§D), not the descriptor.
 what makes the validator's `BAD_ADDRESS_FORMAT` rule (`tlp_validator.sv:133-136`) untrippable from
 the RQ path — the fmt is *derived from* the address, never supplied independently.
 
-⚠️ **Memory/IO split 2026-07-28:** the R1 byte-offset mapping in §D applies to **`TLP_CMD_MEM_READ`
-and `TLP_CMD_MEM_WRITE` only**. `TLP_CMD_IO_READ`/`TLP_CMD_IO_WRITE` are subject to the same
-`byte_count == 4` admission guard as config (`tlp_requester.sv:183-188`) and must therefore be
-driven as aligned whole-DW accesses.
+~~⚠️ **Memory/IO split 2026-07-28:** the R1 byte-offset mapping in §D applies to `TLP_CMD_MEM_READ`
+and `TLP_CMD_MEM_WRITE` only; `TLP_CMD_IO_READ`/`TLP_CMD_IO_WRITE` are subject to the same
+`byte_count == 4` admission guard as config and must be driven as aligned whole-DW accesses.~~
+✅ **WITHDRAWN 2026-07-28 (`d5a4253`).** There is no memory/IO split. The R1 byte-offset mapping
+applies to **every** command. I/O (like config) additionally has to *fit* in the addressed DW —
+`byte_count <= 4 − off` (`tlp_requester.sv:183-199`) — but within that it is byte-granular.
 
 ## C. Request Type decode (`desc[78:75]`) — map vs reject
 **Source:** PG213 v1.3, Table 57 (via addendum).
@@ -109,13 +126,17 @@ driven as aligned whole-DW accesses.
 
 All rejects: `rq_protocol_error_o` + `$warning`, **no TLP emitted**, FSM → idle (brief §4.5).
 
-## D. ⭐ Address + BE mapping — **R1 (byte-offset semantics)** — ⚠️ **AMENDED 2026-07-28: MEMORY PATH ONLY**
+## D. ⭐ Address + BE mapping — **R1 (byte-offset semantics)** — ✅ **ALL PATHS** (correction 2026-07-28)
 
-> **Scope correction (Phase B).** R1's three structural premises (D.1) all re-verified true, and
-> the derivation in D.2 is still correct **for `TLP_CMD_MEM_READ`/`TLP_CMD_MEM_WRITE`**. But the
-> merged requester now rejects CFG0/IO commands whose `command_byte_count_i != 4`
-> (`tlp_requester.sv:183-188`), so **the byte-offset mapping can no longer be used for config or
-> I/O.** D.3 (the T5 worked example) is consequently **INVALIDATED** — see D.3a.
+> ~~**Scope correction (Phase B): MEMORY PATH ONLY.** The merged requester rejects CFG0/IO commands
+> whose `command_byte_count_i != 4` (`tlp_requester.sv:183-188`), so the byte-offset mapping can no
+> longer be used for config or I/O. D.3 (the T5 worked example) is consequently INVALIDATED.~~
+>
+> ✅ **That scope correction is RETRACTED (`d5a4253`, same day).** R1's three structural premises
+> (D.1) are true and the D.2 derivation is correct for **memory, I/O and config alike**. The one
+> extra rule for config/I/O is a *fit* rule, not an alignment rule: the request must lie inside
+> the addressed DW (`byte_count <= 4 − off`, `tlp_requester.sv:183-199`). **D.3 is reinstated;
+> D.3a is superseded.**
 
 ### D.1 Why there is no collision (record this reasoning) — **CONFIRMED, anchors MOVED**
 `address_r[1:0]` feeds **both** `tlp_first_be(address_r[1:0], segment_bytes_r)`
@@ -133,52 +154,63 @@ For config there is **no on-wire conflict** because:
    `start_offset_i` at `:211`** → `tlp_payload_formatter.sv:53`).
 
 ⇒ Commit-1's "`command_address[1:0] = 2'b00`" was the DW-aligned special case (`first_be=1111`),
-not a hard constraint. **v1's §4.3 (pin `[1:0]=00`) is dead** *for memory*; ⚠️ **for config/IO it
-turns out to be the only legal form after all** (D.3a).
+not a hard constraint. **v1's §4.3 (pin `[1:0]=00`) is dead** — ~~*for memory*; for config/IO it
+turns out to be the only legal form after all~~ ✅ **for every command type** (correction
+2026-07-28, `d5a4253`; see D.3a).
 
-### D.2 The wrapper's derivation — ⚠️ **memory commands only**
+### D.2 The wrapper's derivation — ✅ **all command types** (corrected 2026-07-28)
 Let `off = position of the least-significant set bit of first_be` (0/1/2/3), and for a request
 spanning `DwordCount` DWs:
 
 ```
-command_address[63:2] = desc address bits (mem: desc[63:2])
+command_address[63:2] = desc address bits (mem/IO: desc[63:2]; config: BDF + ExtReg + Reg, §A)
 command_address[1:0]  = off                                   // byte offset from first_be
 DwordCount == 1:  command_byte_count = popcount(first_be)      // last_be must be 0
-DwordCount >= 2:  command_byte_count = popcount(first_be) + (DwordCount-2)*4 + popcount(last_be)
+DwordCount == 2:  command_byte_count = popcount(first_be) + popcount(last_be)
+DwordCount >= 3:  command_byte_count = popcount(first_be) + (DwordCount-2)*4 + popcount(last_be)
 ```
+*(The `DwordCount == 1` case is called out separately because the general formula's `(N-2)*4`
+term underflows there; `N == 2` is the general formula with a zero middle term.)*
 
 The requester **re-derives** the BEs internally as `tlp_first_be(off, byte_count)` /
 `tlp_last_be(off, byte_count)` (~~`tlp_requester.sv:147-148`~~ → **`:129-130`**), reproducing the
 requested `tuser` BEs. **Verified post-merge by simulation** (RECON §B.3a): `MEM_WRITE addr=…19 bc=1`
 ⇒ `first_be=0010, last_be=0000, length_dw=1`; `addr=…1a bc=2` ⇒ `first_be=1100`.
 
-**For CFG0/CFG1/IO the derivation is instead fixed:**
+~~**For CFG0/CFG1/IO the derivation is instead fixed:** `command_address[1:0] = 2'b00` and
+`command_byte_count = 13'd4`, mandatory; reject any config/IO descriptor whose BEs are not
+`first_be=4'hF, last_be=4'h0`.~~
+✅ **WITHDRAWN 2026-07-28 (`d5a4253`).** CFG0/IO use the **same** derivation as above. The only
+extra requirement is the DW **fit**:
 ```
-command_address[1:0]  = 2'b00           // mandatory
-command_byte_count    = 13'd4           // mandatory (exactly)
-⇒ first_be = 4'b1111, last_be = 4'b0000, length_dw = 1
+is_cfg_or_io:  reject unless  command_byte_count <= 4 - off     // tlp_requester.sv:183-199
 ```
-The wrapper must **reject** (`rq_protocol_error_o`, no TLP) any config/IO descriptor whose BEs are
-not `first_be=4'hF, last_be=4'h0`.
+which guarantees `length_dw == 1` (`:125-126`) and makes `calculate_segment`'s split (`:93-94`)
+unreachable. ⛔ **Do not code `byte_count != 4` or `first_be != 4'hF`** — those would reject
+legal, now-admitted requests.
 
-### D.3 ~~T5 worked example (the Commit-2b gate)~~ — ⛔ **INVALIDATED 2026-07-28**
-> **SUPERSEDED — retained for the record, do NOT act on it.**
-> ~~Config offset `0x19` (Secondary Bus Number), single byte:
-> `first_be=4'b0010` ⇒ `off=1`; `DwordCount=1` ⇒ `command_byte_count=popcount(0010)=1`;
-> `command_address[7:2]=0x06` (`0x18>>2`), `[1:0]=01`.
-> ⇒ `tlp_first_be(2'b01,13'd1)=4'b0010` (`tlp_pkg.sv:100-103`); `length_dw=(1+1+3)>>2=1`
-> (`tlp_requester.sv:144`); emitted DW2 = reg-DW with `[1:0]=00`; payload byte in lane 1. ✔~~
+### D.3 T5 worked example (the Commit-2b gate) — ✅ **REINSTATED 2026-07-28 (`d5a4253`)**
+Config offset `0x19` (Secondary Bus Number), single byte:
+`first_be=4'b0010` ⇒ `off=1`; `DwordCount=1` ⇒ `command_byte_count=popcount(0010)=1`;
+`command_address[7:2]=0x06` (`0x18>>2`), `[1:0]=01`.
+- Fit check: `1 <= 4 − 1` ✔ **admitted**.
+- ⇒ `tlp_first_be(2'b01,13'd1)=4'b0010` (~~`tlp_pkg.sv:100-103`~~ → **`:165-180`**);
+  `last_be=4'b0000` (**`:182-193`**, since `off+bc <= 4`); `length_dw=1`
+  (~~`tlp_requester.sv:144`~~ → **`:125-126`**); emitted DW2 = reg-DW with `[1:0]=00`;
+  payload byte in lane 1; **exactly one TLP**. ✔
 
-### D.3a Current truth: config byte granularity is unreachable
-`tlp_requester.sv:183-188` rejects the command at `REQ_IDLE` (`TLP_ERR_BAD_LENGTH`, **no TLP**)
-whenever a CFG/IO command carries `command_byte_count_i != 4`. Simulated on the merged RTL:
+### D.3a ~~Current truth: config byte granularity is unreachable~~ — ✅ **SUPERSEDED 2026-07-28 (`d5a4253`)**
+~~`tlp_requester.sv:183-188` rejects the command at `REQ_IDLE` (`TLP_ERR_BAD_LENGTH`, **no TLP**)
+whenever a CFG/IO command carries `command_byte_count_i != 4`.~~ The guard now reads
+`command_byte_count_i > (13'd4 - command_address_i[1:0])` (**`tlp_requester.sv:183-199`**).
+Merge-era simulation results, with the current outcome alongside:
 
-| stimulus | result |
-|---|---|
-| `CFG_WRITE0 addr=0x19 bc=1` | `TLP_ERR_BAD_LENGTH`, **0 TLPs** |
-| `CFG_READ0 addr=0x19 bc=1` / `IO_WRITE addr=0x19 bc=1` | `TLP_ERR_BAD_LENGTH`, **0 TLPs** |
-| `CFG_WRITE0 addr=0x19 bc=4` | **2 TLPs** — `first_be=1110 @0x19`, then `first_be=0001 @0x1c` (spec-illegal; PCIe Base 2.1 §2.2.7) |
-| `CFG_WRITE0 addr=0x18 bc=4` | **1 TLP**, `first_be=1111 last_be=0000 length_dw=1` ✔ the only legal form |
+| stimulus | ~~merge-era result~~ | **post-`d5a4253`** |
+|---|---|---|
+| `CFG_WRITE0 addr=0x19 bc=1` | ~~`TLP_ERR_BAD_LENGTH`, 0 TLPs~~ | ✅ **1 TLP**, `first_be=0010 last_be=0000 length_dw=1` |
+| `CFG_READ0 addr=0x19 bc=1` / `IO_WRITE addr=0x19 bc=1` | ~~`TLP_ERR_BAD_LENGTH`, 0 TLPs~~ | ✅ **1 TLP** each |
+| `CFG_WRITE0 addr=0x19 bc=4` | ~~**2 TLPs** — `first_be=1110 @0x19`, then `first_be=0001 @0x1c` (spec-illegal)~~ | ⛔ **rejected at admission** (`4 > 4−1`) — the illegal split is now unreachable |
+| `CFG_WRITE0 addr=0x18 bc=4` | **1 TLP**, `first_be=1111 last_be=0000 length_dw=1` ✔ | unchanged ✔ (one legal form among several, no longer "the only" one) |
 
 **Consequences:** T5 is removed from the Commit-2a plan (replaced by T5′, §A). Commit 2b's
 Secondary-Bus-Number write must become a **whole-DW read-modify-write of config DW `0x18`** —
@@ -194,7 +226,11 @@ mismatch → `rq_protocol_error_o` + `$warning`, no TLP. This catches:
   ⚠️ **Re-decide in Phase 1:** post-merge, `length_dw` floors at 1 (`tlp_requester.sv:125-126`) and
   the admission guard *permits* `byte_count == 0` for `TLP_CMD_MEM_READ` (`:183`), so a zero-length
   **memory** read is now cleanly expressible. Zero-length CFG/IO remains rejected.
-- ⛔ **NEW — config/IO with `first_be != 4'hF` or `last_be != 4'h0`** → reject (D.2).
+- ~~⛔ **NEW — config/IO with `first_be != 4'hF` or `last_be != 4'h0`** → reject (D.2).~~
+  ✅ **WITHDRAWN 2026-07-28 (`d5a4253`).** Byte-granular config/IO BEs are legal. The reject is the
+  **fit** condition only: `is_cfg_or_io && byte_count > (4 − off)` (D.2). Note this subsumes the
+  `last_be != 0` case for config — any config descriptor with a non-zero `last_be` necessarily
+  spans past the addressed DW and fails the fit check.
 
 ## E. RC descriptor derivation (12 B / 96 b, `DESC_DW=3`) — **B5: re-verified 2026-07-28, table stands**
 **Source:** PG213 v1.3, Fig 56 / Table 65 (via addendum). RC surface = `received_completion_*` +
@@ -265,7 +301,7 @@ All rejects: `rq_protocol_error_o` + `$warning`, **no TLP**, FSM → idle.
 | Poisoned Cfg write | unsupported | `is_cfg_write && desc[79]` |
 | BE consistency | contiguous, reproducible | §D.4 mismatch (non-contiguous / zero-length) |
 | Early `tlast` | host ends before byte count | early `s_axis_rq_tlast` → reject, never pass early `last` to TL ([[command-data-last-contract]]) |
-| ⛔ **NEW — config/IO granularity** | CFG0/CFG1/IO must be an **aligned whole DW** | `is_cfg_or_io && (byte_count != 4 \|\| address[1:0] != 2'b00 \|\| first_be != 4'hF \|\| last_be != 4'h0)` — else the TL rejects with `TLP_ERR_BAD_LENGTH`, or (at `bc=4`, offset≠0) emits **two** illegal config TLPs. §D.3a |
+| ✅ **NEW — config/IO one-DW fit** *(corrected 2026-07-28, `d5a4253`)* | CFG0/IO must **fit inside the addressed DW** — byte-granular within it is legal | **`is_cfg_or_io && byte_count > (4 − off)`** → reject. ~~`(byte_count != 4 \|\| address[1:0] != 2'b00 \|\| first_be != 4'hF \|\| last_be != 4'h0)`~~ — that form is **withdrawn**; it would reject legal requests. Mirrors `tlp_requester.sv:183-199`. §D.2/§D.3a |
 
 ### F.1 ⚠️ Signal renames for the T-plan (merge-imposed, 2026-07-28)
 Any Commit-2a assertion written against the old names must be re-pointed:
@@ -288,10 +324,13 @@ Config requests consume **NPH/NPD** credit (`tlp_layer.sv:262-272`). Reference i
 ## G. Test-list deltas vs brief §6/§7 (from go/no-go)
 - **§4.3 fixed to R1** — T2/T5/T11 assert the R1 mapping and the D.4 rejects (non-contiguous,
   zero-length → `KNOWN_GAPS`).
-  ⛔ **AMENDED 2026-07-28:** T2/T11 keep the R1 mapping but **on memory commands only**.
+  ~~⛔ **AMENDED 2026-07-28:** T2/T11 keep the R1 mapping but **on memory commands only**.
   **T5 is deleted** and replaced by **T5′** (assert the wrapper rejects a byte-granular config
-  descriptor with `rq_protocol_error_o` and emits no TLP). Add **T5″**: the aligned whole-DW config
-  golden (`byte_count=4`, `address[1:0]=00` ⇒ `first_be=4'hF`, `last_be=4'h0`, `length_dw=1`).
+  descriptor with `rq_protocol_error_o` and emits no TLP).~~
+  ✅ **RE-AMENDED 2026-07-28 (`d5a4253`):** T2/T11 keep the R1 mapping on **all** command types.
+  **T5 is reinstated** and **T5′ is withdrawn**. The aligned whole-DW config golden (old T5″) is
+  kept as one point in a **byte-granular sweep** over `first_be ∈ {1,2,4,8,3,C,F}` at `N=1`, all of
+  which must be **admitted**; the reject cases are the misfits `bc > 4 − off`.
 - **RC `[11:7]` via context** — U-tests treat Lower Address `[11:7]` as context-sourced, not 0.
 - **NEW U10 (2a-ii): back-to-back completions, different tags on consecutive cycles.** Assert each
   RC packet's descriptor Tag matches *its own* payload. Rationale: `received_completion_header_o` is
@@ -312,8 +351,16 @@ Config requests consume **NPH/NPD** credit (`tlp_layer.sv:262-272`). Reference i
 ~~No R3, no `src/tlp/` change, T5 open, RC bit 30 present.~~ **Awaiting go/no-go for RTL (HARD STOP #2).**
 Next: Phase 2 = Commit 2a-0 gearboxes (`pcie_axis_dw_downsize`/`upsize` + exhaustive tb), no TL in loop.
 
-**Amended 2026-07-28 (Phase B):** no `src/tlp/` change needed; **RC bit 30 present and confirmed**;
-**R1 confirmed on memory, but config is effectively R3 and T5 is CLOSED** (§D.3a).
+~~**Amended 2026-07-28 (Phase B):** no `src/tlp/` change needed; **RC bit 30 present and confirmed**;
+**R1 confirmed on memory, but config is effectively R3 and T5 is CLOSED** (§D.3a).~~
+
+✅ **RE-AMENDED 2026-07-28 (later, post-`d5a4253`) — the final status of this document:**
+no `src/tlp/` change needed; **RC bit 30 present and confirmed**; **R1 confirmed on *all* paths —
+memory, I/O and config**; **T5 is REOPEN**. `d5a4253` relaxed the admission guard to
+`byte_count <= 4 − address[1:0]` and `67220b5` locked the matrix; the "config is effectively R3"
+conclusion was a property of the merge-era guard and no longer holds. **No hard stop stands.**
+Commit 2a-0 (gearboxes) landed at `ccb2a52`; Commit 2a-i (`pcie_rq_if`) builds against this
+document as corrected.
 **2a-0 (gearboxes) is unaffected and remains safe to build as specified** — its contract
 (`DATA_WIDTH=32`/`KEEP_WIDTH=4`, per-beat `keep` popcount, partial final beat, combinational
 `command_data_ready_o`, end-of-request `command_data_last`) re-verified unchanged. The open
