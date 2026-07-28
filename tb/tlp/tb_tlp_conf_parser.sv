@@ -21,7 +21,13 @@ module tb_tlp_conf_parser;
   logic        payload_tlast;
   logic        payload_tready;
   logic        malformed;
+  logic        error_valid;
+  tlp_error_e  error_code;
+  logic [7:0]  error_code_bits;   // flattened for cocotb (enum reads as an int)
+  logic        ecrc_error;
   tlp_header_t header;
+
+  assign error_code_bits = 8'(error_code);
 
   logic [2:0]  header_fmt;
   logic [4:0]  header_type;
@@ -75,6 +81,11 @@ module tb_tlp_conf_parser;
       .header_o(header), .header_valid_o(header_valid), .header_ready_i(header_ready),
       .payload_tdata_o(payload_tdata), .payload_tkeep_o(payload_tkeep),
       .payload_tvalid_o(payload_tvalid), .payload_tlast_o(payload_tlast),
-      .payload_tready_i(payload_tready), .malformed_o(malformed)
+      .payload_tready_i(payload_tready), .malformed_o(malformed),
+      // Error/ECRC reporting added by the TLP+DLL integration merge
+      // (tlp_parser.sv:30-32).  Surfaced here so the conformance tests can
+      // observe *why* a packet was rejected, not just that it was.
+      .error_valid_o(error_valid), .error_code_o(error_code),
+      .ecrc_error_o(ecrc_error)
   );
 endmodule

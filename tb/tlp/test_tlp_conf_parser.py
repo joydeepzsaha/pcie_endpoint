@@ -16,6 +16,9 @@ Field extraction predictions are read from the RTL:
   ECRC digest capture ........ src/tlp/tlp_parser.sv:218-235
 """
 
+import struct
+import zlib
+
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
@@ -50,6 +53,20 @@ def dw0(fmt, typ, length_dw, tc=0, attr=0, ep=0, td=0, at=0, th=0):
 
 def dw1_req(rid, tag, last_be, first_be):
     return (rid << 16) | (tag << 8) | (last_be << 4) | first_be
+
+
+def ecrc_of(dws):
+    """The ECRC the parser computes over `dws` (the header + payload DWs).
+
+    tlp_ecrc.sv is a reflected CRC-32: init 0xffffffff, polynomial 0xedb88320
+    applied LSB-first per byte in ascending lane order (tlp_pkg.sv:135-163), with
+    a final complement (tlp_ecrc.sv:35).  That is bit-for-bit standard CRC-32, so
+    zlib.crc32 over the little-endian DW bytes reproduces it independently.
+
+    The covered DWs are the ones the parser marks ecrc_data_valid
+    (tlp_parser.sv:82-85): every header and payload DW, excluding a TLP prefix.
+    """
+    return zlib.crc32(b"".join(struct.pack("<I", d & 0xFFFFFFFF) for d in dws)) & 0xFFFFFFFF
 
 
 def dw1_cpl(cid, status, byte_count, bcm=0):
@@ -271,24 +288,34 @@ async def parse_prefix(dut):
 
 @cocotb.test()
 async def parse_ecrc_digest(dut):
-    """MemWr with digest_present: payload then a trailing ECRC DW captured."""
+    """MemWr with digest_present: payload then a trailing ECRC DW captured.
+
+    The merged parser validates the digest rather than merely capturing it
+    (tlp_parser.sv:274 -- a mismatch is TLP_ERR_ECRC and the packet is dropped),
+    so the trailing DW must be the real CRC over the preceding header+payload
+    DWs.  It is computed here independently via zlib, not read back from the DUT.
+    """
     await init(dut)
     mon = HeaderMon(dut); mon.start()
-    digest = 0xC0FFEE11
-    await beat(dut, dw0(FMT_3DW_DATA, TYPE_MEM, 1, td=1))
-    await beat(dut, dw1_req(0x1234, 0x00, last_be=0x0, first_be=0xF))
-    await beat(dut, 0x0000_4000)
-    await beat(dut, 0x5555_5555)                     # payload (len=1, not last: ECRC follows)
+    hdr = [dw0(FMT_3DW_DATA, TYPE_MEM, 1, td=1),
+           dw1_req(0x1234, 0x00, last_be=0x0, first_be=0xF),
+           0x0000_4000]
+    payload = 0x5555_5555
+    digest = ecrc_of(hdr + [payload])
+    for dw in hdr:
+        await beat(dut, dw)
+    await beat(dut, payload)                         # payload (len=1, not last: ECRC follows)
     await beat(dut, digest, last=True)               # ECRC DW
     await settle(dut)
     h = mon.hdrs[0]
     assert h["digest_present"] == 1, "digest_present flag not set from DW0[23]"
-    assert mon.payload == [0x5555_5555], mon.payload
+    assert mon.payload == [payload], mon.payload
     # digest is captured into header_r during RX_ECRC (after header_valid); read it now
     await Timer(1, units="ps")
     assert int(dut.header_digest.value) == digest, \
         f"ECRC {int(dut.header_digest.value):#x} != {digest:#x}"
-    assert mon.malformed == 0
+    assert mon.malformed == 0, "a correct ECRC must not be flagged malformed"
+    assert int(dut.ecrc_error.value) == 0, "ecrc_error_o asserted on a valid digest"
 
 
 @cocotb.test()
