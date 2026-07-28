@@ -1,0 +1,38 @@
+CAPI=2:
+name: fusesoc:pcie:tb_rc:1.0.0
+description: >
+  Verilator+cocotb benches for the RC-owned RTL (Commit 2a). 2a-0 covers the
+  descriptor-agnostic AXI-Stream width gearboxes standalone -- no Transaction
+  Layer in the loop, so no FC-credit initialisation is required here (that
+  starts at 2a-i, where tlp_layer gates all TX on the credit manager).
+
+filesets:
+  rtl:
+    depend:
+      - ::rc_core:1.0.0
+      - fusesoc:pcie:lint
+
+  # Flattened shim: standalone downsize + standalone upsize + round-trip pair.
+  bench_axis_gearbox:
+    files:
+      - tb_pcie_axis_gearbox.sv
+    file_type: systemVerilogSource
+
+  cocotb_axis_gearbox:
+    files:
+      - test_axis_dw_gearbox.py : {file_type : user, copyto : .}
+
+targets:
+  # 2a-0: pcie_axis_dw_downsize / pcie_axis_dw_upsize, G1..G10.
+  verilate_axis_gearbox:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_axis_dw_gearbox
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_axis_gearbox, cocotb_axis_gearbox]
+    toplevel : [tb_pcie_axis_gearbox]

@@ -1,0 +1,24 @@
+CAPI=2:
+
+name: ::rc_core:1.0.0
+description: >
+  RC-owned RTL for Commit 2a: the PG213 <-> Transaction Layer bridge. Starts
+  with 2a-0, the descriptor-agnostic AXI-Stream width gearboxes that convert
+  between the 128-bit PG213 user interface and the TL's 32-bit Dword-serial
+  command/payload port. Descriptor-aware modules (pcie_rq_if, pcie_rc_if) and
+  pcie_rq_rc_pkg arrive in 2a-i/2a-ii; this core deliberately contains no
+  descriptor semantics and does not depend on ::tlp_core.
+
+filesets:
+  rtl:
+    depend:
+      - fusesoc:pcie:lint
+    files:
+      - pcie_axis_dw_downsize.sv
+      - pcie_axis_dw_upsize.sv
+    file_type: systemVerilogSource
+
+targets:
+  default:
+    filesets:
+      - rtl
