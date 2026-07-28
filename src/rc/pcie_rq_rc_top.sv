@@ -1,0 +1,568 @@
+// ---------------------------------------------------------------------------
+// pcie_rq_rc_top -- the Requester surface of the Root Complex, whole.
+// Commit 2a-iii; closes Commit 2a.
+//
+//   host RQ AXIS -> pcie_rq_if -> tlp_layer -> TX DLLP stream
+//   RX DLLP stream -> tlp_layer -> pcie_rc_if -> host RC AXIS
+//
+// This module is WIRING. It instantiates pcie_rq_if (2a-i), tlp_layer (the
+// Transaction Layer, untouched) and pcie_rc_if (2a-ii), and presents the
+// PG213-shaped user interface -- s_axis_rq_* slave, m_axis_rc_* master, plus
+// tag, error and status. There is no behaviour here on purpose: every decision
+// about descriptors, byte enables, tags and completion matching belongs to one
+// of the two wrappers, and a reader chasing one should go there, not here. If
+// this file ever grows an always_ff, something has been put in the wrong place.
+//
+// ===========================================================================
+// !! FLOW CONTROL AND LINK STATE -- READ THIS BEFORE DEBUGGING SILENCE
+// ===========================================================================
+//
+// tlp_layer emits ZERO TLPs, and reports NO error, until ALL of the following
+// hold:
+//
+//     link_up_i         == 1
+//     transmit_enable_i == 1
+//     fc_initialized_i  == 1
+//     at least one fc_update_valid_i pulse has loaded NON-ZERO credits
+//
+// (tlp_layer.sv:249, tlp_credit_manager.sv:53-54, 66-83.)
+//
+// The failure mode is SILENT. With any of them missing the RQ interface still
+// accepts descriptors and still asserts s_axis_rq_tready, the command still
+// reaches the Transaction Layer, and then nothing comes out: no TLP on
+// m_dllp_axis_*, no pulse on any error output, no tag on pcie_rq_tag_o. It
+// looks exactly like a broken wrapper. This exact omission was regression RC1.
+//
+// tx_fc_blocked_o is the signal that distinguishes "blocked on credit" from
+// "blocked on something else"; watch it first.
+//
+// Configuration requests consume NPH and NPD credit. Completions consume CPLH
+// and CPLD. A credit pool that is initialised but saturated at zero for the
+// class being used is the same silence.
+//
+// These four are deliberately EXPOSED rather than tied off internally: the
+// integrator (or Commit 2b) owns link bring-up, and the Data Link Layer's
+// InitFC exchange is what produces the real credit values.
+//
+// ===========================================================================
+// !! HOW A CLIENT CORRELATES A COMPLETION WITH ITS REQUEST: BY TAG
+// ===========================================================================
+//
+// Use pcie_rq_tag_o / pcie_rq_tag_vld_o out, and the RC descriptor's Tag field
+// [71:64] back. That tag is the one the request tracker allocated and the one
+// that physically went out in the emitted header's DW1 (the 54b8a72 fix), so
+// the comparison is against the wire, not against a wrapper's idea of it.
+//
+// The tag is NOT available at the moment the command is accepted -- the
+// requester leaves REQ_IDLE and allocates in REQ_TAG a cycle or more later
+// (tlp_requester.sv:211, 215-218) -- which is why it comes with its own valid
+// strobe rather than qualified by s_axis_rq_tready. Strobes arrive in issue
+// order, one per emitted non-posted TLP.
+//
+// Posted writes (RQ_MEM_WRITE) allocate nothing and never strobe. There is no
+// completion for them either, so there is nothing to correlate.
+//
+// !! command_context IS NOT AVAILABLE AS A CLIENT CHANNEL.
+//
+// The Transaction Layer's context echo (command_context_i -> result_context_o)
+// is INTERNALLY CONSUMED by pcie_rc_if. pcie_rq_if loads it with
+// {mem_read_r, addr_r[11:0]} -- 13 of the 16 bits -- and pcie_rc_if reads it
+// back to reconstruct the RC descriptor's Lower Address field, which is not
+// otherwise derivable because the CPL header carries only the low 7 bits
+// (pcie_rc_if.sv:240, 252). It is not exposed on this module's ports and must
+// not be treated as a spare correlation channel.
+//
+// Bits [15:13] of the context word are unused and would be free if a future
+// user-context field is ever wanted. Wiring them out would mean new ports on
+// both wrappers; nothing needs it today, because the tag round-trips for real.
+//
+// ===========================================================================
+// SS WHAT IS TIED OFF, AND WHY IT IS SAFE
+// ===========================================================================
+//
+// The Completer surface -- CQ (target_*) and CC (completion_request_*) -- is
+// the ENDPOINT side and is out of scope for Commit 2a. Both are tied off here
+// rather than raised to the top level:
+//
+//   target_request_ready_i / target_data_ready_i are tied 1, not 0. A received
+//   request the Root Complex does not answer is DISCARDED, but the receive
+//   path never stalls. Tying them 0 would back-pressure the RX stream and
+//   wedge the whole receive side -- including completions -- the first time
+//   any request arrived. Discarding is wrong in the long run; wedging is worse
+//   and harder to diagnose.
+//
+//   completion_request_valid_i / _data_valid_i / _data_last_i are tied 0: this
+//   module originates no completions.
+//
+// Raising CQ/CC properly is the Completer commit's work, and doing it here
+// would mean inventing an interface for it that commit would then have to
+// change.
+// ---------------------------------------------------------------------------
+// SS KNOWN_GAPS (consolidated for the whole of Commit 2a: 2a-0/i/ii/iii)
+// ---------------------------------------------------------------------------
+//
+// From this level (2a-iii):
+//
+//  * NO COMPLETION TIMEOUT ANYWHERE. Neither tlp_request_tracker nor tlp_layer
+//    nor tlp_requester contains a timer, a counter or an expiry path -- a tag
+//    is freed only by a matching completion arriving (tlp_request_tracker.sv:
+//    123-155) or by reset. A request to a device that never answers holds its
+//    tag FOREVER, outstanding_o never returns to 0, and after TAG_COUNT such
+//    requests the requester stalls in REQ_TAG with no tag available and
+//    s_axis_rq_tready stays low. There is no error output for this.
+//    PCIe Base 2.1 SS2.8 makes the Completion Timeout mechanism the requester's
+//    responsibility. Commit 2b MUST implement one: enumeration probes absent
+//    devices constantly and every unanswered probe is a permanently lost tag.
+//    Deliberately not built here -- it needs a policy (timeout value, what to
+//    do with the tag, how to report it) that belongs with the FSM that has the
+//    context to choose it, and building it here would mean modifying
+//    src/tlp/, which this commit does not do.
+//
+//  * CQ/CC tied off -- see above.
+//
+//  * No `tlp_layer` config-space client. bus_number_i / device_number_i /
+//    function_number_i / memory_enable_i / extended_tag_enable_i /
+//    max_payload_bytes_i / max_read_bytes_i / rcb_128b_i are passed straight
+//    through to the integrator. Nothing here reads a config register to
+//    populate them.
+//
+// From 2a-ii (pcie_rc_if.sv:117-154):
+//
+//  * RC descriptor Error Code 0011 (RC_DESC_ERR_BAD_LENGTH) is UNREACHABLE by
+//    construction. The tracker suppresses the result for a completion with no
+//    data when data was expected, or with a byte count overrun, and raises
+//    unexpected_completion_o + TLP_ERR_COMPLETION_OVERFLOW instead
+//    (tlp_request_tracker.sv:127-135). No result means no RC packet. The
+//    condition surfaces on rc_unexpected_completion_o /
+//    rc_completion_error_code_o. A client must not wait for 0011.
+//  * Split memory reads: Lower Address [11:7] is the FIRST completion's.
+//    Configuration completions never split (Dword Count is always 1), so
+//    enumeration is unaffected; a memory-read DMA consumer would need it.
+//  * m_axis_rc_tuser not driven (per-byte enables, is_sof/is_eof, discontinue).
+//  * Locked Read Completions (descriptor [29]) tied 0 -- no origination path.
+//  * Byte Count Modified is parsed by the TL but has no RC descriptor field.
+//
+// From 2a-i (pcie_rq_if.sv):
+//
+//  * Type 1 configuration requests (CFG_READ1 / CFG_WRITE1) rejected -- no
+//    tlp_cmd_e exists. Commit 3.
+//  * Non-contiguous byte enables rejected -- tlp_first_be/tlp_last_be build
+//    contiguous range masks only (tlp_pkg.sv:165-193).
+//  * Zero-length reads rejected for uniformity, though the TL would accept one
+//    for TLP_CMD_MEM_READ (tlp_requester.sv:193).
+//  * Atomics, locked reads, messages, ATS rejected -- no command path.
+//  * Poison origination: command_* has no poison input; poisoned non-config
+//    writes are forwarded UNPOISONED (flagged, not dropped).
+//  * ECRC: command_ecrc_enable is tied 0 -- the TL computes ECRC itself
+//    (tlp_ecrc.sv); RQ descriptor bit [127] Force ECRC is ignored.
+//
+// From 2a-0 (pcie_axis_dw_downsize.sv / pcie_axis_dw_upsize.sv):
+//
+//  * The gearboxes register tready, costing throughput on a stream that
+//    back-pressures every cycle; they are byte-granular on both sides and
+//    descriptor-blind by design.
+//
+// Guards use $warning, never $error: a procedural $error maps to $stop under
+// the simulator, which would abort the shared multi-test process.
+// ---------------------------------------------------------------------------
+`timescale 1ns/1ps
+module pcie_rq_rc_top
+  import tlp_pkg::*;
+  import pcie_rq_rc_pkg::*;
+#(
+    parameter int AXIS_DATA_WIDTH = 128,
+    // PG213 tkeep is DWORD-granular on both RQ and RC: one bit per Dword.
+    parameter int AXIS_KEEP_WIDTH = AXIS_DATA_WIDTH / 32,
+    parameter int AXIS_USER_WIDTH = 60,
+    parameter int TL_DATA_WIDTH   = 32,
+    parameter int TL_KEEP_WIDTH   = TL_DATA_WIDTH / 8,
+    parameter int TL_USER_WIDTH   = 3,
+    parameter int CONTEXT_WIDTH   = 16,
+    parameter int TAG_COUNT       = 32
+) (
+    input  logic                        clk_i,
+    input  logic                        rst_i,
+
+    // ---- link state and flow control -- SEE THE HEADER ---------------------
+    // Nothing is transmitted until all four of these are satisfied, and the
+    // failure is silent. tx_fc_blocked_o is the diagnostic.
+    input  logic                        link_up_i,
+    input  logic                        transmit_enable_i,
+    input  logic                        fc_initialized_i,
+    input  logic                        fc_update_valid_i,
+    input  logic [7:0]                  fc_ph_i,
+    input  logic [11:0]                 fc_pd_i,
+    input  logic [7:0]                  fc_nph_i,
+    input  logic [11:0]                 fc_npd_i,
+    input  logic [7:0]                  fc_cplh_i,
+    input  logic [11:0]                 fc_cpld_i,
+
+    // ---- identity and negotiated limits ------------------------------------
+    // requester_id_i is the ID that goes into every originated request header
+    // and the one a completion must carry back to match.
+    input  logic [15:0]                 requester_id_i,
+    input  logic [15:0]                 completer_id_i,
+    input  logic [7:0]                  bus_number_i,
+    input  logic [4:0]                  device_number_i,
+    input  logic [2:0]                  function_number_i,
+    input  logic                        memory_enable_i,
+    input  logic                        extended_tag_enable_i,
+    input  logic [12:0]                 max_payload_bytes_i,
+    input  logic [12:0]                 max_read_bytes_i,
+    input  logic                        rcb_128b_i,
+
+    // ---- PG213 Requester Request AXI4-Stream slave -------------------------
+    // Beat 0 is the 16-byte RQ descriptor (PG213 Table 60/61); beats 1..n are
+    // payload. tuser[3:0] = first_be, tuser[7:4] = last_be, read on beat 0.
+    input  logic [AXIS_DATA_WIDTH-1:0]  s_axis_rq_tdata,
+    input  logic [AXIS_KEEP_WIDTH-1:0]  s_axis_rq_tkeep,
+    input  logic                        s_axis_rq_tvalid,
+    input  logic                        s_axis_rq_tlast,
+    input  logic [AXIS_USER_WIDTH-1:0]  s_axis_rq_tuser,
+    output logic                        s_axis_rq_tready,
+
+    // ---- core-managed tag presentation -------------------------------------
+    // The tag the tracker allocated and put on the wire. Correlate completions
+    // with this, not with the descriptor's Tag field (which is ignored) and
+    // not with context (which is internally consumed).
+    output logic [7:0]                  pcie_rq_tag_o,
+    output logic                        pcie_rq_tag_vld_o,
+
+    // ---- PG213 Requester Completion AXI4-Stream master ---------------------
+    // Beat 0 carries the 3-Dword RC descriptor (PG213 Table 65) in Dwords 0..2
+    // and the first payload Dword in Dword 3; later beats are payload.
+    output logic [AXIS_DATA_WIDTH-1:0]  m_axis_rc_tdata,
+    output logic [AXIS_KEEP_WIDTH-1:0]  m_axis_rc_tkeep,
+    output logic                        m_axis_rc_tvalid,
+    output logic                        m_axis_rc_tlast,
+    input  logic                        m_axis_rc_tready,
+
+    // ---- Data Link Layer streams -------------------------------------------
+    input  logic [TL_DATA_WIDTH-1:0]    s_dllp_axis_tdata,
+    input  logic [TL_KEEP_WIDTH-1:0]    s_dllp_axis_tkeep,
+    input  logic                        s_dllp_axis_tvalid,
+    input  logic                        s_dllp_axis_tlast,
+    input  logic [TL_USER_WIDTH-1:0]    s_dllp_axis_tuser,
+    output logic                        s_dllp_axis_tready,
+
+    output logic [TL_DATA_WIDTH-1:0]    m_dllp_axis_tdata,
+    output logic [TL_KEEP_WIDTH-1:0]    m_dllp_axis_tkeep,
+    output logic                        m_dllp_axis_tvalid,
+    output logic                        m_dllp_axis_tlast,
+    output logic [TL_USER_WIDTH-1:0]    m_dllp_axis_tuser,
+    input  logic                        m_dllp_axis_tready,
+
+    // ---- RQ error surface (pcie_rq_if) -------------------------------------
+    // One-cycle pulse; the code is valid in the same cycle and holds until the
+    // next rejection. A rejected descriptor emits NO TLP.
+    output logic                        rq_protocol_error_o,
+    output rq_error_e                   rq_error_code_o,
+    output logic                        rq_gearbox_error_o,
+
+    // ---- RC error surface (pcie_rc_if) -------------------------------------
+    // rc_unexpected_completion_o: the completion matched no outstanding tag, or
+    // overran its byte count. NO RC packet accompanies it.
+    output logic                        rc_unexpected_completion_o,
+    output tlp_error_e                  rc_completion_error_code_o,
+    output logic                        rc_protocol_error_o,
+    output rc_error_e                   rc_error_code_o,
+    output logic                        rc_gearbox_error_o,
+
+    // ---- Transaction Layer error and status surface ------------------------
+    output logic                        command_error_valid_o,
+    output tlp_error_e                  command_error_code_o,
+    output logic                        malformed_o,
+    output logic                        rx_error_valid_o,
+    output tlp_error_e                  rx_error_code_o,
+    output logic                        rx_ecrc_error_o,
+    output logic                        tx_error_valid_o,
+    output tlp_error_e                  tx_error_code_o,
+    // Asserted while the transmitter is held up for credit. The first thing to
+    // look at when nothing is being emitted.
+    output logic                        tx_fc_blocked_o,
+    output logic                        credit_error_o,
+    output logic                        vc_overflow_o,
+    // Non-posted requests currently holding a tag. Returns to 0 when every
+    // outstanding request has been answered -- and, absent a completion
+    // timeout, only then. See KNOWN_GAPS.
+    output logic [$clog2(TAG_COUNT+1)-1:0] outstanding_o
+);
+
+  // -------------------------------------------------------------------------
+  // pcie_rq_if <-> tlp_layer command port
+  // -------------------------------------------------------------------------
+  logic                     command_valid;
+  logic                     command_ready;
+  tlp_cmd_e                 command;
+  logic [63:0]              command_address;
+  logic [12:0]              command_byte_count;
+  logic [2:0]               command_tc;
+  logic [2:0]               command_attr;
+  logic [CONTEXT_WIDTH-1:0] command_context;
+  logic                     command_prefix_valid;
+  logic [31:0]              command_prefix;
+  logic                     command_ecrc_enable;
+  logic [TL_DATA_WIDTH-1:0] command_data;
+  logic [TL_KEEP_WIDTH-1:0] command_keep;
+  logic                     command_data_valid;
+  logic                     command_data_last;
+  logic                     command_data_ready;
+
+  // The core-managed tag, straight from the tracker.
+  logic [7:0]               allocated_tag;
+  logic                     allocated_tag_valid;
+
+  // -------------------------------------------------------------------------
+  // tlp_layer <-> pcie_rc_if received-completion surface
+  //
+  // received_completion_header is struct-typed and stays internal: the RC
+  // descriptor on m_axis_rc_* is the interface, not the TL's header shape.
+  // -------------------------------------------------------------------------
+  logic                     received_completion_valid;
+  logic                     received_completion_ready;
+  tlp_header_t              received_completion_header;
+  logic [TL_DATA_WIDTH-1:0] received_completion_data;
+  logic [TL_KEEP_WIDTH-1:0] received_completion_keep;
+  logic                     received_completion_data_valid;
+  logic                     received_completion_data_last;
+  logic                     received_completion_data_ready;
+
+  logic                     result_valid;
+  logic                     result_ready;
+  logic [CONTEXT_WIDTH-1:0] result_context;
+  logic [2:0]               result_status;
+  logic                     result_last;
+  logic                     unexpected_completion;
+  tlp_error_e               completion_error_code;
+
+  // CQ/CC tie-off: struct-typed input needs a named zero.
+  tlp_header_t              completion_request_header_tie;
+  assign completion_request_header_tie = '0;
+
+  // -------------------------------------------------------------------------
+  // Requester Request: PG213 AXI-Stream -> TL command port. Commit 2a-i.
+  // -------------------------------------------------------------------------
+  pcie_rq_if #(
+      .AXIS_DATA_WIDTH(AXIS_DATA_WIDTH),
+      .AXIS_KEEP_WIDTH(AXIS_KEEP_WIDTH),
+      .AXIS_USER_WIDTH(AXIS_USER_WIDTH),
+      .TL_DATA_WIDTH  (TL_DATA_WIDTH),
+      .TL_KEEP_WIDTH  (TL_KEEP_WIDTH),
+      .CONTEXT_WIDTH  (CONTEXT_WIDTH)
+  ) u_rq_if (
+      .clk_i(clk_i),
+      .rst_i(rst_i),
+
+      .s_axis_rq_tdata (s_axis_rq_tdata),
+      .s_axis_rq_tkeep (s_axis_rq_tkeep),
+      .s_axis_rq_tvalid(s_axis_rq_tvalid),
+      .s_axis_rq_tlast (s_axis_rq_tlast),
+      .s_axis_rq_tuser (s_axis_rq_tuser),
+      .s_axis_rq_tready(s_axis_rq_tready),
+
+      .allocated_tag_i      (allocated_tag),
+      .allocated_tag_valid_i(allocated_tag_valid),
+      .pcie_rq_tag_o        (pcie_rq_tag_o),
+      .pcie_rq_tag_vld_o    (pcie_rq_tag_vld_o),
+
+      .command_valid_o       (command_valid),
+      .command_ready_i       (command_ready),
+      .command_o             (command),
+      .command_address_o     (command_address),
+      .command_byte_count_o  (command_byte_count),
+      .command_tc_o          (command_tc),
+      .command_attr_o        (command_attr),
+      .command_context_o     (command_context),
+      .command_prefix_valid_o(command_prefix_valid),
+      .command_prefix_o      (command_prefix),
+      .command_ecrc_enable_o (command_ecrc_enable),
+
+      .command_data_o      (command_data),
+      .command_keep_o      (command_keep),
+      .command_data_valid_o(command_data_valid),
+      .command_data_last_o (command_data_last),
+      .command_data_ready_i(command_data_ready),
+
+      .rq_protocol_error_o(rq_protocol_error_o),
+      .rq_error_code_o    (rq_error_code_o),
+      .rq_gearbox_error_o (rq_gearbox_error_o)
+  );
+
+  // -------------------------------------------------------------------------
+  // The Transaction Layer. NOT modified by Commit 2a -- instantiated as it is.
+  // -------------------------------------------------------------------------
+  tlp_layer #(
+      .DATA_WIDTH   (TL_DATA_WIDTH),
+      .KEEP_WIDTH   (TL_KEEP_WIDTH),
+      .USER_WIDTH   (TL_USER_WIDTH),
+      .TAG_COUNT    (TAG_COUNT),
+      .CONTEXT_WIDTH(CONTEXT_WIDTH)
+  ) u_tlp_layer (
+      .clk_i(clk_i),
+      .rst_i(rst_i),
+
+      .link_up_i        (link_up_i),
+      .transmit_enable_i(transmit_enable_i),
+      .requester_id_i   (requester_id_i),
+      .completer_id_i   (completer_id_i),
+      .bus_number_i     (bus_number_i),
+      .device_number_i  (device_number_i),
+      .function_number_i(function_number_i),
+      .memory_enable_i  (memory_enable_i),
+      .extended_tag_enable_i(extended_tag_enable_i),
+      .max_payload_bytes_i  (max_payload_bytes_i),
+      .max_read_bytes_i     (max_read_bytes_i),
+      .rcb_128b_i           (rcb_128b_i),
+      .fc_initialized_i (fc_initialized_i),
+      .fc_update_valid_i(fc_update_valid_i),
+      .fc_ph_i  (fc_ph_i),   .fc_pd_i  (fc_pd_i),
+      .fc_nph_i (fc_nph_i),  .fc_npd_i (fc_npd_i),
+      .fc_cplh_i(fc_cplh_i), .fc_cpld_i(fc_cpld_i),
+
+      .s_dllp_axis_tdata (s_dllp_axis_tdata),
+      .s_dllp_axis_tkeep (s_dllp_axis_tkeep),
+      .s_dllp_axis_tvalid(s_dllp_axis_tvalid),
+      .s_dllp_axis_tlast (s_dllp_axis_tlast),
+      .s_dllp_axis_tuser (s_dllp_axis_tuser),
+      .s_dllp_axis_tready(s_dllp_axis_tready),
+
+      .m_dllp_axis_tdata (m_dllp_axis_tdata),
+      .m_dllp_axis_tkeep (m_dllp_axis_tkeep),
+      .m_dllp_axis_tvalid(m_dllp_axis_tvalid),
+      .m_dllp_axis_tlast (m_dllp_axis_tlast),
+      .m_dllp_axis_tuser (m_dllp_axis_tuser),
+      .m_dllp_axis_tready(m_dllp_axis_tready),
+
+      .command_valid_i       (command_valid),
+      .command_ready_o       (command_ready),
+      .command_i             (command),
+      .command_address_i     (command_address),
+      .command_byte_count_i  (command_byte_count),
+      .command_tc_i          (command_tc),
+      .command_attr_i        (command_attr),
+      .command_context_i     (command_context),
+      .command_prefix_valid_i(command_prefix_valid),
+      .command_prefix_i      (command_prefix),
+      .command_ecrc_enable_i (command_ecrc_enable),
+      .command_data_i        (command_data),
+      .command_keep_i        (command_keep),
+      .command_data_valid_i  (command_data_valid),
+      .command_data_last_i   (command_data_last),
+      .command_data_ready_o  (command_data_ready),
+      .command_error_valid_o (command_error_valid_o),
+      .command_error_code_o  (command_error_code_o),
+      .allocated_tag_o       (allocated_tag),
+      .allocated_tag_valid_o (allocated_tag_valid),
+
+      // ---- CQ (Completer Request): out of scope, discarded not stalled -----
+      .target_request_valid_o  (),
+      .target_request_ready_i  (1'b1),
+      .target_request_header_o (),
+      .target_request_class_o  (),
+      .target_memory_o         (),
+      .target_config_o         (),
+      .target_config_hit_o     (),
+      .target_config_type_one_o(),
+      .target_config_offset_o  (),
+      .target_read_o           (),
+      .target_write_o          (),
+      .target_unsupported_o    (),
+      .target_bar_hit_o        (),
+      .target_bar_overlap_o    (),
+      .target_bar_o            (),
+      .target_offset_o         (),
+      .target_data_o           (),
+      .target_keep_o           (),
+      .target_data_valid_o     (),
+      .target_data_last_o      (),
+      .target_data_ready_i     (1'b1),
+
+      // ---- CC (Completer Completion): out of scope, originates nothing -----
+      .completion_request_valid_i        (1'b0),
+      .completion_request_ready_o        (),
+      .completion_request_header_i       (completion_request_header_tie),
+      .completion_request_status_i       ('0),
+      .completion_request_byte_count_i   ('0),
+      .completion_request_lower_address_i('0),
+      .completion_request_ecrc_enable_i  (1'b0),
+      .completion_request_data_i         ('0),
+      .completion_request_keep_i         ('0),
+      .completion_request_data_valid_i   (1'b0),
+      .completion_request_data_last_i    (1'b0),
+      .completion_request_data_ready_o   (),
+
+      .received_completion_valid_o     (received_completion_valid),
+      .received_completion_ready_i     (received_completion_ready),
+      .received_completion_header_o    (received_completion_header),
+      .received_completion_data_o      (received_completion_data),
+      .received_completion_keep_o      (received_completion_keep),
+      .received_completion_data_valid_o(received_completion_data_valid),
+      .received_completion_data_last_o (received_completion_data_last),
+      .received_completion_data_ready_i(received_completion_data_ready),
+
+      .result_valid_o  (result_valid),
+      .result_ready_i  (result_ready),
+      .result_context_o(result_context),
+      .result_status_o (result_status),
+      .result_last_o   (result_last),
+
+      .malformed_o            (malformed_o),
+      .rx_error_valid_o       (rx_error_valid_o),
+      .rx_error_code_o        (rx_error_code_o),
+      .rx_ecrc_error_o        (rx_ecrc_error_o),
+      .tx_error_valid_o       (tx_error_valid_o),
+      .tx_error_code_o        (tx_error_code_o),
+      .tx_fc_blocked_o        (tx_fc_blocked_o),
+      .credit_error_o         (credit_error_o),
+      .vc_overflow_o          (vc_overflow_o),
+      .unexpected_completion_o(unexpected_completion),
+      .completion_error_code_o(completion_error_code),
+      .outstanding_o          (outstanding_o)
+  );
+
+  // -------------------------------------------------------------------------
+  // Requester Completion: TL received completion -> PG213 AXI-Stream.
+  // Commit 2a-ii.
+  // -------------------------------------------------------------------------
+  pcie_rc_if #(
+      .AXIS_DATA_WIDTH(AXIS_DATA_WIDTH),
+      .AXIS_KEEP_WIDTH(AXIS_KEEP_WIDTH),
+      .TL_DATA_WIDTH  (TL_DATA_WIDTH),
+      .TL_KEEP_WIDTH  (TL_KEEP_WIDTH),
+      .CONTEXT_WIDTH  (CONTEXT_WIDTH)
+  ) u_rc_if (
+      .clk_i(clk_i),
+      .rst_i(rst_i),
+
+      .received_completion_valid_i (received_completion_valid),
+      .received_completion_ready_o (received_completion_ready),
+      .received_completion_header_i(received_completion_header),
+
+      .received_completion_data_i      (received_completion_data),
+      .received_completion_keep_i      (received_completion_keep),
+      .received_completion_data_valid_i(received_completion_data_valid),
+      .received_completion_data_last_i (received_completion_data_last),
+      .received_completion_data_ready_o(received_completion_data_ready),
+
+      .result_valid_i         (result_valid),
+      .result_ready_o         (result_ready),
+      .result_context_i       (result_context),
+      .result_status_i        (result_status),
+      .result_last_i          (result_last),
+      .unexpected_completion_i(unexpected_completion),
+      .completion_error_code_i(completion_error_code),
+
+      .m_axis_rc_tdata (m_axis_rc_tdata),
+      .m_axis_rc_tkeep (m_axis_rc_tkeep),
+      .m_axis_rc_tvalid(m_axis_rc_tvalid),
+      .m_axis_rc_tlast (m_axis_rc_tlast),
+      .m_axis_rc_tready(m_axis_rc_tready),
+
+      .rc_unexpected_completion_o(rc_unexpected_completion_o),
+      .rc_completion_error_code_o(rc_completion_error_code_o),
+      .rc_protocol_error_o       (rc_protocol_error_o),
+      .rc_error_code_o           (rc_error_code_o),
+      .rc_gearbox_error_o        (rc_gearbox_error_o)
+  );
+
+endmodule

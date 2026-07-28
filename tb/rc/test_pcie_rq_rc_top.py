@@ -1,0 +1,826 @@
+"""Commit 2a-iii -- pcie_rq_rc_top acceptance (V1..V6).
+
+The assembled Root Complex requester surface, driven the way Commit 2b will
+drive it:
+
+    host RQ AXIS -> pcie_rq_if -> tlp_layer -> TX DLLP -> [completer]
+    [completer] -> RX DLLP -> tlp_layer -> pcie_rc_if -> host RC AXIS
+
+The two wrapper targets (verilate_rq_if / verilate_rc_if) own the cycle-accurate
+cases, and the two integration targets (verilate_rq_if_tlp / verilate_rc_if_tlp)
+own the on-wire goldens and the tag round trip.  This target owns the question
+neither of those can answer: does the assembled thing behave like a requester
+when several requests are in flight, when completions come back out of order,
+and when the consumer stops consuming.  V3 and V4 are the load-bearing ones.
+
+! FLOW CONTROL.  The DUT emits nothing, and reports NO error, until link_up_i,
+transmit_enable_i and fc_initialized_i are set and at least one
+fc_update_valid_i pulse has loaded non-zero credits (tlp_layer.sv:249,
+tlp_credit_manager.sv:53-54, 66-83).  Every "N packets" assertion below would
+otherwise be vacuously satisfied by silence.  This was regression RC1.
+
+RTL cited (read, not assumed):
+  DW0 assembly ..................... src/tlp/tlp_generator.sv:60-73
+  DW1 = {rid, tag, last_be, first_be}  src/tlp/tlp_generator.sv:80
+  config DW2 = {address[31:2],00} .. src/tlp/tlp_generator.sv:81-82
+  CPL parse, DW1/DW2 fields ........ src/tlp/tlp_parser.sv:163-189
+  tracker match + accounting ....... src/tlp/tlp_request_tracker.sv:123-155
+  Lower Address seeded 0 for
+    non-memory requests ............ src/tlp/tlp_layer.sv:371-378
+  RC descriptor field map .......... src/rc/pcie_rq_rc_pkg.sv, rc_descriptor_t
+"""
+
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import ReadOnly, RisingEdge
+
+CLK_NS = 4
+
+# The bench instantiates the DUT with TAG_COUNT = 8 (tb_pcie_rq_rc_top.sv), so
+# V4 reaches tag exhaustion in a short test rather than a slow one.
+TAG_COUNT = 8
+
+# pcie_rq_rc_pkg::rq_req_type_e
+RQ_CFG_READ0 = 0b1000
+RQ_CFG_WRITE0 = 0b1010
+
+# tlp_pkg::tlp_fmt_e / tlp_type_e (tlp_pkg.sv:8-27)
+FMT_3DW_NO_DATA = 0b000
+FMT_3DW_DATA = 0b010
+TYPE_CFG0 = 0b00100
+TYPE_CPL = 0b01010
+
+# tlp_pkg::tlp_cpl_status_e == PG213 Completion Status == RC descriptor [45:43]
+CPL_SC = 0b000
+CPL_UR = 0b001
+CPL_CRS = 0b010
+
+# pcie_rq_rc_pkg::rc_desc_error_e
+EC_NORMAL = 0b0000
+EC_BAD_STATUS = 0b0010
+
+RID = 0x1234        # the Root Complex's own requester_id_i
+COMPLETER = 0x0100  # the completer's BDF: bus 1, device 0, function 0
+
+
+# ==========================================================================
+# Descriptor goldens -- hand-derived from PG213 v1.3 Tables 60/61 and 65,
+# never read back from the DUT.
+# ==========================================================================
+def rq_desc(req_type, dword_count, address=0, completer_id=0, tc=0, attr=0):
+    """PG213 Table 60/61 RQ descriptor.  Tag [103:96] is ignored (core-managed)."""
+    v = address & ((1 << 64) - 1)
+    v |= (dword_count & 0x7FF) << 64
+    v |= (req_type & 0xF) << 75
+    v |= (completer_id & 0xFFFF) << 104
+    v |= (tc & 0x7) << 121
+    v |= (attr & 0x7) << 124
+    return v
+
+
+def cfg_desc_address(reg_num, ext_reg=0):
+    """Configuration form of the RQ descriptor address: {ext_reg, reg_num, 00}."""
+    return ((ext_reg & 0xF) << 8) | ((reg_num & 0x3F) << 2)
+
+
+def tuser(first_be, last_be):
+    return ((last_be & 0xF) << 4) | (first_be & 0xF)
+
+
+def cfg_wire_dw2(bus, dev, fn, reg_num, ext_reg=0):
+    """The config-request address DW as the generator emits it.
+
+    {bus[31:24], device[23:19], function[18:16], ext_reg[11:8], reg[7:2], 00}
+    (tlp_generator.sv:81-82).  The BDF comes from the RQ descriptor's Completer
+    ID field, NOT from the address -- which is why a config request needs
+    completer_id set and why this golden carries it.
+    """
+    return (((bus & 0xFF) << 24) | ((dev & 0x1F) << 19) | ((fn & 0x7) << 16)
+            | ((ext_reg & 0xF) << 8) | ((reg_num & 0x3F) << 2))
+
+
+def decode_rc_desc(v):
+    """PG213 Table 65, the 96-bit RC descriptor."""
+    return {
+        "lower_address": v & 0xFFF,
+        "error_code": (v >> 12) & 0xF,
+        "byte_count": (v >> 16) & 0x1FFF,
+        "locked": (v >> 29) & 1,
+        "request_completed": (v >> 30) & 1,
+        "dword_count": (v >> 32) & 0x7FF,
+        "status": (v >> 43) & 0x7,
+        "poisoned": (v >> 46) & 1,
+        "requester_id": (v >> 48) & 0xFFFF,
+        "tag": (v >> 64) & 0xFF,
+        "completer_id": (v >> 72) & 0xFFFF,
+        "tc": (v >> 89) & 0x7,
+        "attr": (v >> 92) & 0x7,
+    }
+
+
+def dw0_length(dw0):
+    """Recover length_dw from a TX DW0 (inverse of tlp_generator.sv:60-73)."""
+    enc = ((dw0 >> 24) & 0xFF) | (((dw0 >> 16) & 0x3) << 8)
+    return 1024 if enc == 0 else enc
+
+
+def cpl_dw0(has_data, length_dw, tc=0, attr=0):
+    """CPL DW0 as the parser reads it back (tlp_parser.sv:145-147, 150-155)."""
+    fmt = FMT_3DW_DATA if has_data else FMT_3DW_NO_DATA
+    enc = length_dw & 0x3FF
+    v = (fmt << 5) | TYPE_CPL
+    v |= (attr & 0x1) << 10
+    v |= (tc & 0x7) << 12
+    v |= ((attr >> 1) & 0x3) << 20
+    v |= ((enc >> 8) & 0x3) << 16
+    v |= (enc & 0xFF) << 24
+    return v & 0xFFFFFFFF
+
+
+def cpl_dw1(completer_id, status, byte_count, bcm=0):
+    """{completer_id[31:16], status[15:13], BCM[12], byte_count[11:0]}."""
+    return (((completer_id & 0xFFFF) << 16) | ((status & 0x7) << 13)
+            | ((bcm & 1) << 12) | (byte_count & 0xFFF))
+
+
+def cpl_dw2(requester_id, tag, lower_address):
+    """{requester_id[31:16], tag[15:8], lower_address[6:0]}."""
+    return (((requester_id & 0xFFFF) << 16) | ((tag & 0xFF) << 8)
+            | (lower_address & 0x7F))
+
+
+# ==========================================================================
+# SS THE COMPLETER
+#
+# A deliberately minimal config completer: it watches the DLL-facing TX stream,
+# parses each emitted request enough to know its tag and whether it wants data,
+# and builds a matching Cpl/CplD to inject on RX.  It checks NOTHING about the
+# request -- it is a stimulus source, not a verification model.
+#
+# It is meant to be REPLACED.  Joy is building a protocol-checking endpoint
+# verification model (Patrick's directive, 2026-07-27) that is intended to take
+# over this role.  The interface a replacement must present is small:
+#
+#     .start()                     spawn the TX watcher
+#     .seen                        list of Request(tag, is_read, reg, ...) in
+#                                  emission order, one per TLP off the wire
+#     await .wait_for(n)           block until n requests have been observed
+#     await .complete(req, ...)    inject one completion for that request
+#
+# Everything below the class is written against those four names only, so a
+# swap is: import the new model, construct it instead, keep the calls.  Nothing
+# in the RTL or the shim knows the completer exists.
+# ==========================================================================
+class Request:
+    """One request TLP observed leaving the Transaction Layer."""
+
+    def __init__(self, dwords):
+        dw0, dw1, dw2 = dwords[0], dwords[1], dwords[2]
+        self.dwords = dwords
+        self.fmt = (dw0 >> 5) & 0x7
+        self.tlp_type = dw0 & 0x1F
+        self.length_dw = dw0_length(dw0)
+        self.requester_id = (dw1 >> 16) & 0xFFFF
+        self.tag = (dw1 >> 8) & 0xFF
+        self.last_be = (dw1 >> 4) & 0xF
+        self.first_be = dw1 & 0xF
+        self.cfg_address = dw2
+        self.reg_num = (dw2 >> 2) & 0x3F
+        self.payload = dwords[3:]
+        # A request "wants data back" iff it carried none going out.  For the
+        # config requests this target issues that is exactly read vs write.
+        self.is_read = (self.fmt & 0b010) == 0
+
+    def __repr__(self):
+        kind = "Rd" if self.is_read else "Wr"
+        return (f"Cfg{kind}0(tag={self.tag:#04x}, reg={self.reg_num:#04x}, "
+                f"len={self.length_dw}, fbe={self.first_be:#06b})")
+
+
+class ConfigCompleter:
+    """Minimal, swappable config completer.  See SS THE COMPLETER above."""
+
+    def __init__(self, dut, requester_id=RID, completer_id=COMPLETER):
+        self.dut = dut
+        self.requester_id = requester_id
+        self.completer_id = completer_id
+        self.seen = []
+        self._partial = []
+
+    def start(self):
+        cocotb.start_soon(self._watch_tx())
+
+    async def _watch_tx(self):
+        d = self.dut
+        while True:
+            await RisingEdge(d.clk_i)
+            await ReadOnly()
+            if int(d.rst_i.value):
+                continue
+            if int(d.m_dllp_axis_tvalid.value) and int(d.m_dllp_axis_tready.value):
+                self._partial.append(int(d.m_dllp_axis_tdata.value))
+                if int(d.m_dllp_axis_tlast.value):
+                    self.seen.append(Request(self._partial))
+                    self._partial = []
+
+    async def wait_for(self, count, cycles=400):
+        for _ in range(cycles):
+            await RisingEdge(self.dut.clk_i)
+            if len(self.seen) >= count:
+                return
+        raise AssertionError(
+            f"expected {count} request TLPs on the wire, saw {len(self.seen)} "
+            f"({self.seen}) -- FC credits, or tags exhausted?")
+
+    async def complete(self, req, status=CPL_SC, data=None, byte_count=None):
+        """Inject the completion answering `req`.
+
+        A read gets a CplD carrying `data` (default: a value derived from the
+        tag, so a mis-paired payload is visible); a write gets a data-less Cpl.
+        A non-SC status always answers with no data, which is what a real
+        completer does -- UR and CRS terminate the request.
+
+        Byte Count must equal what the tracker still expects for an SC read
+        (tlp_request_tracker.sv:127-135); it is unchecked otherwise.
+        """
+        has_data = req.is_read and status == CPL_SC
+        if byte_count is None:
+            byte_count = 4
+        words = [
+            cpl_dw0(has_data=has_data, length_dw=1 if has_data else 0),
+            cpl_dw1(self.completer_id, status, byte_count=byte_count),
+            # Lower Address is 0 for every non-Memory-Read completion, and the
+            # tracker requires exactly that (tlp_layer.sv:371-378).
+            cpl_dw2(self.requester_id, req.tag, lower_address=0),
+        ]
+        if has_data:
+            words.append(0xD0000000 | req.tag if data is None else data)
+        await self._inject(words)
+
+    async def _inject(self, words):
+        d = self.dut
+        for index, word in enumerate(words):
+            d.s_dllp_axis_tdata.value = word
+            d.s_dllp_axis_tkeep.value = 0xF
+            d.s_dllp_axis_tlast.value = 1 if index == len(words) - 1 else 0
+            d.s_dllp_axis_tvalid.value = 1
+            for _ in range(20000):
+                await ReadOnly()
+                fired = int(d.s_dllp_axis_tready.value) == 1
+                await RisingEdge(d.clk_i)
+                if fired:
+                    break
+            else:
+                raise AssertionError("s_dllp_axis_tready never asserted -- RX wedged")
+        d.s_dllp_axis_tvalid.value = 0
+        d.s_dllp_axis_tlast.value = 0
+
+
+# ==========================================================================
+# Harness
+# ==========================================================================
+class Rc:
+    """Records RC packets and the error/status surface, concurrently."""
+
+    def __init__(self, dut):
+        self.dut = dut
+        self.packets = []
+        self._partial = []
+        self.tags_presented = []
+        self.rq_errors = []
+        self.rc_errors = []
+        self.unexpected = []
+        self.command_errors = []
+
+    def start(self):
+        cocotb.start_soon(self._run())
+
+    async def _run(self):
+        d = self.dut
+        while True:
+            await RisingEdge(d.clk_i)
+            await ReadOnly()
+            if int(d.rst_i.value):
+                continue
+            if int(d.m_axis_rc_tvalid.value) and int(d.m_axis_rc_tready.value):
+                self._partial.append((int(d.m_axis_rc_tdata.value),
+                                      int(d.m_axis_rc_tkeep.value),
+                                      int(d.m_axis_rc_tlast.value)))
+                if int(d.m_axis_rc_tlast.value):
+                    self.packets.append(self._partial)
+                    self._partial = []
+            if int(d.pcie_rq_tag_vld_o.value):
+                self.tags_presented.append(int(d.pcie_rq_tag_o.value))
+            if int(d.rq_protocol_error_o.value):
+                self.rq_errors.append(int(d.rq_error_code_o.value))
+            if int(d.rc_protocol_error_o.value):
+                self.rc_errors.append(int(d.rc_error_code_o.value))
+            if int(d.rc_unexpected_completion_o.value):
+                self.unexpected.append(int(d.rc_completion_error_code_o.value))
+            if int(d.command_error_valid_o.value):
+                self.command_errors.append(int(d.command_error_code_o.value))
+
+    async def wait_packets(self, count, cycles=1500):
+        for _ in range(cycles):
+            await RisingEdge(self.dut.clk_i)
+            if len(self.packets) >= count:
+                return
+        raise AssertionError(
+            f"expected {count} RC packets, saw {len(self.packets)}")
+
+    def clean(self):
+        assert self.rq_errors == [], f"RQ protocol errors: {self.rq_errors}"
+        assert self.rc_errors == [], f"RC protocol errors: {self.rc_errors}"
+        assert self.unexpected == [], f"unexpected completions: {self.unexpected}"
+        assert self.command_errors == [], f"TL command errors: {self.command_errors}"
+
+
+def packet_dwords(beats):
+    words = []
+    for tdata, tkeep, _last in beats:
+        for dword in range(4):
+            if (tkeep >> dword) & 1:
+                words.append((tdata >> (32 * dword)) & 0xFFFFFFFF)
+    return words
+
+
+def split_packet(beats):
+    """(96-bit descriptor, [payload Dwords])."""
+    words = packet_dwords(beats)
+    assert len(words) >= 3, f"RC packet shorter than a descriptor: {words}"
+    return words[0] | (words[1] << 32) | (words[2] << 64), words[3:]
+
+
+def init_flow_control(dut):
+    """Saturate the VC0 credit pool.
+
+    Without this the credit manager holds request_ready_o low forever
+    (tlp_credit_manager.sv:53-54, 66-83) and the DUT transmits nothing, with no
+    error.  This target exercises the assembled requester, not flow control --
+    which has its own tb_tlp_credit_manager bench -- so the pool is held
+    saturated and must never be the limiter.
+    """
+    dut.fc_initialized_i.value = 1
+    dut.fc_update_valid_i.value = 1
+    dut.fc_ph_i.value = 0xFF
+    dut.fc_pd_i.value = 0xFFF
+    dut.fc_nph_i.value = 0xFF
+    dut.fc_npd_i.value = 0xFFF
+    dut.fc_cplh_i.value = 0xFF
+    dut.fc_cpld_i.value = 0xFFF
+
+
+async def init(dut, rc_ready=1):
+    cocotb.start_soon(Clock(dut.clk_i, CLK_NS, units="ns").start())
+    dut.rst_i.value = 1
+    dut.link_up_i.value = 0
+    dut.transmit_enable_i.value = 0
+    dut.s_axis_rq_tdata.value = 0
+    dut.s_axis_rq_tkeep.value = 0
+    dut.s_axis_rq_tvalid.value = 0
+    dut.s_axis_rq_tlast.value = 0
+    dut.s_axis_rq_tuser.value = 0
+    dut.s_dllp_axis_tdata.value = 0
+    dut.s_dllp_axis_tkeep.value = 0
+    dut.s_dllp_axis_tvalid.value = 0
+    dut.s_dllp_axis_tlast.value = 0
+    dut.s_dllp_axis_tuser.value = 0
+    dut.m_dllp_axis_tready.value = 1
+    dut.m_axis_rc_tready.value = rc_ready
+    dut.requester_id_i.value = RID
+    dut.completer_id_i.value = 0
+    dut.bus_number_i.value = 0
+    dut.device_number_i.value = 0
+    dut.function_number_i.value = 0
+    dut.memory_enable_i.value = 1
+    dut.extended_tag_enable_i.value = 0
+    dut.max_payload_bytes_i.value = 128
+    dut.max_read_bytes_i.value = 128
+    dut.rcb_128b_i.value = 0
+    dut.fc_initialized_i.value = 0
+    dut.fc_update_valid_i.value = 0
+    for name in ("fc_ph_i", "fc_pd_i", "fc_nph_i", "fc_npd_i",
+                 "fc_cplh_i", "fc_cpld_i"):
+        getattr(dut, name).value = 0
+    for _ in range(4):
+        await RisingEdge(dut.clk_i)
+    dut.rst_i.value = 0
+    dut.link_up_i.value = 1
+    dut.transmit_enable_i.value = 1
+    init_flow_control(dut)
+    for _ in range(4):
+        await RisingEdge(dut.clk_i)
+
+    rc = Rc(dut)
+    rc.start()
+    completer = ConfigCompleter(dut)
+    completer.start()
+    await RisingEdge(dut.clk_i)
+    return rc, completer
+
+
+async def send_rq(dut, beats, limit=4000):
+    """beats: (tdata, tkeep, tlast, tuser) on the host RQ AXIS."""
+    for data, keep, last, user in beats:
+        dut.s_axis_rq_tdata.value = data
+        dut.s_axis_rq_tkeep.value = keep
+        dut.s_axis_rq_tlast.value = 1 if last else 0
+        dut.s_axis_rq_tuser.value = user
+        dut.s_axis_rq_tvalid.value = 1
+        for _ in range(limit):
+            await ReadOnly()
+            fired = int(dut.s_axis_rq_tready.value) == 1
+            await RisingEdge(dut.clk_i)
+            if fired:
+                break
+        else:
+            raise AssertionError("s_axis_rq_tready never asserted -- stalled")
+    dut.s_axis_rq_tvalid.value = 0
+    dut.s_axis_rq_tlast.value = 0
+
+
+async def cfg_read(dut, reg_num, first_be=0xF):
+    """Issue one CfgRd0 on the host RQ interface."""
+    desc = rq_desc(RQ_CFG_READ0, dword_count=1,
+                   address=cfg_desc_address(reg_num), completer_id=COMPLETER)
+    await send_rq(dut, [(desc, 0xF, True, tuser(first_be, 0x0))])
+
+
+async def cfg_write(dut, reg_num, data, first_be=0xF):
+    """Issue one CfgWr0 on the host RQ interface: descriptor beat + one Dword."""
+    desc = rq_desc(RQ_CFG_WRITE0, dword_count=1,
+                   address=cfg_desc_address(reg_num), completer_id=COMPLETER)
+    await send_rq(dut, [
+        (desc, 0xF, False, tuser(first_be, 0x0)),
+        (data, 0x1, True, 0),
+    ])
+
+
+async def settle(dut, cycles=30):
+    for _ in range(cycles):
+        await RisingEdge(dut.clk_i)
+
+
+# ==========================================================================
+# V1 -- CfgRd0 round trip
+# ==========================================================================
+@cocotb.test()
+async def v1_cfgrd0_round_trip(dut):
+    """RQ descriptor in -> completer returns CplD -> RC packet out.
+
+    The base case Commit 2b's enumeration is built from: read a config
+    register, get the data back, get the tag back, and get the tag released.
+    """
+    rc, completer = await init(dut)
+    assert int(dut.outstanding_o.value) == 0, "a fresh DUT holds no tags"
+
+    await cfg_read(dut, reg_num=0x00)          # Vendor/Device ID
+    await completer.wait_for(1)
+    req = completer.seen[0]
+    assert req.tlp_type == TYPE_CFG0, f"emitted type {req.tlp_type:#07b} != CfgRd0"
+    assert req.length_dw == 1, f"a config request is always 1 Dword, got {req.length_dw}"
+    assert req.requester_id == RID, \
+        f"Requester ID {req.requester_id:#06x} != requester_id_i {RID:#06x}"
+    assert int(dut.outstanding_o.value) == 1, "a CfgRd0 must hold a tag"
+
+    # The tag presented to the host must be the tag that went on the wire.
+    assert rc.tags_presented == [req.tag], \
+        (f"pcie_rq_tag_o {[hex(t) for t in rc.tags_presented]} != the tag in the "
+         f"emitted header {req.tag:#04x}")
+
+    read_data = 0x8086100E
+    await completer.complete(req, status=CPL_SC, data=read_data)
+    await rc.wait_packets(1)
+
+    desc, payload = split_packet(rc.packets[0])
+    f = decode_rc_desc(desc)
+    assert f["tag"] == req.tag, \
+        f"RC descriptor Tag {f['tag']:#04x} != the tag on the wire {req.tag:#04x}"
+    assert f["status"] == CPL_SC, f"status {f['status']:#05b} != SC"
+    assert f["error_code"] == EC_NORMAL, f"error code {f['error_code']:#06b} != 0000"
+    assert f["request_completed"] == 1, "a single-CPL request must set bit 30"
+    assert f["dword_count"] == 1, f"Dword Count {f['dword_count']} != 1"
+    assert f["byte_count"] == 4, f"Byte Count {f['byte_count']} != 4"
+    assert f["requester_id"] == RID
+    assert f["completer_id"] == COMPLETER
+    assert f["lower_address"] == 0, \
+        f"config completion Lower Address {f['lower_address']:#05x} != 0"
+    assert payload == [read_data], \
+        f"read data {[hex(w) for w in payload]} != [{read_data:#010x}]"
+
+    await settle(dut)
+    assert int(dut.outstanding_o.value) == 0, "the tag did not retire"
+    rc.clean()
+
+
+# ==========================================================================
+# V2 -- byte-granular CfgWr0, the Commit-2b bus-number shape
+# ==========================================================================
+@cocotb.test()
+async def v2_byte_granular_cfgwr0(dut):
+    """A one-byte config write at offset 0x19: first_be=0010, exactly one TLP.
+
+    This is the shape Commit 2b writes a Secondary Bus Number with.  Offset
+    0x19 is byte 1 of the Dword at 0x18, so register number 6 and first_be
+    0010.  If the wrapper widened this to a full-Dword write it would clobber
+    the three neighbouring bytes of a live bridge's config space.
+    """
+    rc, completer = await init(dut)
+
+    await cfg_write(dut, reg_num=0x18 >> 2, data=0x0000_5A00, first_be=0x2)
+    await completer.wait_for(1)
+
+    assert len(completer.seen) == 1, \
+        f"a 1-Dword config write must emit exactly one TLP, got {len(completer.seen)}"
+    req = completer.seen[0]
+    assert req.tlp_type == TYPE_CFG0, f"emitted type {req.tlp_type:#07b} != CfgWr0"
+    assert not req.is_read, "a CfgWr0 must carry data"
+    assert req.first_be == 0b0010, \
+        (f"first_be {req.first_be:#06b} != 0010 -- a byte-granular config write "
+         "was widened, which would clobber neighbouring config bytes")
+    assert req.last_be == 0b0000, f"last_be {req.last_be:#06b} != 0000 for N=1"
+    assert req.length_dw == 1, f"length_dw {req.length_dw} != 1"
+    # bus 1, device 0, function 0 from COMPLETER; register 6; [1:0] forced 0.
+    golden_dw2 = cfg_wire_dw2(bus=1, dev=0, fn=0, reg_num=0x18 >> 2)
+    assert req.cfg_address == golden_dw2, \
+        (f"config address DW {req.cfg_address:#010x} != {golden_dw2:#010x} -- "
+         "the request is addressed at the wrong BDF or register")
+    assert int(dut.outstanding_o.value) == 1, "a non-posted write must hold a tag"
+
+    # A config-write completion carries no data.
+    await completer.complete(req, status=CPL_SC)
+    await rc.wait_packets(1)
+
+    beats = rc.packets[0]
+    desc, payload = split_packet(beats)
+    f = decode_rc_desc(desc)
+    assert f["status"] == CPL_SC, f"status {f['status']:#05b} != SC"
+    assert f["error_code"] == EC_NORMAL
+    assert f["dword_count"] == 0, \
+        f"Dword Count {f['dword_count']} != 0 for a Cpl with no data"
+    assert payload == [], f"a write completion carried payload {payload}"
+    assert f["tag"] == req.tag
+    assert f["request_completed"] == 1
+    assert len(beats) == 1, f"descriptor-only packet must be one beat, got {len(beats)}"
+    assert beats[0][1] == 0b0111, \
+        f"3 descriptor Dwords -> tkeep 0b0111, got {beats[0][1]:#06b}"
+    assert beats[0][2] == 1, "descriptor-only packet must assert tlast on beat 0"
+
+    await settle(dut)
+    assert int(dut.outstanding_o.value) == 0, "the tag did not retire"
+    rc.clean()
+
+
+# ==========================================================================
+# V3 -- four outstanding, completions returned OUT OF ORDER
+# ==========================================================================
+@cocotb.test()
+async def v3_out_of_order_completions(dut):
+    """Four requests in flight, answered 3,1,0,2.  Each RC packet must carry
+    its OWN request's tag and its OWN payload.
+
+    This is what enumeration does against a slow device, and it is the single
+    property the whole commit exists to provide.  A wrapper that paired
+    completions with requests positionally -- by arrival order rather than by
+    tag -- passes every in-order test and fails here.  Each completion carries
+    a payload derived from its own tag, so a cross-assignment shows up in the
+    data as well as in the descriptor.
+    """
+    rc, completer = await init(dut)
+
+    regs = (0x00, 0x08, 0x10, 0x2C)
+    for reg in regs:
+        await cfg_read(dut, reg_num=reg >> 2)
+    await completer.wait_for(len(regs))
+
+    assert len(completer.seen) == len(regs), \
+        f"{len(completer.seen)} TLPs emitted, expected {len(regs)}"
+    assert int(dut.outstanding_o.value) == len(regs), \
+        f"outstanding_o {int(dut.outstanding_o.value)} != {len(regs)}"
+
+    tags = [r.tag for r in completer.seen]
+    assert len(set(tags)) == len(regs), \
+        (f"tags {[hex(t) for t in tags]} are not distinct -- with tags reused the "
+         "test could not tell correct pairing from constant pairing")
+    assert rc.tags_presented == tags, \
+        (f"pcie_rq_tag_o sequence {[hex(t) for t in rc.tags_presented]} != the tags "
+         f"in the emitted headers {[hex(t) for t in tags]}")
+
+    # Deliberately neither in order nor reversed: 3,1,0,2 has no fixed point
+    # and is not a reversal, so neither "positional" nor "reverse-positional"
+    # pairing survives it.
+    order = [3, 1, 0, 2]
+    expected_data = {slot: 0xBEEF0000 | slot for slot in order}
+    for slot in order:
+        await completer.complete(completer.seen[slot], status=CPL_SC,
+                                 data=expected_data[slot])
+    await rc.wait_packets(len(regs))
+
+    assert len(rc.packets) == len(regs), \
+        f"{len(rc.packets)} RC packets delivered, expected {len(regs)}"
+
+    for position, slot in enumerate(order):
+        desc, payload = split_packet(rc.packets[position])
+        f = decode_rc_desc(desc)
+        assert f["tag"] == tags[slot], \
+            (f"RC packet {position}: Tag {f['tag']:#04x} != the tag of the request "
+             f"it answers {tags[slot]:#04x} -- completions are being paired with "
+             "requests positionally, not by tag")
+        assert payload == [expected_data[slot]], \
+            (f"RC packet {position} (tag {f['tag']:#04x}) carried payload "
+             f"{[hex(w) for w in payload]}, which belongs to another completion")
+        assert f["status"] == CPL_SC and f["error_code"] == EC_NORMAL
+        assert f["request_completed"] == 1
+
+    delivered = [decode_rc_desc(split_packet(p)[0])["tag"] for p in rc.packets]
+    assert sorted(delivered) == sorted(tags), \
+        f"delivered tags {[hex(t) for t in delivered]} != issued {[hex(t) for t in tags]}"
+
+    await settle(dut)
+    assert int(dut.outstanding_o.value) == 0, "not every tag retired"
+    rc.clean()
+
+
+# ==========================================================================
+# V4 -- RC backpressure -> tag pressure -> recovery
+# ==========================================================================
+@cocotb.test()
+async def v4_backpressure_tag_exhaustion_recovery(dut):
+    """Hold m_axis_rc_tready low, exhaust the tags, then release.
+
+    The full flow-control loop: RQ -> tag allocation -> completion -> RC drain
+    -> tag release -> RQ resumes.  The properties that matter are that the
+    stall propagates BACKWARDS as ordinary AXI-Stream backpressure rather than
+    deadlocking or dropping, and that everything still standing when ready
+    rises is delivered exactly once.
+    """
+    rc, completer = await init(dut, rc_ready=0)
+
+    # ---- fill every tag -------------------------------------------------
+    for index in range(TAG_COUNT):
+        await cfg_read(dut, reg_num=index)
+    await completer.wait_for(TAG_COUNT)
+    assert int(dut.outstanding_o.value) == TAG_COUNT, \
+        f"outstanding_o {int(dut.outstanding_o.value)} != {TAG_COUNT}"
+    tags = [r.tag for r in completer.seen]
+    assert len(set(tags)) == TAG_COUNT, f"tags not distinct: {[hex(t) for t in tags]}"
+
+    # ---- with no tags left, the RQ interface must back-pressure the host --
+    #
+    # A BOUNDED amount of buffering here is legal and expected: the next
+    # request is launched into the requester, which then parks in REQ_TAG with
+    # no tag available (tlp_requester.sv:211, 215-218), and pcie_rq_if can hold
+    # one more descriptor behind it waiting for command_ready_o.  So two extra
+    # requests are absorbed without any TLP being emitted.  What must NOT
+    # happen is unbounded acceptance, so this issues more than the pipeline can
+    # swallow and requires the sender to still be blocked.
+    extra = 4
+    sender = cocotb.start_soon(_issue_many(dut, start_reg=TAG_COUNT, count=extra))
+    await settle(dut, 120)
+
+    assert len(completer.seen) == TAG_COUNT, \
+        (f"{len(completer.seen)} TLPs emitted with only {TAG_COUNT} tags -- a "
+         "request went out without a tag behind it")
+    assert int(dut.s_axis_rq_tready.value) == 0, \
+        ("s_axis_rq_tready is still high with every tag allocated -- the tag "
+         "shortage is not reaching the host as backpressure")
+    assert not sender.done(), \
+        (f"all {extra} extra requests were accepted with no free tag -- the RQ "
+         "interface is buffering without bound instead of back-pressuring")
+
+    # ---- answer them all while the consumer is still stalled -------------
+    injector = cocotb.start_soon(_complete_all(completer, completer.seen[:TAG_COUNT]))
+    await settle(dut, 200)
+
+    assert rc.packets == [], \
+        (f"{len(rc.packets)} RC packets transferred with m_axis_rc_tready low -- "
+         "the master is ignoring backpressure")
+
+    # ---- release, and everything must drain ------------------------------
+    dut.m_axis_rc_tready.value = 1
+    await rc.wait_packets(TAG_COUNT, cycles=4000)
+    await injector
+    await settle(dut, 60)
+
+    assert len(rc.packets) == TAG_COUNT, \
+        (f"{len(rc.packets)} RC packets after the drain, expected exactly "
+         f"{TAG_COUNT} -- a completion was lost or duplicated")
+    delivered = [decode_rc_desc(split_packet(p)[0])["tag"] for p in rc.packets]
+    assert sorted(delivered) == sorted(tags), \
+        (f"delivered tags {[hex(t) for t in delivered]} != issued "
+         f"{[hex(t) for t in tags]} -- completions lost, duplicated or re-tagged")
+    for packet in rc.packets:
+        desc, payload = split_packet(packet)
+        f = decode_rc_desc(desc)
+        assert payload == [0xD0000000 | f["tag"]], \
+            (f"tag {f['tag']:#04x} arrived with payload {[hex(w) for w in payload]}, "
+             "which belongs to another completion")
+
+    # ---- and the host must be able to make progress again ----------------
+    await sender
+    await completer.wait_for(TAG_COUNT + extra)
+    assert len(completer.seen) == TAG_COUNT + extra, \
+        (f"{len(completer.seen)} TLPs emitted after the drain, expected "
+         f"{TAG_COUNT + extra} -- tags were not released and the RQ never resumed")
+
+    for req in completer.seen[TAG_COUNT:]:
+        await completer.complete(req, status=CPL_SC)
+    await rc.wait_packets(TAG_COUNT + extra, cycles=2000)
+    await settle(dut, 60)
+    assert int(dut.outstanding_o.value) == 0, \
+        f"outstanding_o {int(dut.outstanding_o.value)} != 0 after everything drained"
+    rc.clean()
+
+
+async def _issue_many(dut, start_reg, count):
+    for index in range(count):
+        await cfg_read(dut, reg_num=(start_reg + index) & 0x3F, first_be=0xF)
+
+
+async def _complete_all(completer, requests):
+    for req in requests:
+        await completer.complete(req, status=CPL_SC)
+
+
+# ==========================================================================
+# V5 -- CRS
+# ==========================================================================
+@cocotb.test()
+async def v5_crs_completion(dut):
+    """Configuration Request Retry Status carried faithfully to the descriptor.
+
+    An NVMe device may legally answer an early Configuration read with CRS, and
+    Commit 2b has to see it to know to RETRY rather than to conclude the
+    function is absent.  Folding it into a generic "error" would make
+    enumeration give up on a device that was merely still initialising.
+    """
+    rc, completer = await init(dut)
+
+    await cfg_read(dut, reg_num=0x00)
+    await completer.wait_for(1)
+    req = completer.seen[0]
+
+    await completer.complete(req, status=CPL_CRS)
+    await rc.wait_packets(1)
+
+    desc, payload = split_packet(rc.packets[0])
+    f = decode_rc_desc(desc)
+    assert f["status"] == CPL_CRS, \
+        (f"Completion Status {f['status']:#05b} != 010 -- CRS did not survive the "
+         "trip and Commit 2b would read it as something else")
+    assert f["error_code"] == EC_BAD_STATUS, \
+        f"Error Code {f['error_code']:#06b} != 0010 for CRS"
+    assert f["tag"] == req.tag
+    assert f["request_completed"] == 1, "CRS terminates the request"
+    assert f["dword_count"] == 0 and payload == [], "CRS carries no data"
+
+    await settle(dut)
+    assert int(dut.outstanding_o.value) == 0, "CRS must retire the tag"
+    rc.clean()
+
+
+# ==========================================================================
+# V6 -- UR
+# ==========================================================================
+@cocotb.test()
+async def v6_ur_completion(dut):
+    """Unsupported Request carried faithfully; the tag is released.
+
+    Enumeration probing an absent device hits this constantly -- every empty
+    slot and every unimplemented function answers UR.  A UR that did not
+    release its tag would exhaust the tag pool within one bus scan.
+    """
+    rc, completer = await init(dut)
+
+    await cfg_read(dut, reg_num=0x00)
+    await completer.wait_for(1)
+    req = completer.seen[0]
+    assert int(dut.outstanding_o.value) == 1
+
+    await completer.complete(req, status=CPL_UR)
+    await rc.wait_packets(1)
+
+    desc, payload = split_packet(rc.packets[0])
+    f = decode_rc_desc(desc)
+    assert f["status"] == CPL_UR, \
+        f"Completion Status {f['status']:#05b} != 001 -- UR did not survive the trip"
+    assert f["error_code"] == EC_BAD_STATUS, \
+        f"Error Code {f['error_code']:#06b} != 0010 for UR"
+    assert f["request_completed"] == 1, \
+        "bit 30 must be set -- UR terminates the request"
+    assert f["tag"] == req.tag
+    assert f["dword_count"] == 0 and payload == [], "UR carries no data"
+
+    await settle(dut)
+    assert int(dut.outstanding_o.value) == 0, \
+        "UR must release the tag -- an enumeration scan would exhaust the pool"
+    rc.clean()
+
+    # A second probe must get a tag, i.e. the pool really did recover.
+    await cfg_read(dut, reg_num=0x00)
+    await completer.wait_for(2)
+    await completer.complete(completer.seen[1], status=CPL_UR)
+    await rc.wait_packets(2)
+    await settle(dut)
+    assert int(dut.outstanding_o.value) == 0
+    rc.clean()

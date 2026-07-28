@@ -13,7 +13,12 @@ description: >
   adds pcie_rc_if, the Requester Completion master: it registers the parsed
   completion header into alignment with the request tracker's one-cycle-later
   result digest, builds the 96-bit RC descriptor, and streams it ahead of the
-  payload through pcie_axis_dw_upsize.
+  payload through pcie_axis_dw_upsize. 2a-iii adds pcie_rq_rc_top, which is
+  wiring only: pcie_rq_if + tlp_layer + pcie_rc_if behind the PG213 user
+  interface. It EXPOSES link_up_i / transmit_enable_i / fc_initialized_i /
+  fc_update_valid_i, because tlp_layer emits nothing and reports nothing
+  without all four, and it ties off the Completer (CQ/CC) surface, which is the
+  endpoint side and out of scope for Commit 2a.
 
 filesets:
   rtl:
@@ -26,6 +31,7 @@ filesets:
       - pcie_rq_rc_pkg.sv
       - pcie_rq_if.sv
       - pcie_rc_if.sv
+      - pcie_rq_rc_top.sv
     file_type: systemVerilogSource
 
 targets:
