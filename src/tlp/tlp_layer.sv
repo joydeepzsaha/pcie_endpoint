@@ -69,6 +69,23 @@ module tlp_layer
     output logic                     command_data_ready_o,
     output logic                     command_error_valid_o,
     output tlp_error_e               command_error_code_o,
+    // The tag the request tracker just handed out, and a one-cycle strobe at
+    // the moment it did.  This is the tag that goes on the wire in the emitted
+    // header and that the matching completion returns, so a client can
+    // correlate a request it issued with the completion that answers it.
+    //
+    // The tag is NOT known when the command is accepted: the requester leaves
+    // REQ_IDLE, then allocates in REQ_TAG a cycle or more later
+    // (tlp_requester.sv:211, 215-218), which is why this is a strobe rather
+    // than a value qualified by command_ready_o.
+    //
+    // Posted writes allocate nothing -- TLP_CMD_MEM_WRITE goes REQ_IDLE ->
+    // REQ_HEADER directly (tlp_requester.sv:211, 253) -- so the strobe never
+    // fires for them.  A segmented non-posted request re-enters REQ_TAG per
+    // segment (:228, :253), so it strobes once per emitted TLP, each with that
+    // TLP's own tag.
+    output logic [7:0]               allocated_tag_o,
+    output logic                     allocated_tag_valid_o,
 
     output logic                     target_request_valid_o,
     input  logic                     target_request_ready_i,
@@ -159,6 +176,13 @@ module tlp_layer
   logic tracker_completion_ready;
   logic [12:0] completion_payload_bytes;
   logic [7:0] allocated_tag;
+  // Pure taps on the existing requester <-> tracker allocation handshake.  The
+  // strobe condition is the same expression the tracker commits the tag on
+  // (tlp_request_tracker.sv:113), and allocated_tag is combinational there
+  // (:56-63), so it carries the committed value in exactly this cycle.
+  // Nothing else in this module reads either output.
+  assign allocated_tag_o       = allocated_tag;
+  assign allocated_tag_valid_o = tag_valid && tag_ready;
   logic [15:0] tag_requester_id;
   logic [12:0] tag_byte_count;
   logic [CONTEXT_WIDTH-1:0] tag_context;
