@@ -59,6 +59,9 @@ CPL_CRS = 0b010
 EC_NORMAL = 0b0000
 EC_BAD_STATUS = 0b0010
 
+# pcie_rq_rc_pkg::rc_error_e (pcie_rq_rc_pkg.sv:190-194)
+RC_ERR_ORPHAN_DATA = 3
+
 RID = 0x1234        # the Root Complex's own requester_id_i
 COMPLETER = 0x0100  # the completer's BDF: bus 1, device 0, function 0
 
@@ -291,6 +294,10 @@ class Rc:
         self.rc_errors = []
         self.unexpected = []
         self.command_errors = []
+        # Completion Timeout sideband (tlp_request_tracker.sv).  Recorded for
+        # every test, so V1..V6 assert its SILENCE via clean() below.
+        self.timeouts = []
+        self.lates = []
 
     def start(self):
         cocotb.start_soon(self._run())
@@ -319,6 +326,32 @@ class Rc:
                 self.unexpected.append(int(d.rc_completion_error_code_o.value))
             if int(d.command_error_valid_o.value):
                 self.command_errors.append(int(d.command_error_code_o.value))
+            if int(d.cpl_timeout_valid_o.value):
+                self.timeouts.append(int(d.cpl_timeout_tag_o.value))
+            if int(d.late_cpl_valid_o.value):
+                self.lates.append(int(d.late_cpl_tag_o.value))
+
+    async def wait_timeouts(self, count, cycles=4400):
+        """Block until `count` completion-timeout strobes have been seen.
+
+        The default 4096-cycle timeout plus one TAG_COUNT scan period is the
+        real bound; 4400 gives it room without hiding a gross regression.
+        """
+        for _ in range(cycles):
+            await RisingEdge(self.dut.clk_i)
+            if len(self.timeouts) >= count:
+                return
+        raise AssertionError(
+            f"expected {count} cpl_timeout strobes, saw {len(self.timeouts)} "
+            f"({self.timeouts}) after {cycles} cycles")
+
+    async def wait_lates(self, count, cycles=200):
+        for _ in range(cycles):
+            await RisingEdge(self.dut.clk_i)
+            if len(self.lates) >= count:
+                return
+        raise AssertionError(
+            f"expected {count} late_cpl strobes, saw {len(self.lates)} ({self.lates})")
 
     async def wait_packets(self, count, cycles=1500):
         for _ in range(cycles):
@@ -328,11 +361,19 @@ class Rc:
         raise AssertionError(
             f"expected {count} RC packets, saw {len(self.packets)}")
 
-    def clean(self):
+    def clean(self, allow_timeouts=False):
         assert self.rq_errors == [], f"RQ protocol errors: {self.rq_errors}"
         assert self.rc_errors == [], f"RC protocol errors: {self.rc_errors}"
         assert self.unexpected == [], f"unexpected completions: {self.unexpected}"
         assert self.command_errors == [], f"TL command errors: {self.command_errors}"
+        if not allow_timeouts:
+            # Behaviour-neutrality, enforced rather than argued: no test that
+            # answers its requests may trip the completion timeout.  If the
+            # default CPL_TIMEOUT_CYCLES is ever lowered below what these tests
+            # need, this is what says so.
+            assert self.timeouts == [], \
+                f"completion timeout fired for tags {self.timeouts} in a test that answers"
+            assert self.lates == [], f"late completions drained: {self.lates}"
 
 
 def packet_dwords(beats):
@@ -824,3 +865,172 @@ async def v6_ur_completion(dut):
     await settle(dut)
     assert int(dut.outstanding_o.value) == 0
     rc.clean()
+
+
+# ==========================================================================
+# SS COMPLETION TIMEOUT (V7..V9)
+#
+# The standalone target verilate_tlp_cpl_timeout owns the cycle-exact
+# mechanism at CPL_TIMEOUT_CYCLES=64.  These three own what only the assembled
+# design can answer: that the strobes reach the TOP-LEVEL ports the Commit 2b
+# FSM will watch, that they correlate with pcie_rq_tag_o, that answered and
+# unanswered requests do not contaminate each other, and that a late
+# completion's PAYLOAD BEATS drain without wedging the receive path.
+#
+# These run at the shipped 4096-cycle default -- deliberately, since the
+# default is what 2b will actually see.  Each timeout therefore costs ~16.4 us
+# of simulation at CLK_NS=4.
+# ==========================================================================
+@cocotb.test()
+async def v7_config_read_times_out(dut):
+    """V-T1: a CfgRd0 nobody answers times out, visibly, at the top level.
+
+    The tag in the strobe must be the tag pcie_rq_tag_o presented when the
+    request went out -- that correlation is the whole point of the sideband.
+    The interface must keep accepting requests: only one of TAG_COUNT tags was
+    consumed, so recovery here does NOT depend on the quarantine expiring.
+    """
+    rc, completer = await init(dut)
+
+    await cfg_read(dut, reg_num=0x00)
+    await completer.wait_for(1)
+    req = completer.seen[0]
+    assert rc.tags_presented == [req.tag]
+    assert int(dut.outstanding_o.value) == 1
+
+    # Nobody answers.
+    await rc.wait_timeouts(1)
+    assert rc.timeouts == [req.tag], (
+        f"timeout reported tag {[hex(t) for t in rc.timeouts]}, but the request went "
+        f"out on tag {req.tag:#04x} (pcie_rq_tag_o said {[hex(t) for t in rc.tags_presented]})")
+    assert rc.packets == [], "a timed-out request must produce NO RC packet"
+    assert rc.unexpected == [], "a timeout is not an unexpected completion"
+    assert int(dut.outstanding_o.value) == 1, \
+        "the quarantined tag still counts as outstanding"
+
+    # ...and the interface is still alive.
+    await cfg_read(dut, reg_num=0x04)
+    await completer.wait_for(2)
+    req2 = completer.seen[1]
+    assert req2.tag != req.tag, \
+        f"the quarantined tag {req.tag:#04x} must not be handed out again"
+    await completer.complete(req2, status=CPL_SC, data=0xC0FFEE00)
+    await rc.wait_packets(1)
+    desc, payload = split_packet(rc.packets[0])
+    f = decode_rc_desc(desc)
+    assert f["tag"] == req2.tag, "the second request completed against the wrong tag"
+    assert payload == [0xC0FFEE00]
+    assert len(rc.timeouts) == 1, "the answered request must not also time out"
+    rc.clean(allow_timeouts=True)
+
+
+@cocotb.test()
+async def v8_mixed_answered_and_unanswered(dut):
+    """V-T2: answered and unanswered requests in flight together do not mix.
+
+    Three reads go out on three DISTINCT tags and only the middle one is
+    answered.  An assertion over "tag is always 0" would prove nothing, so the
+    test asserts the tags are distinct before relying on them.
+    """
+    rc, completer = await init(dut)
+
+    for reg in (0x00, 0x04, 0x08):
+        await cfg_read(dut, reg_num=reg)
+    await completer.wait_for(3)
+    reqs = completer.seen[:3]
+    tags = [r.tag for r in reqs]
+    assert len(set(tags)) == 3, f"the three requests must hold distinct tags, got {tags}"
+    assert int(dut.outstanding_o.value) == 3
+
+    answered = reqs[1]
+    await completer.complete(answered, status=CPL_SC, data=0xA5A5_0001)
+    await rc.wait_packets(1)
+    desc, payload = split_packet(rc.packets[0])
+    f = decode_rc_desc(desc)
+    assert f["tag"] == answered.tag, \
+        f"RC descriptor tag {f['tag']:#04x} != the answered request's {answered.tag:#04x}"
+    assert payload == [0xA5A5_0001], f"payload {[hex(w) for w in payload]} mis-paired"
+    assert rc.timeouts == [], "the answered request completed well inside the interval"
+    await settle(dut)
+    assert int(dut.outstanding_o.value) == 2, "the answered tag retired"
+
+    # The other two expire; the answered one must not.
+    await rc.wait_timeouts(2)
+    assert sorted(rc.timeouts) == sorted([reqs[0].tag, reqs[2].tag]), (
+        f"timed out {[hex(t) for t in rc.timeouts]}, expected exactly "
+        f"{[hex(reqs[0].tag), hex(reqs[2].tag)]}")
+    assert answered.tag not in rc.timeouts, \
+        "an answered request must never raise a completion timeout"
+    assert len(rc.packets) == 1, "no RC packet for a timed-out request"
+    assert int(dut.outstanding_o.value) == 2, "two quarantined tags still count"
+    assert rc.lates == [], "no completion arrived for the timed-out tags"
+    rc.clean(allow_timeouts=True)
+
+
+@cocotb.test()
+async def v9_multibeat_late_completion_drains(dut):
+    """V-T3 / T6: a MULTI-BEAT late completion drains without wedging anything.
+
+    This is the RC3/RC5 bug class -- header-declared length versus payload
+    actually sent.  The request was a 1-Dword config read, but the late
+    completion carries FOUR Dwords: length and any per-request byte accounting
+    are forced apart, so a drain that sized itself from the request would
+    under-consume and stall the receive path.  The tracker skips byte-count
+    checking for a quarantined tag by policy, and the beats are swallowed by
+    the orphan drain in pcie_rc_if.sv:341-343 (which $warnings once per Dword;
+    that output is expected here, not a failure).
+    """
+    rc, completer = await init(dut)
+
+    await cfg_read(dut, reg_num=0x00)
+    await completer.wait_for(1)
+    req = completer.seen[0]
+    await rc.wait_timeouts(1)
+    assert rc.timeouts == [req.tag]
+    assert rc.packets == []
+
+    late_payload = [0x1111_1111, 0x2222_2222, 0x3333_3333, 0x4444_4444]
+    await completer._inject([
+        cpl_dw0(has_data=True, length_dw=len(late_payload)),
+        cpl_dw1(COMPLETER, CPL_SC, byte_count=4 * len(late_payload)),
+        cpl_dw2(RID, req.tag, lower_address=0),
+    ] + late_payload)
+
+    await rc.wait_lates(1)
+    assert rc.lates == [req.tag], \
+        f"late_cpl reported {[hex(t) for t in rc.lates]}, expected {req.tag:#04x}"
+    await settle(dut, 60)
+    assert rc.packets == [], \
+        f"a drained late completion must emit NO RC packet, got {len(rc.packets)}"
+    assert rc.unexpected == [], "a drained late completion is not an unexpected completion"
+
+    # THE BYTE-ACCOUNTING ASSERTION.  pcie_rc_if reports RC_ERR_ORPHAN_DATA once
+    # per orphaned Dword (pcie_rc_if.sv:404-405), so the count IS the number of
+    # payload beats the drain consumed.  Four in, four reported: the drain
+    # followed the completion's own length and not the 1-Dword request behind
+    # the tag.  A drain that sized itself from the request would report 1 here
+    # and leave three beats stuck in the receive path.
+    assert rc.rc_errors == [RC_ERR_ORPHAN_DATA] * len(late_payload), (
+        f"expected {len(late_payload)} orphan-data reports, one per drained Dword; "
+        f"got {rc.rc_errors}")
+    rc.rc_errors.clear()
+    assert int(dut.outstanding_o.value) == 0, \
+        "the bit-30 late completion returned the tag to the pool"
+
+    # Nothing wedged: a fresh request/completion still round-trips, on the
+    # reused tag.
+    await cfg_read(dut, reg_num=0x0C)
+    await completer.wait_for(2)
+    req2 = completer.seen[1]
+    assert req2.tag == req.tag, \
+        f"the released tag should be reused, got {req2.tag:#04x} not {req.tag:#04x}"
+    await completer.complete(req2, status=CPL_SC, data=0x5EED_0001)
+    await rc.wait_packets(1)
+    desc, payload = split_packet(rc.packets[0])
+    f = decode_rc_desc(desc)
+    assert f["tag"] == req2.tag
+    assert payload == [0x5EED_0001], \
+        f"post-drain round trip returned {[hex(w) for w in payload]}"
+    assert len(rc.lates) == 1, "only one late drain"
+    assert len(rc.timeouts) == 1, "the second request was answered in time"
+    rc.clean(allow_timeouts=True)

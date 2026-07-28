@@ -117,6 +117,16 @@ filesets:
     files:
       - test_tlp_conf_datalast.py : {file_type : user, copyto : .}
 
+  # Completion Timeout (PCIe Base 2.1 SS2.8).  Two modules: the mechanism at a
+  # deliberately small CPL_TIMEOUT_CYCLES so an expiry costs 64 cycles instead
+  # of 4096, and a separate one that pins the shipped default.
+  cocotb_cpl_timeout:
+    files:
+      - test_tlp_cpl_timeout.py : {file_type : user, copyto : .}
+  cocotb_cpl_timeout_default:
+    files:
+      - test_tlp_cpl_timeout_default.py : {file_type : user, copyto : .}
+
 targets:
   # ---- Enumeration spine (the CfgRd0 -> CPL path RC enumeration needs) ----
 
@@ -396,3 +406,68 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_payload_formatter, cocotb_conf_formatter]
     toplevel : [tb_tlp_payload_formatter]
+
+  # ---- Completion Timeout: the mechanism, at CPL_TIMEOUT_CYCLES=64 ----------
+  # T1 exact-cycle fire, T2 the wedge regression (TAG_COUNT+2 unanswered
+  # requests recover -- this one FAILS against cc1e194), T3 timer restart on a
+  # partial CPL, T4 late-completion drain + tag reuse, T5 second expiry.
+  # 64 rather than the 4096 default purely so the sim is short; the mechanism
+  # is value-independent and the default is pinned by the next target.
+  verilate_tlp_cpl_timeout:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_cpl_timeout
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        # The exact-cycle assertions read the tracker's own cycle_counter_r and
+        # alloc_time_r rather than mirroring them in Python -- a mirror raced
+        # the scheduler and was wrong twice before this.
+        - --public-flat-rw
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_request_tracker, cocotb_cpl_timeout]
+    parameters : [CPL_TIMEOUT_CYCLES=64]
+    toplevel : [tb_tlp_request_tracker]
+
+  # ---- Completion Timeout: the DEFAULT value (no override) ------------------
+  verilate_tlp_cpl_timeout_default:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_cpl_timeout_default
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_request_tracker, cocotb_cpl_timeout_default]
+    toplevel : [tb_tlp_request_tracker]
+
+  # ---- Completion Timeout DISABLED: CPL_TIMEOUT_CYCLES=0 --------------------
+  # T7.  Re-runs the UNMODIFIED tracker bench module.  With the mechanism off
+  # the RTL must behave exactly as it did before it existed, so this target's
+  # results and total sim time must match verilate_tlp_request_tracker to the ns.
+  verilate_tlp_cpl_timeout_off:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_request_tracker
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_request_tracker, cocotb_request_tracker]
+    parameters : [CPL_TIMEOUT_CYCLES=0]
+    toplevel : [tb_tlp_request_tracker]
+
+parameters:
+  CPL_TIMEOUT_CYCLES:
+    datatype: int
+    default: 4096
+    description: >
+      Cycles a tag may stay outstanding before tlp_request_tracker times it out.
+      0 disables the Completion Timeout mechanism entirely.
+    paramtype: vlogparam
