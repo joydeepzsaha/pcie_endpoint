@@ -142,6 +142,7 @@ class Tx:
         self._cur = []
         self.command_errors = []
         self.rq_errors = []
+        self.presented_tags = []   # pcie_rq_tag_o at each pcie_rq_tag_vld_o
 
     def start(self):
         cocotb.start_soon(self._run())
@@ -162,11 +163,14 @@ class Tx:
                 self.command_errors.append(int(d.command_error_code_flat.value))
             if int(d.rq_protocol_error_o.value):
                 self.rq_errors.append(int(d.rq_error_code_o.value))
+            if int(d.pcie_rq_tag_vld_o.value):
+                self.presented_tags.append(int(d.pcie_rq_tag_o.value))
 
     def clear(self):
         self.packets.clear()
         self.command_errors.clear()
         self.rq_errors.clear()
+        self.presented_tags.clear()
 
 
 async def init(dut, max_payload=128, max_read=128):
@@ -179,7 +183,6 @@ async def init(dut, max_payload=128, max_read=128):
     dut.s_axis_rq_tvalid.value = 0
     dut.s_axis_rq_tlast.value = 0
     dut.s_axis_rq_tuser.value = 0
-    dut.rq_tag_i.value = 0
     dut.m_dllp_axis_tready.value = 1
     dut.requester_id_i.value = RID
     dut.max_payload_bytes_i.value = max_payload
@@ -257,8 +260,6 @@ async def test_t12_cfgrd0_on_wire(dut):
     tx = await init(dut)
     bus, dev, fn, reg, ext = 0x01, 0x02, 0x03, 0x06, 0x0
     bdf = (bus << 8) | (dev << 3) | fn
-    dut.rq_tag_i.value = 0x00
-
     await send(dut, [(rq_desc(RQ_CFG_READ0, 1, address=cfg_desc_address(reg, ext),
                               completer_id=bdf, tag=0xA5),
                       0xF, True, tuser(0xF, 0x0))])
@@ -407,3 +408,191 @@ async def test_t15_multisegment_memwr(dut):
                       0xF, True, tuser(0xF, 0x0))])
     await settle(dut)
     assert len(tx.packets) == 1 and tx.command_errors == []
+
+
+# ==========================================================================
+# T16 -- the presented tag IS the tag on the wire
+# ==========================================================================
+@cocotb.test()
+async def test_t16_presented_tag_matches_wire(dut):
+    """T16: pcie_rq_tag_o equals the emitted TLP's DW1 Tag field.
+
+    The entire point of 3129114.  Before it, pcie_rq_tag_o carried an
+    integrator-supplied rq_tag_i that had no relationship to the tag the
+    tracker allocated, so a client correlating RQ against RC would have matched
+    on a value that never appeared on the wire.
+    """
+    tx = await init(dut)
+    bdf = (0x01 << 8) | (0x02 << 3) | 0x03
+
+    tx.clear()
+    await send(dut, [(rq_desc(RQ_CFG_READ0, 1, address=cfg_desc_address(0x06),
+                              completer_id=bdf, tag=0xA5),
+                      0xF, True, tuser(0xF, 0x0))])
+    await settle(dut)
+
+    assert tx.rq_errors == [] and tx.command_errors == []
+    assert len(tx.packets) == 1, f"expected 1 TLP, got {len(tx.packets)}"
+    assert len(tx.presented_tags) == 1, \
+        f"expected exactly one presented tag, got {tx.presented_tags}"
+
+    wire_tag = dw1_fields(tx.packets[0][1])["tag"]
+    assert tx.presented_tags[0] == wire_tag, \
+        f"pcie_rq_tag_o={tx.presented_tags[0]:#04x} but the TLP carries " \
+        f"tag={wire_tag:#04x} -- the RQ and RC sides would not correlate"
+
+
+# ==========================================================================
+# T17 -- several non-posted requests outstanding at once
+# ==========================================================================
+@cocotb.test()
+async def test_t17_multiple_outstanding(dut):
+    """T17: each presented tag matches ITS OWN TLP; no cross-assignment.
+
+    No completions are injected, so the tracker never frees a tag
+    (tlp_request_tracker.sv:113-120) and all four requests are outstanding
+    simultaneously with distinct tags.
+    """
+    tx = await init(dut)
+    bdf = (0x01 << 8) | (0x02 << 3) | 0x03
+
+    tx.clear()
+    for i in range(4):
+        await send(dut, [(rq_desc(RQ_CFG_READ0, 1,
+                                  address=cfg_desc_address(0x06 + i),
+                                  completer_id=bdf, tag=0xA5),
+                          0xF, True, tuser(0xF, 0x0))])
+    await settle(dut, 128)
+
+    assert tx.rq_errors == [] and tx.command_errors == []
+    assert len(tx.packets) == 4, f"expected 4 TLPs, got {len(tx.packets)}"
+    assert len(tx.presented_tags) == 4, \
+        f"expected 4 presented tags, got {tx.presented_tags}"
+
+    wire_tags = [dw1_fields(p[1])["tag"] for p in tx.packets]
+    assert tx.presented_tags == wire_tags, \
+        f"presented {tx.presented_tags} but the wire carried {wire_tags} " \
+        "-- tags crossed between requests"
+    assert len(set(wire_tags)) == 4, \
+        f"four simultaneously outstanding requests must hold distinct tags: {wire_tags}"
+
+    # And each TLP is still addressed to its own register, so the pairing is
+    # between the right request and the right tag, not merely a sorted match.
+    for i, p in enumerate(tx.packets):
+        assert p[2] == cfg_wire_dw2(0x01, 0x02, 0x03, 0x06 + i), \
+            f"packet {i} addresses the wrong register"
+
+
+# ==========================================================================
+# T18 -- posted writes allocate nothing
+# ==========================================================================
+@cocotb.test()
+async def test_t18_posted_write_no_tag(dut):
+    """T18: a posted MemWr never asserts pcie_rq_tag_vld_o.
+
+    TLP_CMD_MEM_WRITE goes REQ_IDLE -> REQ_HEADER directly and never enters
+    REQ_TAG (tlp_requester.sv:211, 253), so the tracker is never asked for a
+    tag and the strobe has nothing to fire on.
+    """
+    tx = await init(dut, max_payload=64, max_read=64)
+    rng = random.Random(0x1818)
+    n = 32
+    dwords = [rng.randrange(1 << 32) for _ in range(n)]
+
+    tx.clear()
+    beats = [(rq_desc(RQ_MEM_WRITE, n, address=0x10000), 0xF, False,
+              tuser(0xF, 0xF))] + payload_beats(dwords, 0xF, 0xF)
+    await send(dut, beats)
+    await settle(dut, 256)
+
+    assert tx.rq_errors == [] and tx.command_errors == []
+    assert len(tx.packets) == 2, f"32 Dwords at MPS=64 B is 2 segments, got {len(tx.packets)}"
+    assert tx.presented_tags == [], \
+        f"a posted write allocated no tag, yet {tx.presented_tags} was presented"
+
+    # A non-posted request right afterwards still gets one, so the absence
+    # above is about posted writes and not about the strobe being dead.
+    tx.clear()
+    await send(dut, [(rq_desc(RQ_CFG_READ0, 1, address=cfg_desc_address(0x06),
+                              completer_id=0x0100),
+                      0xF, True, tuser(0xF, 0x0))])
+    await settle(dut)
+    assert len(tx.presented_tags) == 1, "the strobe must still work"
+    assert tx.presented_tags[0] == dw1_fields(tx.packets[0][1])["tag"]
+
+
+# ==========================================================================
+# T19 -- the descriptor's Tag field goes nowhere
+# ==========================================================================
+@cocotb.test()
+async def test_t19_descriptor_tag_ignored(dut):
+    """T19: descriptor Tag [103:96] reaches neither pcie_rq_tag_o nor the wire.
+
+    Driven nonzero and deliberately different from anything the tracker will
+    allocate: the tracker hands out the lowest free index (0, 1, 2, ...,
+    tlp_request_tracker.sv:56-63), so 0xA5 and 0x7E can never be a coincidence.
+    """
+    tx = await init(dut)
+    bdf = (0x01 << 8) | (0x02 << 3) | 0x03
+
+    for desc_tag in (0xA5, 0x7E, 0xFF):
+        tx.clear()
+        await send(dut, [(rq_desc(RQ_CFG_WRITE0, 1,
+                                  address=cfg_desc_address(0x06),
+                                  completer_id=bdf, tag=desc_tag),
+                          0xF, False, tuser(0xF, 0x0)),
+                         (0x12345678, 0x1, True, tuser(0xF, 0x0))])
+        await settle(dut)
+
+        assert tx.rq_errors == [] and len(tx.packets) == 1
+        wire_tag = dw1_fields(tx.packets[0][1])["tag"]
+        assert wire_tag != desc_tag, \
+            f"descriptor Tag {desc_tag:#04x} reached the wire"
+        assert desc_tag not in tx.presented_tags, \
+            f"descriptor Tag {desc_tag:#04x} reached pcie_rq_tag_o"
+        assert tx.presented_tags == [wire_tag], \
+            f"presented {tx.presented_tags}, wire carried {wire_tag:#04x}"
+
+
+# ==========================================================================
+# T20 -- the strobe is gated on the allocation COMPLETING, not on asking
+# ==========================================================================
+@cocotb.test()
+async def test_t20_tag_exhaustion_strobe(dut):
+    """T20: a stalled allocation must not strobe, and must not repeat.
+
+    tag_valid alone is "the requester is in REQ_TAG"; the tag is only committed
+    when tag_ready is also high (tlp_request_tracker.sv:113).  Those two are
+    indistinguishable while tags are plentiful, because REQ_TAG lasts a single
+    cycle -- which is why this test drains the pool.
+
+    TAG_COUNT is 32 and extended_tag_enable_i is 0, so the tracker refuses the
+    33rd allocation (tlp_request_tracker.sv:56-65: tag_found stays low, and
+    allocate_ready_o with it).  No completions are injected, so nothing is ever
+    freed and the requester parks in REQ_TAG with tag_valid asserted for the
+    rest of the test.  An ungated strobe would present a tag every cycle it
+    sits there.
+    """
+    tx = await init(dut)
+    bdf = (0x01 << 8) | (0x02 << 3) | 0x03
+    tag_count = 32
+
+    tx.clear()
+    for i in range(tag_count + 1):
+        await send(dut, [(rq_desc(RQ_CFG_READ0, 1,
+                                  address=cfg_desc_address(i & 0x3F),
+                                  completer_id=bdf),
+                          0xF, True, tuser(0xF, 0x0))])
+    await settle(dut, 400)
+
+    assert tx.rq_errors == [] and tx.command_errors == []
+    assert len(tx.packets) == tag_count, \
+        f"only {tag_count} tags exist, so only {tag_count} TLPs can be emitted; " \
+        f"got {len(tx.packets)}"
+    assert len(tx.presented_tags) == tag_count, \
+        f"expected exactly {tag_count} strobes, got {len(tx.presented_tags)} -- " \
+        "the strobe is firing while the allocation is stalled"
+    assert sorted(tx.presented_tags) == list(range(tag_count)), \
+        f"the tracker hands out 0..{tag_count - 1}; presented {tx.presented_tags}"
+    assert tx.presented_tags == [dw1_fields(p[1])["tag"] for p in tx.packets], \
+        "presented tags diverged from the wire under tag pressure"

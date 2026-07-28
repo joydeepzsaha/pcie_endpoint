@@ -40,7 +40,8 @@ module tb_pcie_rq_if_tlp
   logic [AXIS_USER_WIDTH-1:0] s_axis_rq_tuser;
   logic                       s_axis_rq_tready;
 
-  logic [7:0] rq_tag_i;
+  logic [7:0] allocated_tag;
+  logic       allocated_tag_valid;
   logic [7:0] pcie_rq_tag_o;
   logic       pcie_rq_tag_vld_o;
   logic       rq_protocol_error_o;
@@ -109,7 +110,8 @@ module tb_pcie_rq_if_tlp
       .s_axis_rq_tuser (s_axis_rq_tuser),
       .s_axis_rq_tready(s_axis_rq_tready),
 
-      .rq_tag_i(rq_tag_i),
+      .allocated_tag_i(allocated_tag),
+      .allocated_tag_valid_i(allocated_tag_valid),
       .pcie_rq_tag_o(pcie_rq_tag_o),
       .pcie_rq_tag_vld_o(pcie_rq_tag_vld_o),
 
@@ -196,6 +198,8 @@ module tb_pcie_rq_if_tlp
       .command_data_ready_o  (command_data_ready),
       .command_error_valid_o (command_error_valid_o),
       .command_error_code_o  (command_error_code_o),
+      .allocated_tag_o       (allocated_tag),
+      .allocated_tag_valid_o (allocated_tag_valid),
 
       .target_request_valid_o(),
       .target_request_ready_i(1'b1),

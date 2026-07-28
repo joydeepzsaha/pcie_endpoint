@@ -431,8 +431,23 @@ requester enters `REQ_TAG` and consumes `tag_i` (~~`tlp_requester.sv:157, 221-22
 **`tlp_requester.sv:138, 206-209`**). The host does
 **not** supply the tag for non-posted requests. ⇒ **PG213 core-managed-tag mode**: the RQ wrapper
 should expose `pcie_rq_tag[7:0]` + `pcie_rq_tag_vld` and **ignore `desc[103:96]`** (document it).
-Exception: `MEM_WRITE` (posted) skips `REQ_TAG` (~~`tlp_requester.sv:218`~~ → **`:202`**) — no tag. On the RC side
+Exception: `MEM_WRITE` (posted) skips `REQ_TAG` (~~`tlp_requester.sv:218`~~ → **`:202`** → now
+**`:211`, `:253`**) — no tag. On the RC side
 the Tag echoes back from the CPL header, so RC descriptor Tag is faithful.
+
+> ✅ **CLOSED 2026-07-28 (`3129114`).** This recon did not notice that `allocated_tag` had **no
+> `tlp_layer` port** — it terminated between `requester_inst.tag_i` and `tracker_inst.allocate_tag_o`.
+> Commit 2a-i (`96918d5`) therefore shipped `pcie_rq_tag_o` fed from an integrator-supplied
+> `rq_tag_i`, i.e. **a different number from the one on the wire** — worse than exposing nothing,
+> because it invites a correlation that silently fails. `3129114` added
+> **`allocated_tag_o` + `allocated_tag_valid_o`** to `tlp_layer` as pure combinational taps
+> (`allocated_tag`, and `tag_valid && tag_ready` — the tracker's own commit condition,
+> `tlp_request_tracker.sv:113`), and `pcie_rq_if` now forwards those.
+> **T16 asserts the presented tag equals the emitted TLP's DW1 Tag**; T17–T20 cover multiple
+> outstanding, posted writes, descriptor-Tag isolation and tag exhaustion.
+> ⚠️ The tag is **not** available at command-accept time — the requester allocates in `REQ_TAG` a
+> cycle or more after leaving `REQ_IDLE` — which is exactly why PG213 pairs the tag with a valid
+> strobe. Do not try to qualify it with `command_ready_o`.
 Namespace note for Kourosh (§11): confirm EP-side completer tags and RC-side requester tags can't
 collide.
 **No move to client-managed tags.** The allocator, the `extended_tag_enable_i` gate (`:59-60`,

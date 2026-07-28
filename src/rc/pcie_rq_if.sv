@@ -35,7 +35,11 @@
 //
 //  * Tags. The TL's request tracker allocates them (tlp_request_tracker.sv:
 //    55-65); the descriptor's Tag field [103:96] is IGNORED, per PG213's
-//    core-managed-tag mode. See the pcie_rq_tag_o note below.
+//    core-managed-tag mode. pcie_rq_tag_o presents the REAL allocated tag,
+//    taken from tlp_layer's allocated_tag_o / allocated_tag_valid_o, so it is
+//    the value that appears in the emitted header's DW1 and that the matching
+//    completion returns. See the port note below for why it arrives after the
+//    command was accepted rather than with it.
 //
 // SS THE BY-CONSTRUCTION PROPERTY (the point of the module)
 //
@@ -145,13 +149,30 @@ module pcie_rq_if
     output logic                        s_axis_rq_tready,
 
     // ---- core-managed tag presentation -----------------------------------
-    // The tag the TL's tracker will use. tlp_layer does not currently expose
-    // its allocated tag on any port, so this is an input the integrator drives;
-    // the wrapper's job is only to present it back to the host in PG213 shape,
-    // timed to the acceptance of a non-posted request. Wiring it to the
-    // tracker needs a tlp_layer output that does not exist -- KNOWN_GAP, and
-    // deliberately NOT fixed here, because src/tlp/ is out of scope.
-    input  logic [7:0]                  rq_tag_i,
+    // Wire allocated_tag_i / allocated_tag_valid_i straight to tlp_layer's
+    // allocated_tag_o / allocated_tag_valid_o. That is the tag the request
+    // tracker actually handed out, so it is the one in the emitted header's
+    // DW1 and the one the matching completion carries back -- the whole point
+    // of presenting it at all.
+    //
+    // Timing: the tag is NOT available when the command is accepted. The
+    // requester leaves REQ_IDLE and only allocates in REQ_TAG a cycle or more
+    // later (tlp_requester.sv:211, 215-218), which is why PG213 pairs the tag
+    // with a valid strobe instead of qualifying it with the command handshake.
+    // The wrapper forwards the strobe rather than re-timing it, so a host that
+    // pipelines requests still sees one tag per emitted TLP in issue order.
+    //
+    // Posted writes are absent from this stream by construction: MEM_WRITE
+    // never enters REQ_TAG (tlp_requester.sv:211, 253), so nothing is
+    // allocated and the strobe cannot fire. A segmented non-posted request
+    // strobes once per segment, each with that segment's own tag.
+    //
+    // The descriptor's Tag field [103:96] is read nowhere in this module.
+    // command_context_o remains available as a second, wrapper-chosen
+    // correlation channel -- the TL echoes it back on result_context_o -- and
+    // the two are complementary, not alternatives.
+    input  logic [7:0]                  allocated_tag_i,
+    input  logic                        allocated_tag_valid_i,
     output logic [7:0]                  pcie_rq_tag_o,
     output logic                        pcie_rq_tag_vld_o,
 
@@ -456,6 +477,17 @@ module pcie_rq_if
       if (cmd_pending_r && command_ready_i) cmd_pending_r <= 1'b0;
       if (tl_beat && (state_r != S_ABORT_TERM)) dw_sent_r <= dw_sent_r + 11'd1;
 
+      // Core-managed tag. Forwarded from the tracker's allocation strobe, not
+      // from the descriptor accept: the tag does not exist yet at accept time
+      // (tlp_requester.sv:211, 215-218). Registered rather than combinational,
+      // like every other output here, so nothing drives a path from inside the
+      // TL straight out to the host. One presented tag per emitted TLP, in
+      // issue order; posted writes allocate nothing and so never appear.
+      if (allocated_tag_valid_i) begin
+        pcie_rq_tag_o     <= allocated_tag_i;
+        pcie_rq_tag_vld_o <= 1'b1;
+      end
+
       unique case (state_r)
         // -------------------------------------------------------------- beat 0
         S_DESC: if (desc_beat) begin
@@ -478,13 +510,6 @@ module pcie_rq_if
             dw_rem_r      <= {1'b0, desc_n};
             dw_sent_r     <= '0;
             cmd_pending_r <= 1'b1;
-            // Core-managed tag: presented for non-posted requests only, which
-            // are the ones the tracker allocates for. The descriptor's Tag
-            // field is not read anywhere in this module.
-            if (desc_cmd != TLP_CMD_MEM_WRITE) begin
-              pcie_rq_tag_o     <= rq_tag_i;
-              pcie_rq_tag_vld_o <= 1'b1;
-            end
             state_r <= desc_has_data ? S_PAYLOAD : S_DESC;
           end
         end

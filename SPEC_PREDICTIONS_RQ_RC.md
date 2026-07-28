@@ -59,7 +59,7 @@ BEs are in `s_axis_rq_tuser` (§D), not the descriptor.
 | `[120]` | Requester ID Enable | root-port mode = 1; RC uses its own `requester_id_i` | ~~`tlp_requester.sv:145`~~ → **`:127`** forces `requester_id = requester_id_i` |
 | `[123:121]` | TC | `command_tc_i` | ~~`tlp_requester.sv:142`~~ → **`:123`** |
 | `[126:124]` | Attr | `command_attr_i` | ~~`tlp_requester.sv:143`~~ → **`:124`** |
-| `[103:96]` | Tag | **ignored** (core-managed, §E/Recon Q15) → `pcie_rq_tag`/`pcie_rq_tag_vld` exposed instead | tracker allocates ~~`tlp_request_tracker.sv:52-62`~~ → **`:55-65`** |
+| `[103:96]` | Tag | **ignored** (core-managed, §E/Recon Q15) → `pcie_rq_tag`/`pcie_rq_tag_vld` exposed instead | tracker allocates ~~`tlp_request_tracker.sv:52-62`~~ → **`:55-65`**; ✅ **surfaced 2026-07-28 (`3129114`)** as `tlp_layer.allocated_tag_o` / `allocated_tag_valid_o` — the value that reaches the wire, proven by T16. See RECON §E. |
 | `[127]` | Force ECRC | ignored (ECRC out of scope; ~~`command_digest_valid_i=0`~~ → **`command_ecrc_enable_i = 0`**, `tlp_requester.sv:25`) | brief §1; RECON §Q.3 |
 | `command_address[15:12]` | (reserved) | `4'h0` | config DW reserved field |
 | `command_address[1:0]` (byte offset) — **from `first_be` (§D)** | ~~⛔ must be `2'b00` for CFG/IO~~ → ✅ **byte offset, same as memory** | **RESTORED 2026-07-28 (`d5a4253`)** | `tlp_requester.sv:183-199` admits CFG/IO whenever `byte_count <= 4 − address[1:0]`; the split shape is now rejected at admission, not emitted |

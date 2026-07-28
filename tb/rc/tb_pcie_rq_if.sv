@@ -27,7 +27,8 @@ module tb_pcie_rq_if;
   logic [AXIS_USER_WIDTH-1:0] s_axis_rq_tuser;
   logic                       s_axis_rq_tready;
 
-  logic [7:0] rq_tag_i;
+  logic [7:0] allocated_tag_i;
+  logic       allocated_tag_valid_i;
   logic [7:0] pcie_rq_tag_o;
   logic       pcie_rq_tag_vld_o;
 
@@ -66,9 +67,10 @@ module tb_pcie_rq_if;
       .s_axis_rq_tuser (s_axis_rq_tuser),
       .s_axis_rq_tready(s_axis_rq_tready),
 
-      .rq_tag_i         (rq_tag_i),
-      .pcie_rq_tag_o    (pcie_rq_tag_o),
-      .pcie_rq_tag_vld_o(pcie_rq_tag_vld_o),
+      .allocated_tag_i      (allocated_tag_i),
+      .allocated_tag_valid_i(allocated_tag_valid_i),
+      .pcie_rq_tag_o        (pcie_rq_tag_o),
+      .pcie_rq_tag_vld_o    (pcie_rq_tag_vld_o),
 
       .command_valid_o       (command_valid_o),
       .command_ready_i       (command_ready_i),

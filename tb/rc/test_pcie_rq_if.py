@@ -249,7 +249,8 @@ async def init(dut):
     dut.s_axis_rq_tvalid.value = 0
     dut.s_axis_rq_tlast.value = 0
     dut.s_axis_rq_tuser.value = 0
-    dut.rq_tag_i.value = 0
+    dut.allocated_tag_i.value = 0
+    dut.allocated_tag_valid_i.value = 0
     dut.command_ready_i.value = 1
     dut.command_data_ready_i.value = 1
     for _ in range(4):
@@ -646,30 +647,69 @@ async def test_t10_backpressure(dut):
 # ==========================================================================
 # T11 -- core-managed tags
 # ==========================================================================
+async def strobe_tag(dut, tag):
+    """Model one tlp_layer allocation: a 1-cycle allocated_tag_valid_i pulse.
+
+    The real strobe is tag_valid && tag_ready inside tlp_layer, i.e. the cycle
+    the tracker commits a tag (tlp_request_tracker.sv:113).  The end-to-end
+    check that the presented tag is the one that reaches the wire is T16 in
+    test_pcie_rq_if_tlp.py; here we only prove the wrapper forwards whatever
+    the core allocated, and nothing from the descriptor.
+    """
+    dut.allocated_tag_i.value = tag
+    dut.allocated_tag_valid_i.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.allocated_tag_valid_i.value = 0
+    dut.allocated_tag_i.value = 0      # the value must not linger
+    await RisingEdge(dut.clk_i)
+    await RisingEdge(dut.clk_i)
+
+
 @cocotb.test()
 async def test_t11_core_managed_tag(dut):
-    """T11: pcie_rq_tag_o comes from the core, never from the descriptor."""
-    rq = await init(dut)
-    dut.rq_tag_i.value = 0x17
+    """T11: pcie_rq_tag_o is the core's allocated tag, never the descriptor's.
 
-    # A non-posted request presents the core's tag; the descriptor's 0xA5 must
-    # not appear anywhere.
+    The descriptor-Tag-is-ignored half is unchanged from 2a-i; what changed in
+    3129114 is the SOURCE -- the wrapper now forwards tlp_layer's
+    allocated_tag_o / allocated_tag_valid_o instead of an integrator-supplied
+    value that had no relationship to the tag on the wire.
+    """
+    rq = await init(dut)
+
+    # A non-posted request whose descriptor Tag is 0xA5.  No allocation strobe
+    # yet, so nothing may be presented -- the tag does not exist at the moment
+    # the command is accepted (tlp_requester.sv:211, 215-218).
     desc = rq_desc(RQ_CFG_READ0, 1, address=cfg_desc_address(0x06),
                    completer_id=0x100, tag=0xA5, requester_id=0xBEEF)
     await one_shot(rq, desc, first_be=0xF, last_be=0x0)
     assert rq.errors == []
-    assert rq.tags == [0x17], f"tags {rq.tags} -- must be the core's, not 0xA5"
+    assert rq.tags == [], \
+        f"tag presented before the core allocated one: {rq.tags}"
     _cmd, addr, _bc, _tc, _attr, _ctx = rq.commands[0]
     assert (addr >> 16) & 0xFFFF == 0x100, "Completer ID drives the address"
     assert 0xA5 not in (addr & 0xFF, (addr >> 8) & 0xFF), \
         "descriptor Tag must not leak into command_address"
 
-    # A different core tag, same descriptor tag.
-    dut.rq_tag_i.value = 0x2C
-    await one_shot(rq, desc, first_be=0xF, last_be=0x0)
-    assert rq.tags == [0x2C]
+    # Now the core allocates.  The wrapper presents exactly that value.
+    rq.clear()
+    await strobe_tag(dut, 0x17)
+    assert rq.tags == [0x17], f"tags {rq.tags} -- must be the core's, not 0xA5"
 
-    # A posted write allocates nothing, so no tag is presented.
+    # A different allocation, same descriptor: the new value, once.
+    rq.clear()
+    await one_shot(rq, desc, first_be=0xF, last_be=0x0)
+    await strobe_tag(dut, 0x2C)
+    assert rq.tags == [0x2C], f"tags {rq.tags}"
+
+    # Two allocations back to back keep their order and their values.
+    rq.clear()
+    await strobe_tag(dut, 0x05)
+    await strobe_tag(dut, 0x1E)
+    assert rq.tags == [0x05, 0x1E], f"tags {rq.tags}"
+
+    # A posted write allocates nothing upstream, so no strobe arrives and
+    # nothing is presented -- and the descriptor's 0xA5 still does not appear.
+    rq.clear()
     await one_shot(rq, rq_desc(RQ_MEM_WRITE, 1, address=0x2000, tag=0xA5),
                    first_be=0xF, last_be=0x0, payload=[0x12345678])
     assert rq.tags == [], "a posted MemWr must not present a tag"
