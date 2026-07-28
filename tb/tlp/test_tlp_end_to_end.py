@@ -31,6 +31,70 @@ ERR_BAD_ADDRESS_FORMAT = 8
 ERR_ECRC = 9
 
 
+# SystemVerilog packed structures are exposed differently by simulators.
+# Icarus presents tlp_header_t as one 231-bit value, while VCS presents it as
+# a hierarchy of named fields.  Keep the packing order in one place and use
+# these helpers instead of accessing a packed-structure handle directly.
+TLP_HEADER_FIELDS = (
+    ("fmt", 3),
+    ("tlp_type", 5),
+    ("traffic_class", 3),
+    ("attributes", 3),
+    ("digest_present", 1),
+    ("poisoned", 1),
+    ("th", 1),
+    ("address_type", 2),
+    ("length_dw", 11),
+    ("requester_id", 16),
+    ("completer_id", 16),
+    ("tag", 8),
+    ("first_be", 4),
+    ("last_be", 4),
+    ("address", 64),
+    ("completion_status", 3),
+    ("byte_count_modified", 1),
+    ("byte_count", 13),
+    ("lower_address", 7),
+    ("prefix_present", 1),
+    ("prefix", 32),
+    ("digest", 32),
+)
+
+
+def unpack_tlp_header(packed):
+    fields = {}
+    shift = sum(width for _, width in TLP_HEADER_FIELDS)
+    for name, width in TLP_HEADER_FIELDS:
+        shift -= width
+        fields[name] = (packed >> shift) & ((1 << width) - 1)
+    return fields
+
+
+def pack_tlp_header(fields):
+    packed = 0
+    for name, width in TLP_HEADER_FIELDS:
+        packed = (packed << width) | (int(fields.get(name, 0)) & ((1 << width) - 1))
+    return packed
+
+
+def read_tlp_header(handle):
+    try:
+        return unpack_tlp_header(int(handle.value))
+    except AttributeError:
+        return {
+            name: int(getattr(handle, name).value)
+            for name, _ in TLP_HEADER_FIELDS
+        }
+
+
+def write_tlp_header(handle, fields):
+    try:
+        handle.value = pack_tlp_header(fields)
+    except AttributeError:
+        for name, width in TLP_HEADER_FIELDS:
+            getattr(handle, name).value = int(fields.get(name, 0)) & ((1 << width) - 1)
+
+
 async def initialize(dut, mps=128, mrrs=128):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     for handle in dut:
@@ -39,6 +103,9 @@ async def initialize(dut, mps=128, mrrs=128):
                 handle.value = 0
             except (AttributeError, ValueError):
                 pass
+    # VCS exposes this packed-structure input as a hierarchy, so the generic
+    # scalar initialization above intentionally cannot initialize it.
+    write_tlp_header(dut.completion_request_header_i, {})
 
     dut.rst_i.value = 1
     dut.link_up_i.value = 0
@@ -179,7 +246,7 @@ async def receive_target(dut, packet, expected_payload_words=0):
         raise AssertionError("legal TLP was not delivered to the target")
 
     snapshot = {
-        "header": int(dut.target_request_header_o.value),
+        "header": read_tlp_header(dut.target_request_header_o),
         "class": int(dut.target_request_class_o.value),
         "memory": int(dut.target_memory_o.value),
         "config": int(dut.target_config_o.value),
@@ -194,7 +261,7 @@ async def receive_target(dut, packet, expected_payload_words=0):
     for _ in range(3):
         await RisingEdge(dut.clk_i)
         assert int(dut.target_request_valid_o.value) == 1
-        assert int(dut.target_request_header_o.value) == snapshot["header"]
+        assert read_tlp_header(dut.target_request_header_o) == snapshot["header"]
 
     dut.target_data_ready_i.value = 1
     dut.target_request_ready_i.value = 1
@@ -342,7 +409,7 @@ async def prefix_ecrc_alignment_maximum_and_segmentation(dut):
 async def request_completion(dut, request_header, byte_count, lower_address,
                              payload=None, status=0, ecrc=False):
     capture = cocotb.start_soon(capture_packets(dut, 1))
-    dut.completion_request_header_i.value = request_header
+    write_tlp_header(dut.completion_request_header_i, request_header)
     dut.completion_request_status_i.value = status
     dut.completion_request_byte_count_i.value = byte_count
     dut.completion_request_lower_address_i.value = lower_address
