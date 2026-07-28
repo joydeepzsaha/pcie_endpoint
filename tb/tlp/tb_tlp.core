@@ -105,6 +105,12 @@ filesets:
     files:
       - test_tlp_conf_formatter.py : {file_type : user, copyto : .}
 
+  # config/IO byte-enable admission matrix: which (offset, byte_count) shapes
+  # the requester accepts, and that every accepted one is a single 1-DW TLP.
+  cocotb_conf_cfgbe:
+    files:
+      - test_tlp_conf_cfgbe.py : {file_type : user, copyto : .}
+
   # command_data_last_i contract probe (evidence for Joy): spurious
   # command_error_o on valid multi-segment writes + malformed-TLP on early last.
   cocotb_conf_datalast:
@@ -340,6 +346,25 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_comb, cocotb_conf_classifier]
     toplevel : [tb_tlp_comb]
+
+  # ---- Config/IO byte-enable admission matrix (anti-split regression) ----
+  # Locks the tlp_requester admission guard: a config/IO request is legal iff
+  # it fits inside one DW (byte_count <= 4 - address[1:0]), and every admitted
+  # one emits exactly one TLP with length_dw=1 and last_be=0.  The rejected
+  # half exists because CFG @0x19 bc=4 used to emit TWO config TLPs, which
+  # PCIe Base 2.1 SS2.2.7 forbids.
+  verilate_tlp_conf_cfgbe:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_conf_cfgbe
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, cocotb_conf_cfgbe]
+    toplevel : [tlp_layer]
 
   # ---- command_data_last_i contract probe (evidence for Joy) ----
   # Reuses the tb_tlp_requester wrapper (already exposes command_data_last /
