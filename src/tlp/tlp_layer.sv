@@ -344,7 +344,14 @@ module tlp_layer
       .clk_i(clk_i), .rst_i(layer_reset), .extended_tag_enable_i(extended_tag_enable_i),
       .allocate_valid_i(tag_valid), .allocate_ready_o(tag_ready),
       .allocate_requester_id_i(tag_requester_id), .allocate_byte_count_i(tag_byte_count),
-      .allocate_address_i(requester_header.address),
+      // The tracker seeds its expected completion Lower Address from this
+      // (tlp_request_tracker.sv:119-120).  PCIe defines Lower Address only for
+      // Memory Read Completions; every other completion carries 0.  A config
+      // request's "address" is a bus/device/function/register DW rather than a
+      // byte address, so forwarding it would demand a Lower Address that a
+      // spec-conformant CplD never sets.
+      .allocate_address_i(requester_header.tlp_type == TLP_TYPE_MEM ?
+                          requester_header.address : 64'd0),
       .allocate_context_i(tag_context), .allocate_expects_data_i(tag_expects_data),
       .allocate_tag_o(allocated_tag),
       .completion_valid_i(parsed_header_valid && parsed_completion && received_completion_ready_i),
