@@ -235,6 +235,11 @@ module pcie_endpoint_top
       .command_data_ready_o(command_data_ready_o),
       .command_error_valid_o(command_error_valid_o),
       .command_error_code_o(command_error_code_o),
+      // RQ-side tag strobe. Deliberately unused at this top: the tag is
+      // consumed by pcie_rq_if on the RC path, not here. Named-empty rather
+      // than omitted so PINMISSING stays enabled for real omissions.
+      .allocated_tag_o(),
+      .allocated_tag_valid_o(),
       .target_request_valid_o(target_request_valid_o),
       .target_request_ready_i(target_request_ready_i),
       .target_request_header_o(target_request_header_o),
