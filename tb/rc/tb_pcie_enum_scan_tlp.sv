@@ -172,7 +172,7 @@ module tb_pcie_enum_scan_tlp
   // The DUT under test: the presence sequencer, which contains the one
   // pcie_cfg_txn it drives.
   // -------------------------------------------------------------------------
-  pcie_enum_scan #(
+  pcie_enum_top #(
       .AXIS_DATA_WIDTH   (AXIS_DATA_WIDTH),
       .AXIS_KEEP_WIDTH   (AXIS_KEEP_WIDTH),
       .AXIS_USER_WIDTH   (AXIS_USER_WIDTH),

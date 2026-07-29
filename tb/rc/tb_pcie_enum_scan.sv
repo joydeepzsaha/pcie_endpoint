@@ -71,7 +71,7 @@ module tb_pcie_enum_scan
   logic       cpl_timeout_valid_i;
   logic [7:0] cpl_timeout_tag_i;
 
-  pcie_enum_scan #(
+  pcie_enum_top #(
       .AXIS_DATA_WIDTH   (AXIS_DATA_WIDTH),
       .AXIS_KEEP_WIDTH   (AXIS_KEEP_WIDTH),
       .AXIS_USER_WIDTH   (AXIS_USER_WIDTH),

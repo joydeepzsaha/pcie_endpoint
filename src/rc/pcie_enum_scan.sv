@@ -6,10 +6,40 @@
 //                -> Header Type read       -> [Type 1? unsupported]
 //                -> scan_done_o
 //
-// This module instantiates exactly one pcie_cfg_txn and drives it. It contains
-// all the POLICY; the primitive contains all the MECHANISM. Nothing here
-// decodes a completion status, builds a descriptor or touches a tag, and
-// nothing in pcie_cfg_txn knows what phase of enumeration it is serving.
+// This module drives exactly one pcie_cfg_txn. It contains all the POLICY; the
+// primitive contains all the MECHANISM. Nothing here decodes a completion
+// status, builds a descriptor or touches a tag, and nothing in pcie_cfg_txn
+// knows what phase of enumeration it is serving.
+//
+// ===========================================================================
+// SS THE HOIST -- WHERE THE PRIMITIVE WENT (Commit 2b-3)
+// ===========================================================================
+//
+// Until 2b-3 this module INSTANTIATED the primitive. It no longer does: the one
+// pcie_cfg_txn now lives one level up in pcie_enum_top, and this module reaches
+// it through the command/response ports below.
+//
+// The reason is pcie_enum_bar, the BAR phase added in the same increment. Three
+// options were weighed:
+//
+//   (a) extend this module in place    -- breaks the 16 scan tests, which assert
+//                                         no further traffic after scan_done_o;
+//                                         a BAR phase produces exactly that
+//   (b) give pcie_enum_bar its own     -- duplicates the primitive and abandons
+//       pcie_cfg_txn                      single-outstanding-BY-CONSTRUCTION as
+//                                         a structural property
+//   (c) hoist the primitive up one     -- one behaviour-neutral refactor, every
+//       level                             module stays single-purpose
+//
+// (c) was taken. The sequencer body below is UNCHANGED by the hoist -- the
+// internal signal names cmd_valid/cmd_ready/rsp_* are kept exactly as they were
+// when the instance was here, and only the port bindings are new. That is what
+// makes "behaviour-neutral" checkable by diff rather than by assertion.
+//
+// Single-outstanding is still structural, and is now enforced somewhere
+// STRONGER: pcie_enum_top holds one primitive and a static handoff mux that
+// gives the command port to exactly one stage at a time. Neither this module
+// nor pcie_enum_bar can issue while the other owns it.
 //
 // ===========================================================================
 // SS WHY THE SPLIT IS REAL, AND NOT BOOKKEEPING
@@ -100,13 +130,19 @@
 // still parked in the VC buffer and may never leave (measured: Commit 2b-1 test
 // i8).
 //
+// Since the 2b-3 hoist this is STRUCTURAL rather than a matter of discipline:
+// pcie_rq_tag_i is not on this module's port list at all. It terminates at
+// pcie_enum_top and goes only to the primitive, so there is no longer a wire on
+// which this module could observe a tag even by mistake. pcie_enum_bar inherits
+// the same guarantee for free.
+//
 // ===========================================================================
 // SS NO TIMERS HERE, AND ONE THING THAT CANNOT BE FIXED HERE
 // ===========================================================================
 //
 // The CRS backoff lives in pcie_cfg_txn; the completion timeout lives in
-// tlp_request_tracker. This module waits indefinitely on cmd_ready_o and
-// rsp_valid_o and has no counter of its own.
+// tlp_request_tracker. This module waits indefinitely on cmd_ready_i and
+// rsp_valid_i and has no counter of its own.
 //
 // tx_fc_blocked_i is sampled ONLY to annotate a TXN_TIMEOUT on
 // err_credit_blocked_o. IT APPEARS IN NO NEXT-STATE EXPRESSION. A credit signal
@@ -128,17 +164,16 @@
 // the simulator, which would abort the shared multi-test process.
 // ---------------------------------------------------------------------------
 `timescale 1ns/1ps
+// After the Commit 2b-3 hoist this module has NO PARAMETERS. All six it used to
+// carry (the three AXIS widths, the two CRS constants, CPL_TIMEOUT_CYCLES) were
+// forwarded verbatim to the pcie_cfg_txn it instantiated and were referenced
+// nowhere else in its body. They now live on pcie_enum_top, which is where the
+// primitive lives. A parameter that reaches nothing is a trap, so none is kept
+// for symmetry.
 module pcie_enum_scan
   import pcie_rq_rc_pkg::*;
   import pcie_enum_pkg::*;
-#(
-    parameter int AXIS_DATA_WIDTH = 128,
-    parameter int AXIS_KEEP_WIDTH = AXIS_DATA_WIDTH / 32,
-    parameter int AXIS_USER_WIDTH = 60,
-    parameter int unsigned CRS_RETRY_MAX      = CRS_RETRY_MAX_DEFAULT,
-    parameter int unsigned CRS_BACKOFF_CYCLES = CRS_BACKOFF_CYCLES_DEFAULT,
-    parameter int unsigned CPL_TIMEOUT_CYCLES = 32'd4096
-) (
+(
     input  logic                        clk_i,
     input  logic                        rst_i,
 
@@ -177,31 +212,35 @@ module pcie_enum_scan
     // ---- annotation input (NOT control flow) -------------------------------
     input  logic                        tx_fc_blocked_i,
 
-    // ---- pcie_rq_rc_top socket, forwarded from the primitive ---------------
-    output logic [AXIS_DATA_WIDTH-1:0]  s_axis_rq_tdata_o,
-    output logic [AXIS_KEEP_WIDTH-1:0]  s_axis_rq_tkeep_o,
-    output logic                        s_axis_rq_tvalid_o,
-    output logic                        s_axis_rq_tlast_o,
-    output logic [AXIS_USER_WIDTH-1:0]  s_axis_rq_tuser_o,
-    input  logic                        s_axis_rq_tready_i,
+    // ---- pcie_cfg_txn command port -----------------------------------------
+    // The primitive now lives one level up, in pcie_enum_top. See the HOIST
+    // note in the header. cmd_bdf_i is NOT driven from here: the target BDF is
+    // a property of the device, not of the phase, so pcie_enum_top wires it
+    // from device_bdf_o once for every stage.
+    output logic                        cmd_valid_o,
+    input  logic                        cmd_ready_i,
+    output logic                        cmd_write_o,
+    output logic [5:0]                  cmd_reg_num_o,
+    output logic [3:0]                  cmd_ext_reg_o,
+    output logic [3:0]                  cmd_first_be_o,
+    output logic [31:0]                 cmd_wdata_o,
 
-    input  logic [7:0]                  pcie_rq_tag_i,
-    input  logic                        pcie_rq_tag_vld_i,
-
-    input  logic [AXIS_DATA_WIDTH-1:0]  m_axis_rc_tdata_i,
-    input  logic [AXIS_KEEP_WIDTH-1:0]  m_axis_rc_tkeep_i,
-    input  logic                        m_axis_rc_tvalid_i,
-    input  logic                        m_axis_rc_tlast_i,
-    output logic                        m_axis_rc_tready_o,
-
-    input  logic                        cpl_timeout_valid_i,
-    input  logic [7:0]                  cpl_timeout_tag_i
+    // ---- pcie_cfg_txn response port ----------------------------------------
+    input  logic                        rsp_valid_i,
+    output logic                        rsp_ready_o,
+    input  txn_outcome_e                rsp_outcome_i,
+    input  logic [31:0]                 rsp_rdata_i
 );
 
   // -------------------------------------------------------------------------
-  // The one transaction primitive. One in flight, always -- Table 2-37 p.137
-  // permits a peer to advertise a single NPH credit, so a second config request
-  // could not be transmitted anyway (see pcie_cfg_txn's header).
+  // Command/response wiring to the one transaction primitive, which lives in
+  // pcie_enum_top. One in flight, always -- Table 2-37 p.137 permits a peer to
+  // advertise a single NPH credit, so a second config request could not be
+  // transmitted anyway (see pcie_cfg_txn's header).
+  //
+  // The internal names below are kept EXACTLY as they were when the primitive
+  // was instantiated here, so the sequencer body underneath is byte-identical
+  // across the hoist. Only these bindings are new.
   // -------------------------------------------------------------------------
   logic         cmd_valid;
   logic         cmd_ready;
@@ -212,56 +251,25 @@ module pcie_enum_scan
 
   logic [5:0]   cmd_reg_num;
 
-  pcie_cfg_txn #(
-      .AXIS_DATA_WIDTH   (AXIS_DATA_WIDTH),
-      .AXIS_KEEP_WIDTH   (AXIS_KEEP_WIDTH),
-      .AXIS_USER_WIDTH   (AXIS_USER_WIDTH),
-      .CRS_RETRY_MAX     (CRS_RETRY_MAX),
-      .CRS_BACKOFF_CYCLES(CRS_BACKOFF_CYCLES),
-      .CPL_TIMEOUT_CYCLES(CPL_TIMEOUT_CYCLES)
-  ) u_txn (
-      .clk_i(clk_i),
-      .rst_i(rst_i),
+  assign cmd_valid_o   = cmd_valid;
+  assign cmd_ready     = cmd_ready_i;
+  assign cmd_reg_num_o = cmd_reg_num;
 
-      .cmd_valid_i   (cmd_valid),
-      .cmd_ready_o   (cmd_ready),
-      // Both scan transactions are READS. Nothing here writes.
-      .cmd_write_i   (1'b0),
-      .cmd_bdf_i     (device_bdf_o),
-      .cmd_reg_num_i (cmd_reg_num),
-      .cmd_ext_reg_i (CFG_EXT_REG_NONE),
-      .cmd_first_be_i(CFG_BE_DWORD),
-      .cmd_wdata_i   (32'd0),
+  assign rsp_valid     = rsp_valid_i;
+  assign rsp_ready_o   = rsp_ready;
+  assign rsp_outcome   = rsp_outcome_i;
+  assign rsp_rdata     = rsp_rdata_i;
 
-      .rsp_valid_o     (rsp_valid),
-      .rsp_ready_i     (rsp_ready),
-      .rsp_outcome_o   (rsp_outcome),
-      .rsp_rdata_o     (rsp_rdata),
-      // Deliberately unused: the raw completion status and the CRS retry count
-      // are the primitive's business. This module acts on the classified
-      // outcome only -- re-decoding status up here would duplicate policy.
-      .rsp_status_raw_o(),
-      .crs_retries_o   (),
-
-      .s_axis_rq_tdata_o (s_axis_rq_tdata_o),
-      .s_axis_rq_tkeep_o (s_axis_rq_tkeep_o),
-      .s_axis_rq_tvalid_o(s_axis_rq_tvalid_o),
-      .s_axis_rq_tlast_o (s_axis_rq_tlast_o),
-      .s_axis_rq_tuser_o (s_axis_rq_tuser_o),
-      .s_axis_rq_tready_i(s_axis_rq_tready_i),
-
-      .pcie_rq_tag_i    (pcie_rq_tag_i),
-      .pcie_rq_tag_vld_i(pcie_rq_tag_vld_i),
-
-      .m_axis_rc_tdata_i (m_axis_rc_tdata_i),
-      .m_axis_rc_tkeep_i (m_axis_rc_tkeep_i),
-      .m_axis_rc_tvalid_i(m_axis_rc_tvalid_i),
-      .m_axis_rc_tlast_i (m_axis_rc_tlast_i),
-      .m_axis_rc_tready_o(m_axis_rc_tready_o),
-
-      .cpl_timeout_valid_i(cpl_timeout_valid_i),
-      .cpl_timeout_tag_i  (cpl_timeout_tag_i)
-  );
+  // Constants formerly written at the u_txn instantiation site. Driven from
+  // here rather than tied off in the parent so that the Commit-D handoff mux
+  // sees a COMPLETE command port from each stage and needs no per-stage
+  // constants of its own.
+  //
+  // Both scan transactions are READS. Nothing here writes.
+  assign cmd_write_o    = 1'b0;
+  assign cmd_ext_reg_o  = CFG_EXT_REG_NONE;
+  assign cmd_first_be_o = CFG_BE_DWORD;
+  assign cmd_wdata_o    = 32'd0;
 
   // -------------------------------------------------------------------------
   // Sequencer.

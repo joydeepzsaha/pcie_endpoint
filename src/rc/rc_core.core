@@ -18,7 +18,14 @@ description: >
   interface. It EXPOSES link_up_i / transmit_enable_i / fc_initialized_i /
   fc_update_valid_i, because tlp_layer emits nothing and reports nothing
   without all four, and it ties off the Completer (CQ/CC) surface, which is the
-  endpoint side and out of scope for Commit 2a.
+  endpoint side and out of scope for Commit 2a. 2b-3 adds pcie_enum_top, also
+  wiring only: it now owns the ONE pcie_cfg_txn on behalf of every enumeration
+  stage, so pcie_enum_scan no longer instantiates the primitive and carries no
+  parameters at all. The hoist is behaviour-neutral -- pcie_enum_scan's
+  sequencer body is byte-identical across it -- and exists so that pcie_enum_bar
+  can share the primitive instead of duplicating it, which keeps
+  single-outstanding a property of the netlist rather than of an FSM's good
+  behaviour.
 
 filesets:
   rtl:
@@ -35,6 +42,7 @@ filesets:
       - pcie_rq_rc_top.sv
       - pcie_cfg_txn.sv
       - pcie_enum_scan.sv
+      - pcie_enum_top.sv
     file_type: systemVerilogSource
 
 targets:

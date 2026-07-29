@@ -86,9 +86,12 @@ filesets:
       - enum_tb_common.py    : {file_type : user, copyto : .}
       - test_pcie_enum_txn.py : {file_type : user, copyto : .}
 
-  # 2b-2: pcie_enum_scan standalone -- the sequencer plus the one pcie_cfg_txn
-  # it instantiates. The bench plays their shared socket via
-  # enum_tb_common.Socket, which asserts its own ordering invariants.
+  # 2b-2: the presence scan standalone. DUT is pcie_enum_top since 2b-3 -- the
+  # sequencer plus the one pcie_cfg_txn, which the TOP now instantiates rather
+  # than pcie_enum_scan. Behaviour-neutral: the shim's port list and every
+  # assertion in test_pcie_enum_scan.py are unchanged across the hoist, and the
+  # 16 tests hold their sim end time to the cycle. The bench plays the shared
+  # socket via enum_tb_common.Socket, which asserts its own ordering invariants.
   bench_enum_scan:
     files:
       - tb_pcie_enum_scan.sv
@@ -114,9 +117,10 @@ filesets:
       - enum_tb_common.py        : {file_type : user, copyto : .}
       - test_pcie_enum_txn_tlp.py : {file_type : user, copyto : .}
 
-  # 2b-2 integration: pcie_enum_scan in front of a REAL pcie_rq_rc_top. The
-  # completer models a tiny configuration space whose DEFAULT ARM IS UR, not
-  # silence -- see test_pcie_enum_scan_tlp.py, SS THE COMPLETER.
+  # 2b-2 integration: the presence scan in front of a REAL pcie_rq_rc_top. DUT
+  # is pcie_enum_top since 2b-3, same hoist as above. The completer models a
+  # tiny configuration space whose DEFAULT ARM IS UR, not silence -- see
+  # test_pcie_enum_scan_tlp.py, SS THE COMPLETER.
   bench_enum_scan_tlp:
     files:
       - tb_pcie_enum_scan_tlp.sv
