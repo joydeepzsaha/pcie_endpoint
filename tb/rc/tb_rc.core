@@ -71,6 +71,21 @@ filesets:
     files:
       - test_pcie_rc_if_tlp.py : {file_type : user, copyto : .}
 
+  # 2b-1: pcie_cfg_txn standalone -- the DUT is the transaction primitive alone
+  # and the Python bench PLAYS the pcie_rq_rc_top socket (tag strobe timing,
+  # tready stalls, RC descriptors, the completion-timeout sideband). See
+  # test_pcie_enum_txn.py, SS THE SOCKET MODEL, for why that model is itself
+  # mutation-tested.
+  bench_enum_txn:
+    files:
+      - tb_pcie_enum_txn.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_txn:
+    files:
+      - enum_tb_common.py    : {file_type : user, copyto : .}
+      - test_pcie_enum_txn.py : {file_type : user, copyto : .}
+
   # 2a-iii: pcie_rq_rc_top -- the assembled Root Complex requester surface.
   # The bench plays the Data Link Layer on both DLL streams and answers config
   # requests with a small, swappable Python completer; see test_pcie_rq_rc_top.py.
@@ -171,3 +186,18 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_rq_rc_top, cocotb_rq_rc_top]
     toplevel : [tb_pcie_rq_rc_top]
+
+  # 2b-1: pcie_cfg_txn standalone, E1..E13. No tlp_layer in this target, so no
+  # FC preconditions -- the credit story is verilate_enum_txn_tlp's subject.
+  verilate_enum_txn:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_txn
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_txn, cocotb_enum_txn]
+    toplevel : [tb_pcie_enum_txn]

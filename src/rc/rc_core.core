@@ -29,9 +29,11 @@ filesets:
       - pcie_axis_dw_downsize.sv
       - pcie_axis_dw_upsize.sv
       - pcie_rq_rc_pkg.sv
+      - pcie_enum_pkg.sv
       - pcie_rq_if.sv
       - pcie_rc_if.sv
       - pcie_rq_rc_top.sv
+      - pcie_cfg_txn.sv
     file_type: systemVerilogSource
 
 targets:
