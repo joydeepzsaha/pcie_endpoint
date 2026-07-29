@@ -154,7 +154,6 @@ targets:
       cocotb_module : test_tlp_requester
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_requester, cocotb_requester]
@@ -168,7 +167,6 @@ targets:
       cocotb_module : test_tlp_request_tracker
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_request_tracker, cocotb_request_tracker]
@@ -182,7 +180,6 @@ targets:
       cocotb_module : test_tlp_parser
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_parser, cocotb_parser]
@@ -196,7 +193,6 @@ targets:
       cocotb_module : test_tlp_generator
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_generator, cocotb_generator]
@@ -211,7 +207,6 @@ targets:
       cocotb_module : test_tlp_completion_control
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_completion_control, cocotb_completion_control]
@@ -227,7 +222,6 @@ targets:
       cocotb_module : test_tlp_comb
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_comb, cocotb_comb]
@@ -240,7 +234,6 @@ targets:
       cocotb_module : test_tlp_payload_formatter
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_payload_formatter, cocotb_payload_formatter]
@@ -255,7 +248,6 @@ targets:
       cocotb_module : test_tlp_compile
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, cocotb_compile]
@@ -272,7 +264,6 @@ targets:
       cocotb_module : test_tlp_cfg0_spine
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, cocotb_cfg0_spine]
@@ -288,7 +279,6 @@ targets:
       cocotb_module : test_tlp_conf_requester
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, cocotb_conf_requester]
@@ -304,7 +294,6 @@ targets:
       cocotb_module : test_tlp_conf_tracker
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, cocotb_conf_tracker]
@@ -320,7 +309,6 @@ targets:
       cocotb_module : test_tlp_conf_parser
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_conf_parser, cocotb_conf_parser]
@@ -336,7 +324,6 @@ targets:
       cocotb_module : test_tlp_conf_completion
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_completion_control, cocotb_conf_completion]
@@ -350,7 +337,6 @@ targets:
       cocotb_module : test_tlp_conf_generator
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_generator, cocotb_conf_generator]
@@ -365,7 +351,6 @@ targets:
       cocotb_module : test_tlp_conf_classifier
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_comb, cocotb_conf_classifier]
@@ -384,7 +369,6 @@ targets:
       cocotb_module : test_tlp_conf_cfgbe
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, cocotb_conf_cfgbe]
@@ -401,7 +385,6 @@ targets:
       cocotb_module : test_tlp_conf_datalast
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_requester, cocotb_conf_datalast]
@@ -415,7 +398,6 @@ targets:
       cocotb_module : test_tlp_conf_formatter
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_payload_formatter, cocotb_conf_formatter]
@@ -434,7 +416,6 @@ targets:
       cocotb_module : test_tlp_cpl_timeout
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         # The exact-cycle assertions read the tracker's own cycle_counter_r and
         # alloc_time_r rather than mirroring them in Python -- a mirror raced
         # the scheduler and was wrong twice before this.
@@ -453,7 +434,6 @@ targets:
       cocotb_module : test_tlp_cpl_timeout_default
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_request_tracker, cocotb_cpl_timeout_default]
@@ -470,7 +450,6 @@ targets:
       cocotb_module : test_tlp_request_tracker
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_request_tracker, cocotb_request_tracker]
@@ -494,7 +473,6 @@ targets:
       cocotb_module : test_tlp_credit_manager
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_credit_manager, cocotb_credit_manager]
@@ -510,7 +488,6 @@ targets:
       cocotb_module : test_tlp_credit_integration
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, cocotb_credit_integration]

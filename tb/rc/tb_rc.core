@@ -152,7 +152,6 @@ targets:
       cocotb_module : test_axis_dw_gearbox
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_axis_gearbox, cocotb_axis_gearbox]
@@ -166,7 +165,6 @@ targets:
       cocotb_module : test_pcie_rq_if
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_rq_if, cocotb_rq_if]
@@ -181,7 +179,6 @@ targets:
       cocotb_module : test_pcie_rq_if_tlp
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_rq_if_tlp, cocotb_rq_if_tlp]
@@ -195,7 +192,6 @@ targets:
       cocotb_module : test_pcie_rc_if
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_rc_if, cocotb_rc_if]
@@ -210,7 +206,6 @@ targets:
       cocotb_module : test_pcie_rc_if_tlp
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_rc_if_tlp, cocotb_rc_if_tlp]
@@ -226,7 +221,6 @@ targets:
       cocotb_module : test_pcie_rq_rc_top
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_rq_rc_top, cocotb_rq_rc_top]
@@ -241,7 +235,6 @@ targets:
       cocotb_module : test_pcie_enum_txn
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_enum_txn, cocotb_enum_txn]
@@ -257,7 +250,6 @@ targets:
       cocotb_module : test_pcie_enum_txn_tlp
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_enum_txn_tlp, cocotb_enum_txn_tlp]
@@ -272,7 +264,6 @@ targets:
       cocotb_module : test_pcie_enum_scan
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_enum_scan, cocotb_enum_scan]
@@ -288,7 +279,6 @@ targets:
       cocotb_module : test_pcie_enum_scan_tlp
       timescale: 1ns/1ns
       verilator_options:
-        - --trace-fst
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, bench_enum_scan_tlp, cocotb_enum_scan_tlp]
