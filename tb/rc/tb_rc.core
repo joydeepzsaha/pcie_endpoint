@@ -86,6 +86,21 @@ filesets:
       - enum_tb_common.py    : {file_type : user, copyto : .}
       - test_pcie_enum_txn.py : {file_type : user, copyto : .}
 
+  # 2b-1 integration: pcie_cfg_txn in front of a REAL pcie_rq_rc_top. The bench
+  # plays the Data Link Layer and answers config requests with the swappable
+  # completer (four-name interface preserved from test_pcie_rq_rc_top.py). MUST
+  # initialise FC credits -- and I8 deliberately does not, once, to pin the RC1
+  # signature.
+  bench_enum_txn_tlp:
+    files:
+      - tb_pcie_enum_txn_tlp.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_txn_tlp:
+    files:
+      - enum_tb_common.py        : {file_type : user, copyto : .}
+      - test_pcie_enum_txn_tlp.py : {file_type : user, copyto : .}
+
   # 2a-iii: pcie_rq_rc_top -- the assembled Root Complex requester surface.
   # The bench plays the Data Link Layer on both DLL streams and answers config
   # requests with a small, swappable Python completer; see test_pcie_rq_rc_top.py.
@@ -201,3 +216,19 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_enum_txn, cocotb_enum_txn]
     toplevel : [tb_pcie_enum_txn]
+
+  # 2b-1 integration: I1..I8. On-wire TLP goldens, the real completion timeout,
+  # and the credit vectors from SPEC_PREDICTIONS_ENUM.md SS2 (Table 2-37 minimum
+  # with a cumulative drip; P-NPD1-STALL; P-NPD-INF; RC1).
+  verilate_enum_txn_tlp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_txn_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_txn_tlp, cocotb_enum_txn_tlp]
+    toplevel : [tb_pcie_enum_txn_tlp]

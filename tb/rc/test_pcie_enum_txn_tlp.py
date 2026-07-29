@@ -1,0 +1,944 @@
+"""Commit 2b-1 integration -- pcie_cfg_txn behind a REAL pcie_rq_rc_top (I1..I8).
+
+    cmd_* -> pcie_cfg_txn -> pcie_rq_if -> tlp_layer -> TX DLLP -> [completer]
+    [completer] -> RX DLLP -> tlp_layer -> pcie_rc_if -> pcie_cfg_txn -> rsp_*
+
+The standalone target owns the primitive's behaviour against an invented
+socket.  This one owns what only the real stack can answer: that the descriptor
+the primitive builds becomes the TLP the spec says it should, that the tag it
+latches is the one the tracker allocated and put in the header, that the
+timeout it reacts to is the tracker's own, and that everything still works when
+credit is scarce rather than saturated.
+
+! FLOW CONTROL.  The DUT emits nothing and reports NO error until link_up_i,
+transmit_enable_i, fc_initialized_i and one fc_update_valid_i pulse with
+non-zero credits are all present (tlp_layer.sv:249, tlp_credit_manager.sv:53-54,
+66-83).  Every "N packets" assertion here would otherwise be vacuously
+satisfied by silence -- regression RC1, which I8 reproduces deliberately once.
+
+!! ZERO MEANS INFINITE.  An advertisement of 00h/000h made AT FC INITIALISATION
+means INFINITE credit for that type (Base 2.1 SS2.6.1 p.138, footnote 33 p.137;
+tlp_credit_manager.sv:106-120).  Starving a pool therefore needs a small FINITE
+advertisement with no replenishment -- never a zero one.  I7 pins that
+semantics so the inverted test cannot be rebuilt; I6 is the real starvation.
+
+Spec cited (read, not assumed):
+  Configuration Request header ...... PCIe Base 2.1 SS2.2.7 p.79-80, Figure 2-18
+  Minimum FC advertisements ......... PCIe Base 2.1 Table 2-37 p.137-138
+  Zero at init means infinite ....... PCIe Base 2.1 SS2.6.1 p.138, fn 33 p.137
+  Completion timeout is an error .... PCIe Base 2.1 SS2.8 p.152
+  Bit 30 / Request Completed ........ PG213 v1.3 :4049
+RTL cited:
+  DW0 assembly ...................... src/tlp/tlp_generator.sv:60-73
+  DW1 = {rid, tag, last_be, first_be}  src/tlp/tlp_generator.sv:80
+  config DW2 = {address[31:2], 00} .. src/tlp/tlp_generator.sv:81-82
+  orphan-data report, once per Dword   src/rc/pcie_rc_if.sv:403-405
+"""
+
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import ReadOnly, RisingEdge
+
+from enum_tb_common import (
+    CFG_BE_DWORD, CFG_BE_LOWER_HALF,
+    CFG_REG_BAR0, CFG_REG_CACHE_HEADER, CFG_REG_COMMAND_STATUS,
+    CFG_REG_VENDOR_DEVICE,
+    CPL_CRS, CPL_SC, CPL_UR,
+    RC_ERR_ORPHAN_DATA,
+    TXN_NAME, TXN_OK, TXN_TIMEOUT, TXN_UR,
+    cfg_wire_dw0, cfg_wire_dw1, cfg_wire_dw2,
+    cpl_dw0, cpl_dw1, cpl_dw2, dw0_length,
+)
+
+CLK_NS = 4
+
+CRS_RETRY_MAX = 3            # tb_pcie_enum_txn_tlp.sv override
+CPL_TIMEOUT_CYCLES = 4096    # left at the SHIPPED default deliberately
+
+RID = 0x1234                 # the Root Complex's own requester_id_i
+BDF = 0x0100                 # the target: bus 1, device 0, function 0
+BUS, DEV, FN = 0x01, 0x00, 0x00
+
+
+# ==========================================================================
+# SS THE COMPLETER
+#
+# Watches the DLL-facing TX stream, parses each emitted request far enough to
+# know its tag and whether it wants data, and injects a matching Cpl/CplD on RX.
+#
+# The four-name interface is PRESERVED VERBATIM from test_pcie_rq_rc_top.py --
+# .start(), .seen, .wait_for(n), .complete(req, ...) -- because that is the
+# surface Joy's protocol-checking endpoint model is meant to drop into.  Keeping
+# it identical makes the handoff a page of documentation instead of a redesign.
+#
+# It checks NOTHING about the request: it is a stimulus source, not a
+# verification model.  Every assertion in this file is made by the test against
+# a hand-derived golden, never by the completer against the DUT.
+# ==========================================================================
+class TlpRequest:
+    """One request TLP observed leaving the Transaction Layer."""
+
+    def __init__(self, dwords):
+        dw0, dw1, dw2 = dwords[0], dwords[1], dwords[2]
+        self.dwords = dwords
+        self.dw0, self.dw1, self.dw2 = dw0, dw1, dw2
+        self.fmt = (dw0 >> 5) & 0x7
+        self.tlp_type = dw0 & 0x1F
+        self.length_dw = dw0_length(dw0)
+        self.requester_id = (dw1 >> 16) & 0xFFFF
+        self.tag = (dw1 >> 8) & 0xFF
+        self.last_be = (dw1 >> 4) & 0xF
+        self.first_be = dw1 & 0xF
+        self.reg_num = (dw2 >> 2) & 0x3F
+        self.ext_reg = (dw2 >> 8) & 0xF
+        self.payload = dwords[3:]
+        self.is_read = (self.fmt & 0b010) == 0
+
+    def __repr__(self):
+        kind = "Rd" if self.is_read else "Wr"
+        return (f"Cfg{kind}0(tag={self.tag:#04x}, reg={self.reg_num:#04x}, "
+                f"fbe={self.first_be:#06b}, payload={[hex(w) for w in self.payload]})")
+
+
+class ConfigCompleter:
+    def __init__(self, dut, requester_id=RID, completer_id=BDF):
+        self.dut = dut
+        self.requester_id = requester_id
+        self.completer_id = completer_id
+        self.seen = []
+        self._partial = []
+
+    def start(self):
+        cocotb.start_soon(self._watch_tx())
+
+    async def _watch_tx(self):
+        d = self.dut
+        while True:
+            await RisingEdge(d.clk_i)
+            await ReadOnly()
+            if int(d.rst_i.value):
+                continue
+            if int(d.m_dllp_axis_tvalid.value) and int(d.m_dllp_axis_tready.value):
+                self._partial.append(int(d.m_dllp_axis_tdata.value))
+                if int(d.m_dllp_axis_tlast.value):
+                    self.seen.append(TlpRequest(self._partial))
+                    self._partial = []
+
+    async def wait_for(self, count, cycles=6000):
+        for _ in range(cycles):
+            await RisingEdge(self.dut.clk_i)
+            if len(self.seen) >= count:
+                return
+        raise AssertionError(
+            f"expected {count} request TLPs on the wire, saw {len(self.seen)} "
+            f"({self.seen}) -- FC credits, or the primitive never issued?")
+
+    async def complete(self, req, status=CPL_SC, data=None, byte_count=None):
+        has_data = req.is_read and status == CPL_SC
+        if byte_count is None:
+            byte_count = 4
+        words = [
+            cpl_dw0(has_data=has_data, length_dw=1 if has_data else 0),
+            cpl_dw1(self.completer_id, status, byte_count=byte_count),
+            # Lower Address is 0 for every non-Memory-Read completion and the
+            # tracker requires exactly that (tlp_layer.sv:371-378).
+            cpl_dw2(self.requester_id, req.tag, lower_address=0),
+        ]
+        if has_data:
+            words.append(0xD0000000 | req.tag if data is None else data)
+        await self.inject(words)
+
+    async def inject(self, words):
+        d = self.dut
+        for index, word in enumerate(words):
+            d.s_dllp_axis_tdata.value = word
+            d.s_dllp_axis_tkeep.value = 0xF
+            d.s_dllp_axis_tlast.value = 1 if index == len(words) - 1 else 0
+            d.s_dllp_axis_tvalid.value = 1
+            for _ in range(20000):
+                await ReadOnly()
+                fired = int(d.s_dllp_axis_tready.value) == 1
+                await RisingEdge(d.clk_i)
+                if fired:
+                    break
+            else:
+                raise AssertionError("s_dllp_axis_tready never asserted -- RX wedged")
+        d.s_dllp_axis_tvalid.value = 0
+        d.s_dllp_axis_tlast.value = 0
+
+
+# ==========================================================================
+# Monitor -- every error surface, concurrently
+# ==========================================================================
+class Mon:
+    def __init__(self, dut):
+        self.dut = dut
+        self.tags_presented = []
+        self.rq_errors = []
+        self.rc_errors = []
+        self.unexpected = []
+        self.command_errors = []
+        self.tx_errors = []
+        self.timeouts = []
+        self.lates = []
+        self.credit_errors = 0
+        self.blocked_seen = False
+        self.rq_tvalid_seen = False
+
+    def start(self):
+        cocotb.start_soon(self._run())
+
+    async def _run(self):
+        d = self.dut
+        while True:
+            await RisingEdge(d.clk_i)
+            await ReadOnly()
+            if int(d.rst_i.value):
+                continue
+            if int(d.pcie_rq_tag_vld_o.value):
+                self.tags_presented.append(int(d.pcie_rq_tag_o.value))
+            if int(d.rq_protocol_error_o.value):
+                self.rq_errors.append(int(d.rq_error_code_o.value))
+            if int(d.rc_protocol_error_o.value):
+                self.rc_errors.append(int(d.rc_error_code_o.value))
+            if int(d.rc_unexpected_completion_o.value):
+                self.unexpected.append(int(d.rc_completion_error_code_o.value))
+            if int(d.command_error_valid_o.value):
+                self.command_errors.append(int(d.command_error_code_o.value))
+            if int(d.tx_error_valid_o.value):
+                self.tx_errors.append(int(d.tx_error_code_o.value))
+            if int(d.cpl_timeout_valid_o.value):
+                self.timeouts.append(int(d.cpl_timeout_tag_o.value))
+            if int(d.late_cpl_valid_o.value):
+                self.lates.append(int(d.late_cpl_tag_o.value))
+            if int(d.credit_error_o.value):
+                self.credit_errors += 1
+            if int(d.tx_fc_blocked_o.value):
+                self.blocked_seen = True
+            if int(d.s_axis_rq_tvalid.value):
+                self.rq_tvalid_seen = True
+
+    async def wait_timeouts(self, count, cycles=CPL_TIMEOUT_CYCLES + 600):
+        for _ in range(cycles):
+            await RisingEdge(self.dut.clk_i)
+            if len(self.timeouts) >= count:
+                return
+        raise AssertionError(
+            f"expected {count} cpl_timeout strobes, saw {len(self.timeouts)}")
+
+    async def wait_lates(self, count, cycles=400):
+        for _ in range(cycles):
+            await RisingEdge(self.dut.clk_i)
+            if len(self.lates) >= count:
+                return
+        raise AssertionError(
+            f"expected {count} late_cpl strobes, saw {len(self.lates)}")
+
+    def clean(self, allow_timeouts=False, allow_orphans=False):
+        """Nothing fired that the prediction did not name.
+
+        credit_error_o is asserted silent unconditionally: a single-Dword config
+        request can never trip it by construction, since that needs a request
+        exceeding the peer's ENTIRE initial data advertisement.
+        """
+        assert self.rq_errors == [], f"RQ protocol errors: {self.rq_errors}"
+        assert self.unexpected == [], f"unexpected completions: {self.unexpected}"
+        assert self.command_errors == [], f"TL command errors: {self.command_errors}"
+        assert self.tx_errors == [], f"TX errors: {self.tx_errors}"
+        assert self.credit_errors == 0, \
+            (f"credit_error_o fired {self.credit_errors}x -- a one-Dword config "
+             "request cannot exhaust an entire data advertisement")
+        if not allow_orphans:
+            assert self.rc_errors == [], f"RC protocol errors: {self.rc_errors}"
+        if not allow_timeouts:
+            assert self.timeouts == [], f"completion timeouts: {self.timeouts}"
+            assert self.lates == [], f"late completions drained: {self.lates}"
+
+
+# ==========================================================================
+# Flow control
+# ==========================================================================
+def set_credits(dut, ph=0xFF, pd=0xFFF, nph=0xFF, npd=0xFFF, cplh=0xFF, cpld=0xFFF):
+    dut.fc_ph_i.value = ph
+    dut.fc_pd_i.value = pd
+    dut.fc_nph_i.value = nph
+    dut.fc_npd_i.value = npd
+    dut.fc_cplh_i.value = cplh
+    dut.fc_cpld_i.value = cpld
+
+
+class CreditDrip:
+    """A receiver returning credit the way a real one does: CUMULATIVELY.
+
+    !! fc_*_i is the raw CREDITS_ALLOCATED off the wire (Base 2.1 SS2.6.1.2
+    p.141) -- there is no arithmetic anywhere on the path.  An UpdateFC
+    therefore advertises a RUNNING TOTAL that only ever grows, and a drip that
+    re-pulses a constant is advertising "I have still only ever allocated N",
+    which blocks the transmitter forever once N are consumed.
+
+    That failure is indistinguishable from a DUT deadlock, which is exactly why
+    the drip is itself mutation-tested (see the commit message): re-pulsing a
+    constant must make the tests that depend on this coroutine FAIL, proving
+    they test the DUT and not the coroutine.
+    """
+
+    def __init__(self, dut, nph=1, npd=1, period=40, step=1):
+        self.dut = dut
+        self.nph = nph
+        self.npd = npd
+        self.period = period
+        self.step = step
+        self.updates = 0
+        self._run_flag = True
+
+    def start(self):
+        cocotb.start_soon(self._run())
+
+    def stop(self):
+        self._run_flag = False
+
+    async def _run(self):
+        d = self.dut
+        while True:
+            for _ in range(self.period):
+                await RisingEdge(d.clk_i)
+            if not self._run_flag:
+                continue
+            self.nph = (self.nph + self.step) & 0xFF
+            self.npd = (self.npd + self.step) & 0xFFF
+            d.fc_nph_i.value = self.nph
+            d.fc_npd_i.value = self.npd
+            d.fc_update_valid_i.value = 1
+            await RisingEdge(d.clk_i)
+            d.fc_update_valid_i.value = 0
+            self.updates += 1
+
+
+async def init(dut, credits=None, fc_init=True):
+    """Bring the link up.  `credits` overrides the saturated default."""
+    cocotb.start_soon(Clock(dut.clk_i, CLK_NS, units="ns").start())
+    dut.rst_i.value = 1
+    dut.link_up_i.value = 0
+    dut.transmit_enable_i.value = 0
+    dut.cmd_valid_i.value = 0
+    dut.cmd_write_i.value = 0
+    dut.cmd_bdf_i.value = 0
+    dut.cmd_reg_num_i.value = 0
+    dut.cmd_ext_reg_i.value = 0
+    dut.cmd_first_be_i.value = 0
+    dut.cmd_wdata_i.value = 0
+    dut.rsp_ready_i.value = 0
+    dut.s_dllp_axis_tdata.value = 0
+    dut.s_dllp_axis_tkeep.value = 0
+    dut.s_dllp_axis_tvalid.value = 0
+    dut.s_dllp_axis_tlast.value = 0
+    dut.s_dllp_axis_tuser.value = 0
+    dut.m_dllp_axis_tready.value = 1
+    dut.requester_id_i.value = RID
+    dut.completer_id_i.value = 0
+    dut.bus_number_i.value = 0
+    dut.device_number_i.value = 0
+    dut.function_number_i.value = 0
+    dut.memory_enable_i.value = 1
+    dut.extended_tag_enable_i.value = 0
+    dut.max_payload_bytes_i.value = 128
+    dut.max_read_bytes_i.value = 128
+    dut.rcb_128b_i.value = 0
+    dut.fc_initialized_i.value = 0
+    dut.fc_update_valid_i.value = 0
+    set_credits(dut, ph=0, pd=0, nph=0, npd=0, cplh=0, cpld=0)
+    for _ in range(4):
+        await RisingEdge(dut.clk_i)
+    dut.rst_i.value = 0
+    dut.link_up_i.value = 1
+    dut.transmit_enable_i.value = 1
+
+    if fc_init:
+        set_credits(dut, **(credits or {}))
+        dut.fc_initialized_i.value = 1
+        dut.fc_update_valid_i.value = 1     # THE INIT STROBE
+        await RisingEdge(dut.clk_i)
+        await RisingEdge(dut.clk_i)
+        # Held high for the saturated default (constant limit, plenty of room);
+        # a drip test lowers it and pulses its own increasing totals.
+        if credits is not None:
+            dut.fc_update_valid_i.value = 0
+    for _ in range(4):
+        await RisingEdge(dut.clk_i)
+
+    mon = Mon(dut)
+    mon.start()
+    completer = ConfigCompleter(dut)
+    completer.start()
+    await RisingEdge(dut.clk_i)
+    return mon, completer
+
+
+# ==========================================================================
+# Command / response helpers
+# ==========================================================================
+async def send_cmd(dut, write, reg_num, first_be=CFG_BE_DWORD, wdata=0,
+                   bdf=BDF, ext_reg=0, limit=2000):
+    dut.cmd_write_i.value = 1 if write else 0
+    dut.cmd_bdf_i.value = bdf
+    dut.cmd_reg_num_i.value = reg_num
+    dut.cmd_ext_reg_i.value = ext_reg
+    dut.cmd_first_be_i.value = first_be
+    dut.cmd_wdata_i.value = wdata
+    dut.cmd_valid_i.value = 1
+    for _ in range(limit):
+        await ReadOnly()
+        fired = int(dut.cmd_ready_o.value) == 1
+        await RisingEdge(dut.clk_i)
+        if fired:
+            break
+    else:
+        raise AssertionError("cmd_ready_o never asserted -- primitive stuck")
+    dut.cmd_valid_i.value = 0
+
+
+async def recv_rsp(dut, cycles=CPL_TIMEOUT_CYCLES + 2000):
+    for _ in range(cycles):
+        await ReadOnly()
+        if int(dut.rsp_valid_o.value):
+            got = {
+                "outcome": int(dut.rsp_outcome_o.value),
+                "rdata": int(dut.rsp_rdata_o.value),
+                "status_raw": int(dut.rsp_status_raw_o.value),
+                "crs_retries": int(dut.crs_retries_o.value),
+            }
+            await RisingEdge(dut.clk_i)
+            dut.rsp_ready_i.value = 1
+            await RisingEdge(dut.clk_i)
+            dut.rsp_ready_i.value = 0
+            return got
+        await RisingEdge(dut.clk_i)
+    raise AssertionError("rsp_valid_o never asserted")
+
+
+async def settle(dut, cycles=40):
+    for _ in range(cycles):
+        await RisingEdge(dut.clk_i)
+
+
+def outcome_name(value):
+    return TXN_NAME.get(value, f"<unknown {value}>")
+
+
+def assert_on_wire(req, *, write, reg_num, first_be, tag, what=""):
+    """Assert one emitted Configuration TLP against hand-derived goldens.
+
+    Base 2.1 SS2.2.7 p.79 fixes Length to 1 Dword, Last DW BE to 0000b and
+    TC/Attr/AT to zero for every Configuration Request; Figure 2-18 p.80 fixes
+    the third header Dword's BDF packing.
+    """
+    exp0 = cfg_wire_dw0(write=write, length_dw=1)
+    exp1 = cfg_wire_dw1(RID, tag, first_be)
+    exp2 = cfg_wire_dw2(BUS, DEV, FN, reg_num)
+    assert req.dw0 == exp0, \
+        f"{what}DW0 {req.dw0:#010x} != golden {exp0:#010x}"
+    assert req.dw1 == exp1, \
+        f"{what}DW1 {req.dw1:#010x} != golden {exp1:#010x} (rid/tag/BE)"
+    assert req.dw2 == exp2, \
+        f"{what}DW2 {req.dw2:#010x} != golden {exp2:#010x} (BDF routing Dword)"
+    assert req.length_dw == 1, \
+        f"{what}Length {req.length_dw} != 1 (Base 2.1 SS2.2.7 p.79)"
+    assert req.last_be == 0, \
+        f"{what}Last DW BE {req.last_be:#06b} != 0000b (Base 2.1 SS2.2.7 p.79)"
+
+
+# ==========================================================================
+# I1 / I2 -- end to end, with the emitted TLP asserted on the wire
+# ==========================================================================
+@cocotb.test()
+async def i1_config_read_end_to_end(dut):
+    """A CfgRd0 all the way to the link and back, header asserted against spec."""
+    mon, completer = await init(dut)
+
+    await send_cmd(dut, write=False, reg_num=CFG_REG_VENDOR_DEVICE,
+                   first_be=CFG_BE_DWORD)
+    await completer.wait_for(1)
+    req = completer.seen[0]
+
+    # The tag in the header must be the tag the socket presented -- the whole
+    # point of pcie_rq_tag_o is that it is the value that physically went out.
+    assert mon.tags_presented == [req.tag], (
+        f"header tag {req.tag:#04x} but pcie_rq_tag_o presented "
+        f"{[hex(t) for t in mon.tags_presented]}")
+    assert_on_wire(req, write=False, reg_num=CFG_REG_VENDOR_DEVICE,
+                   first_be=CFG_BE_DWORD, tag=req.tag, what="I1 ")
+    assert req.payload == [], "a CfgRd0 carries no payload"
+    assert int(dut.outstanding_o.value) == 1
+
+    await completer.complete(req, status=CPL_SC, data=0x8086_A80A)
+    rsp = await recv_rsp(dut)
+
+    assert rsp["outcome"] == TXN_OK, \
+        f"outcome {outcome_name(rsp['outcome'])}, expected TXN_OK"
+    assert rsp["rdata"] == 0x8086_A80A, f"read data {rsp['rdata']:#010x}"
+    await settle(dut)
+    assert int(dut.outstanding_o.value) == 0, "the tag was not retired"
+    assert len(completer.seen) == 1, f"{len(completer.seen)} TLPs for one command"
+    mon.clean()
+
+
+@cocotb.test()
+async def i2_config_write_end_to_end(dut):
+    """A byte-granular CfgWr0 all the way to the link and back.
+
+    first_be = 0011 with reg 1 is the Command register's low half -- the shape
+    Commit 2b-3 will use for Memory Space + Bus Master enable.  It is also the
+    case that proves byte-granular config writes survive the whole stack.
+    """
+    mon, completer = await init(dut)
+
+    await send_cmd(dut, write=True, reg_num=CFG_REG_COMMAND_STATUS,
+                   first_be=CFG_BE_LOWER_HALF, wdata=0x00000006)
+    await completer.wait_for(1)
+    req = completer.seen[0]
+
+    assert_on_wire(req, write=True, reg_num=CFG_REG_COMMAND_STATUS,
+                   first_be=CFG_BE_LOWER_HALF, tag=req.tag, what="I2 ")
+    assert req.payload == [0x00000006], \
+        f"payload {[hex(w) for w in req.payload]}, expected [0x6]"
+    assert req.first_be == CFG_BE_LOWER_HALF, (
+        f"1st DW BE {req.first_be:#06b} != {CFG_BE_LOWER_HALF:#06b} -- the byte "
+        "enables did not survive to the wire")
+
+    # A config write is NON-POSTED: it takes a tag and it does get a completion.
+    assert mon.tags_presented == [req.tag], \
+        "a CfgWr0 must present a tag -- only posted writes do not"
+
+    await completer.complete(req, status=CPL_SC)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK, \
+        f"outcome {outcome_name(rsp['outcome'])}, expected TXN_OK"
+    assert rsp["rdata"] == 0, "a config write completion carries no data"
+    mon.clean()
+
+
+# ==========================================================================
+# I3 -- CRS retry through the real stack
+# ==========================================================================
+@cocotb.test()
+async def i3_crs_retry_through_the_stack(dut):
+    """CRS then SC, with both TLPs asserted on the wire.
+
+    The reissue must be byte-identical in its header EXCEPT for the tag: a CRS
+    terminates the request (Base 2.1 SS2.3.2 IN p.113), so the retry is a new
+    request and the tracker gives it a new tag.
+    """
+    mon, completer = await init(dut)
+
+    await send_cmd(dut, write=False, reg_num=CFG_REG_VENDOR_DEVICE)
+    await completer.wait_for(1)
+    first = completer.seen[0]
+    await completer.complete(first, status=CPL_CRS)
+
+    await completer.wait_for(2)
+    retry = completer.seen[1]
+
+    assert retry.dw0 == first.dw0, "the reissued DW0 differs"
+    assert retry.dw2 == first.dw2, "the reissued routing Dword differs"
+    assert retry.first_be == first.first_be, "the reissued byte enables differ"
+    # !! THE RETRY MAY LEGITIMATELY REUSE THE SAME TAG, AND HERE IT DOES.
+    #
+    # The standalone bench hands out incrementing tags, so E7 can assert that
+    # the retry's tag differs.  That is a property of THAT MODEL, not of the
+    # design: the real tracker recycles.  The CRS completion carried Request
+    # Completed, which is exactly the condition under which PG213 :4257 makes
+    # reuse safe -- "the user logic should not reassign a tag allocated to a
+    # request until it has received a Completion Descriptor ... with the
+    # Request Completed bit set".  Once that has happened the tag is free, and
+    # the tracker hands the lowest free tag straight back.
+    #
+    # Asserting tag inequality here would be asserting a bench artefact.  What
+    # must hold is that the reissue went through ALLOCATION again rather than
+    # reusing a stale latched value -- and the second strobe is what proves it.
+    assert mon.tags_presented == [first.tag, retry.tag], (
+        f"tag strobes {[hex(t) for t in mon.tags_presented]} do not match the "
+        f"two headers {[hex(first.tag), hex(retry.tag)]}")
+    assert len(mon.tags_presented) == 2, (
+        f"{len(mon.tags_presented)} tag strobes for two emitted requests -- the "
+        "retry did not go through allocation")
+    assert_on_wire(retry, write=False, reg_num=CFG_REG_VENDOR_DEVICE,
+                   first_be=CFG_BE_DWORD, tag=retry.tag, what="I3 retry ")
+
+    await completer.complete(retry, status=CPL_SC, data=0x1B36_1AF4)
+    rsp = await recv_rsp(dut)
+
+    assert rsp["outcome"] == TXN_OK, \
+        f"outcome {outcome_name(rsp['outcome'])}, expected TXN_OK"
+    assert rsp["rdata"] == 0x1B36_1AF4
+    assert rsp["crs_retries"] == 1, f"crs_retries_o = {rsp['crs_retries']}"
+    assert len(completer.seen) == 2, f"{len(completer.seen)} TLPs, expected 2"
+    mon.clean()
+
+
+# ==========================================================================
+# I4 -- the real completion timeout, then a late completion
+# ==========================================================================
+@cocotb.test()
+async def i4_timeout_then_late_completion(dut):
+    """Nobody answers; the tracker times out; the late completion drains clean.
+
+    This is the whole timeout story through the real stack:
+      * the primitive reports TXN_TIMEOUT off the tracker's own strobe;
+      * a late completion for the quarantined tag raises late_cpl_valid_o and
+        exactly one RC_ERR_ORPHAN_DATA per drained Dword
+        (pcie_rc_if.sv:403-405) -- and NEITHER is a fault;
+      * nothing wedges: a fresh transaction still round-trips afterwards.
+
+    The orphan count is asserted EXACTLY, V9-style.  "No failure" would pass
+    even if the drain sized itself from the request instead of from the
+    completion and left three beats stuck in the receive path.
+    """
+    mon, completer = await init(dut)
+
+    await send_cmd(dut, write=False, reg_num=CFG_REG_VENDOR_DEVICE)
+    await completer.wait_for(1)
+    dead = completer.seen[0]
+    assert mon.tags_presented == [dead.tag]
+
+    await mon.wait_timeouts(1)
+    assert mon.timeouts == [dead.tag], (
+        f"timeout named {[hex(t) for t in mon.timeouts]}, but the request went "
+        f"out on tag {dead.tag:#04x}")
+
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_TIMEOUT, \
+        f"outcome {outcome_name(rsp['outcome'])}, expected TXN_TIMEOUT"
+    assert rsp["rdata"] == 0
+
+    # The late completion arrives, carrying FOUR Dwords against a 1-Dword
+    # request: length and per-request accounting are forced apart on purpose.
+    late_payload = [0x1111_1111, 0x2222_2222, 0x3333_3333, 0x4444_4444]
+    await completer.inject([
+        cpl_dw0(has_data=True, length_dw=len(late_payload)),
+        cpl_dw1(BDF, CPL_SC, byte_count=4 * len(late_payload)),
+        cpl_dw2(RID, dead.tag, lower_address=0),
+    ] + late_payload)
+
+    await mon.wait_lates(1)
+    assert mon.lates == [dead.tag], \
+        f"late_cpl named {[hex(t) for t in mon.lates]}, expected {dead.tag:#04x}"
+    await settle(dut, 80)
+    assert mon.rc_errors == [RC_ERR_ORPHAN_DATA] * len(late_payload), (
+        f"expected {len(late_payload)} orphan-data reports, one per drained "
+        f"Dword; got {mon.rc_errors}")
+    assert mon.unexpected == [], "a drained late completion is not unexpected"
+    assert int(dut.rsp_valid_o.value) == 0, \
+        "the drained late completion produced a response"
+    mon.rc_errors.clear()
+
+    # Nothing wedged.
+    await send_cmd(dut, write=False, reg_num=CFG_REG_BAR0)
+    await completer.wait_for(2)
+    live = completer.seen[1]
+    await completer.complete(live, status=CPL_SC, data=0x5EED_0003)
+    rsp2 = await recv_rsp(dut)
+    assert rsp2["outcome"] == TXN_OK, "the stack did not recover from the drain"
+    assert rsp2["rdata"] == 0x5EED_0003
+    assert len(mon.timeouts) == 1, "the second request was answered in time"
+    mon.clean(allow_timeouts=True, allow_orphans=True)
+
+
+# ==========================================================================
+# I5 -- realistic small credit, with a cumulative drip
+# ==========================================================================
+@cocotb.test()
+async def i5_small_credit_drip(dut):
+    """NPH=1, NPD=1, CPLH/CPLD infinite -- the Table 2-37 minimum, replenished.
+
+    Base 2.1 Table 2-37 p.137-138 sets the minimum initial advertisement at one
+    NPH unit and one NPD unit, and makes infinite CPLH/CPLD MANDATORY for an
+    Endpoint.  So this vector is not a stress choice, it is the smallest legal
+    peer -- and it is what the enumeration FSM must work against.
+
+    The drip is deliberately slower than the transaction rate so the credit
+    really does bind; `blocked_seen` asserts that it did, because a small-credit
+    test in which nothing ever blocks is a saturated test wearing a costume.
+    """
+    mon, completer = await init(dut, credits=dict(
+        ph=1, pd=8, nph=1, npd=1, cplh=0, cpld=0))
+    drip = CreditDrip(dut, nph=1, npd=1, period=40)
+    drip.start()
+
+    # A mix of reads and writes: a read consumes NPH only, a write NPH and NPD.
+    plan = [(False, CFG_REG_VENDOR_DEVICE, 0),
+            (True,  CFG_REG_BAR0, 0xFFFFFFFF),
+            (False, CFG_REG_BAR0, 0),
+            (True,  CFG_REG_COMMAND_STATUS, 0x00000006),
+            (False, CFG_REG_CACHE_HEADER, 0)]
+    for index, (write, reg, wdata) in enumerate(plan):
+        await send_cmd(dut, write=write, reg_num=reg, wdata=wdata,
+                       first_be=CFG_BE_DWORD)
+        await completer.wait_for(index + 1)
+        await completer.complete(completer.seen[index], status=CPL_SC,
+                                 data=0xA000_0000 | index)
+        rsp = await recv_rsp(dut)
+        assert rsp["outcome"] == TXN_OK, (
+            f"transaction {index} ({'write' if write else 'read'} reg {reg:#04x}) "
+            f"ended {outcome_name(rsp['outcome'])} under minimum credit")
+        if not write:
+            assert rsp["rdata"] == (0xA000_0000 | index)
+
+    assert len(completer.seen) == len(plan), \
+        f"{len(completer.seen)} TLPs for {len(plan)} commands"
+    assert mon.blocked_seen, (
+        "tx_fc_blocked_o never asserted with NPH=1/NPD=1 and a 40-cycle drip -- "
+        "the credit was not actually binding, so this test proves nothing about "
+        "small credit")
+    assert drip.updates > 0, "the drip never ran"
+    # Single outstanding by construction: with NPH=1 there is never room for
+    # two, and the primitive never tries.
+    assert int(dut.outstanding_o.value) == 0
+    mon.clean()
+
+
+# ==========================================================================
+# I6 -- P-NPD1-STALL: the REAL credit starvation signature
+# ==========================================================================
+@cocotb.test()
+async def i6_finite_npd_starves_writes_not_reads(dut):
+    """A finite NPD with no replenishment stalls writes indefinitely, silently.
+
+    THE PREDICTED SIGNATURE (SPEC_PREDICTIONS_ENUM.md SS2.4, P-NPD1-STALL):
+    tx_fc_blocked_o held, ZERO error strobes anywhere, no TLP on the wire, and
+    the primitive simply waiting.  It is indistinguishable from a hung FSM
+    unless you know to look at tx_fc_blocked_o -- which is exactly why it is
+    written down here rather than discovered during 2b-2.
+
+    A config READ consumes NPH only (tlp_vc_buffer.sv:91 charges data credits
+    only when the packet has data), so reads keep flowing while writes starve.
+    That asymmetry is the diagnostic.
+    """
+    mon, completer = await init(dut, credits=dict(
+        ph=1, pd=8, nph=0xFF, npd=1, cplh=0, cpld=0))
+
+    # 1. The one available NPD credit is spent by a write.
+    await send_cmd(dut, write=True, reg_num=CFG_REG_BAR0, wdata=0xFFFFFFFF)
+    await completer.wait_for(1)
+    await completer.complete(completer.seen[0], status=CPL_SC)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK, "the first write should have had credit"
+
+    # 2. A READ still flows: it needs no data credit at all.
+    await send_cmd(dut, write=False, reg_num=CFG_REG_VENDOR_DEVICE)
+    await completer.wait_for(2)
+    await completer.complete(completer.seen[1], status=CPL_SC, data=0x1234_5678)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK, (
+        "a config READ stalled under NPD starvation -- reads consume NPH only")
+    assert rsp["rdata"] == 0x1234_5678
+
+    # 3. A second WRITE has no data credit and must stall, silently.
+    await send_cmd(dut, write=True, reg_num=CFG_REG_BAR0, wdata=0xFFFFFFFF)
+    await settle(dut, 400)
+    assert len(completer.seen) == 2, (
+        f"{len(completer.seen)} TLPs on the wire -- a write was transmitted with "
+        "no NPD credit available")
+    await ReadOnly()
+    assert int(dut.tx_fc_blocked_o.value) == 1, (
+        "tx_fc_blocked_o is low while a write is stalled -- the stall is not "
+        "credit, so it is a real hang")
+    assert int(dut.rsp_valid_o.value) == 0, "no response is possible yet"
+    await RisingEdge(dut.clk_i)
+    mon.clean()   # THE POINT: a credit stall raises NO error, of any kind.
+
+    # 4. Replenish -- cumulatively -- and it completes.
+    dut.fc_npd_i.value = 2
+    dut.fc_update_valid_i.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.fc_update_valid_i.value = 0
+    await completer.wait_for(3)
+    await completer.complete(completer.seen[2], status=CPL_SC)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK, \
+        "the stalled write did not complete after credit was returned"
+    mon.clean()
+
+
+# ==========================================================================
+# I7 -- P-NPD-INF: zero at init means INFINITE
+# ==========================================================================
+@cocotb.test()
+async def i7_zero_advertisement_means_infinite(dut):
+    """fc_npd_i = 0 at FC init makes NPD UNLIMITED, not empty.
+
+    Base 2.1 SS2.6.1 p.138 and footnote 33 p.137: an advertisement of 00h/000h
+    made at Flow Control initialisation is "interpreted as infinite by the
+    Transmitter, which will, therefore, never throttle".  Implemented at
+    tlp_credit_manager.sv:106-120, latched at init and never re-evaluated.
+
+    THIS TEST EXISTS TO PREVENT A TEST.  The obvious way to write a credit
+    starvation case -- advertise zero and watch the writes wedge -- produces
+    the exact opposite behaviour and passes while proving nothing.  Both the
+    Commit-2b brief and RECON_commit2b.md SS2.3 predicted the wedge before this
+    was checked against the RTL.  I6 is the real starvation; this is the vacuum,
+    pinned so nobody rebuilds the inverted version.
+    """
+    mon, completer = await init(dut, credits=dict(
+        ph=1, pd=8, nph=0xFF, npd=0, cplh=0, cpld=0))
+
+    # Four writes, each consuming a data credit from a pool advertised as zero.
+    for index in range(4):
+        await send_cmd(dut, write=True, reg_num=CFG_REG_BAR0, wdata=0xFFFF_0000 | index)
+        await completer.wait_for(index + 1)
+        assert completer.seen[index].payload == [0xFFFF_0000 | index]
+        await completer.complete(completer.seen[index], status=CPL_SC)
+        rsp = await recv_rsp(dut)
+        assert rsp["outcome"] == TXN_OK, (
+            f"write {index} ended {outcome_name(rsp['outcome'])} -- if this "
+            "stalled, zero-means-infinite has regressed and every credit test "
+            "in the suite needs re-reading")
+
+    assert not mon.blocked_seen, (
+        "tx_fc_blocked_o asserted with NPD advertised as 0 (= INFINITE). Either "
+        "the credit manager stopped honouring Base 2.1 SS2.6.1 p.138 fn 33, or a "
+        "different pool ran out")
+    assert len(completer.seen) == 4
+    mon.clean()
+
+
+# ==========================================================================
+# I8 -- RC1 negative control. Once, and never again.
+# ==========================================================================
+@cocotb.test()
+async def i8_rc1_no_flow_control_init_is_silent(dut):
+    """Without FC init the stack emits NOTHING and reports NOTHING.
+
+    The recognisable RC1 signature.  The dangerous part is the second half: the
+    RQ interface still accepts the descriptor and no error output ever fires, so
+    the failure looks exactly like a broken primitive.
+
+    !! THE TEST MUST PROVE THE PRIMITIVE TRIED (prediction F4).  With no FSM
+    activity at all, "zero TLPs" is trivially true and the control is vacuous --
+    so s_axis_rq_tvalid being seen high is asserted BEFORE the silence is.
+    """
+    mon, completer = await init(dut, fc_init=False)
+
+    await send_cmd(dut, write=False, reg_num=CFG_REG_VENDOR_DEVICE)
+    await settle(dut, 400)
+
+    assert mon.rq_tvalid_seen, (
+        "the primitive never drove s_axis_rq_tvalid -- this control proves "
+        "nothing about flow control if nothing was ever offered to the stack")
+    assert completer.seen == [], (
+        f"{len(completer.seen)} TLPs emitted without FC initialisation")
+    assert int(dut.rsp_valid_o.value) == 0, "a response appeared from nowhere"
+
+    # !! MEASURED CORRECTION TO THE DOCUMENTED SOCKET CONTRACT.
+    #
+    # pcie_rq_rc_top.sv:33 lists the RC1 signature as "no TLP on m_dllp_axis_*,
+    # no pulse on any error output, NO TAG ON pcie_rq_tag_o".  The last clause
+    # is WRONG, and this is where it was caught: a tag IS allocated and IS
+    # presented, with flow control uninitialised.
+    #
+    # The reason is structural.  The credit gate sits at the VC-buffer-to-
+    # transmit boundary -- vc_packet_ready = credit_request_ready &&
+    # transmit_enable_i && link_up_i (tlp_layer.sv:280) -- which is DOWNSTREAM
+    # of allocation.  tlp_requester enters REQ_TAG as soon as the command is
+    # accepted and raises tag_request_valid_o there (tlp_requester.sv:138,
+    # :211), referencing neither fc_initialized_i nor any credit signal.  So the
+    # tag is handed out, the TLP is assembled, and only then does it park in the
+    # VC buffer with nothing to spend.
+    #
+    # CONSEQUENCE FOR THE 2b-2 SEQUENCER: a tag strobe is NOT evidence that a
+    # request reached the link.  pcie_cfg_txn never treats it as such -- it
+    # waits for a completion or the timeout, never for the tag alone -- and the
+    # sequencer must not either.
+    assert len(mon.tags_presented) == 1, (
+        f"expected exactly one tag strobe, saw {mon.tags_presented}. A tag IS "
+        "allocated without credit (tlp_requester.sv:138 vs tlp_layer.sv:280); "
+        "if this count changed, the allocation/credit ordering moved")
+
+    # ...and the silence really is total: no error output names the problem.
+    mon.clean()
+    assert mon.rc_errors == [], f"RC errors: {mon.rc_errors}"
+
+    # Now bring flow control up and the very same command completes, which is
+    # what proves the silence was FC and not a broken primitive.
+    set_credits(dut)
+    dut.fc_initialized_i.value = 1
+    dut.fc_update_valid_i.value = 1
+    await completer.wait_for(1)
+    req = completer.seen[0]
+    assert_on_wire(req, write=False, reg_num=CFG_REG_VENDOR_DEVICE,
+                   first_be=CFG_BE_DWORD, tag=req.tag, what="I8 post-init ")
+    await completer.complete(req, status=CPL_SC, data=0x1AF4_1000)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK, \
+        "the command did not complete once flow control came up"
+    assert rsp["rdata"] == 0x1AF4_1000
+    mon.clean()
+
+
+# ==========================================================================
+# I9 -- the completion timer runs from ALLOCATION, not from transmission
+#
+# ADDED AFTER AN INHERITED-STACK SURPRISE FOUND BY I8.  Tag allocation happens
+# upstream of the credit gate, and tlp_request_tracker.sv:39 measures per-tag
+# age "from ALLOCATION".  Those two facts together mean a request stalled on
+# credit for longer than CPL_TIMEOUT_CYCLES times out WITHOUT EVER HAVING BEEN
+# TRANSMITTED.
+#
+# That matters because the Commit-2b master brief SS4.1 requires the enumeration
+# FSM to tolerate tx_fc_blocked_o "for arbitrary spans -- no cycle-count
+# assumptions". Against this stack that requirement cannot be met above ~4096
+# cycles of continuous credit starvation, no matter how the FSM is written: the
+# tracker will fire a timeout the FSM has no way to distinguish from a dead
+# device.  Pinned here so the limit is a known quantity rather than a field
+# failure.
+# ==========================================================================
+@cocotb.test()
+async def i9_credit_stall_longer_than_the_timeout(dut):
+    """A write starved of credit past CPL_TIMEOUT_CYCLES times out un-transmitted.
+
+    PREDICTED, before running: the second write is accepted, its tag is
+    allocated immediately (I8 established that allocation does not wait for
+    credit), the TLP parks in the VC buffer, and CPL_TIMEOUT_CYCLES later the
+    tracker times out a request that never reached the link.  No TLP appears on
+    the wire during the stall, and no error output fires -- a completion timeout
+    is a sideband strobe, not an error.
+    """
+    mon, completer = await init(dut, credits=dict(
+        ph=1, pd=8, nph=0xFF, npd=1, cplh=0, cpld=0))
+
+    # Spend the single NPD credit.
+    await send_cmd(dut, write=True, reg_num=CFG_REG_BAR0, wdata=0xFFFFFFFF)
+    await completer.wait_for(1)
+    await completer.complete(completer.seen[0], status=CPL_SC)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK
+
+    # This one has no data credit and will never be transmitted.
+    await send_cmd(dut, write=True, reg_num=CFG_REG_BAR0, wdata=0xDEADBEEF)
+    await settle(dut, 200)
+    await ReadOnly()
+    assert int(dut.tx_fc_blocked_o.value) == 1, "the write should be credit-blocked"
+    await RisingEdge(dut.clk_i)
+    tags_at_stall = list(mon.tags_presented)
+    assert len(tags_at_stall) == 2, (
+        f"expected a tag to be allocated for the stalled write, saw "
+        f"{tags_at_stall} -- allocation is supposed to precede the credit gate")
+
+    # Ride out the whole timeout interval with the TLP still stuck.
+    await mon.wait_timeouts(1, cycles=CPL_TIMEOUT_CYCLES + 800)
+    assert mon.timeouts == [tags_at_stall[1]], (
+        f"timeout named {[hex(t) for t in mon.timeouts]}, expected the stalled "
+        f"write's tag {tags_at_stall[1]:#04x}")
+    assert len(completer.seen) == 1, (
+        f"{len(completer.seen)} TLPs on the wire -- the stalled write was "
+        "transmitted after all, which would invalidate this whole test")
+
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_TIMEOUT, (
+        f"outcome {outcome_name(rsp['outcome'])} -- a credit-starved request "
+        "that outlives CPL_TIMEOUT_CYCLES is reported as a completion timeout, "
+        "indistinguishable from a dead device")
+
+    # A completion timeout is a sideband strobe; nothing on the error surface
+    # fires, which is precisely what makes this hard to diagnose in the field.
+    assert mon.rq_errors == [] and mon.command_errors == [] and mon.tx_errors == []
+    assert mon.credit_errors == 0
