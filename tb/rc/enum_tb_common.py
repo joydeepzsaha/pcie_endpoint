@@ -77,6 +77,13 @@ EC_BAD_STATUS = 0b0010          # terminated by UR / CA / CRS
 # pcie_rq_rc_pkg::rc_error_e
 RC_ERR_ORPHAN_DATA = 3
 
+# tlp_pkg::tlp_error_e. A completion naming a tag the tracker never allocated is
+# reported ONCE for the packet on rc_unexpected_completion_o
+# (tlp_request_tracker.sv:316), independently of pcie_rc_if's per-Dword orphan
+# reports. Two different surfaces describing two different facts about the same
+# packet -- see e5 in test_pcie_enum_bar_tlp.py.
+TLP_ERR_UNEXPECTED_COMPLETION = 10
+
 # pcie_enum_pkg::txn_outcome_e
 TXN_OK = 0
 TXN_UR = 1
@@ -862,7 +869,8 @@ class Mon:
         raise AssertionError(
             f"expected {count} late_cpl strobes, saw {len(self.lates)}")
 
-    def clean(self, allow_timeouts=False, allow_orphans=False):
+    def clean(self, allow_timeouts=False, allow_orphans=False,
+              allow_unexpected=False):
         """Nothing fired that the prediction did not name.
 
         credit_error_o is asserted silent unconditionally: a single-Dword config
@@ -870,7 +878,9 @@ class Mon:
         exceeding the peer's ENTIRE initial data advertisement.
         """
         assert self.rq_errors == [], f"RQ protocol errors: {self.rq_errors}"
-        assert self.unexpected == [], f"unexpected completions: {self.unexpected}"
+        if not allow_unexpected:
+            assert self.unexpected == [], \
+                f"unexpected completions: {self.unexpected}"
         assert self.command_errors == [], f"TL command errors: {self.command_errors}"
         assert self.tx_errors == [], f"TX errors: {self.tx_errors}"
         assert self.credit_errors == 0, \

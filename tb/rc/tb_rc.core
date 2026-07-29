@@ -148,6 +148,21 @@ filesets:
       - enum_tb_common.py     : {file_type : user, copyto : .}
       - test_pcie_enum_bar.py : {file_type : user, copyto : .}
 
+  # 2b-3 integration: the WHOLE enumeration in front of a REAL pcie_rq_rc_top.
+  # The completer drives a full ConfigDevice with real BAR write-mask semantics
+  # -- a completer that echoed writes verbatim would make sizing return garbage
+  # and the DUT look broken. The four-name interface (.start/.seen/.wait_for/
+  # .complete) is preserved verbatim from 2b-1/2b-2.
+  bench_enum_bar_tlp:
+    files:
+      - tb_pcie_enum_bar_tlp.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_bar_tlp:
+    files:
+      - enum_tb_common.py         : {file_type : user, copyto : .}
+      - test_pcie_enum_bar_tlp.py : {file_type : user, copyto : .}
+
   # 2a-iii: pcie_rq_rc_top -- the assembled Root Complex requester surface.
   # The bench plays the Data Link Layer on both DLL streams and answers config
   # requests with a small, swappable Python completer; see test_pcie_rq_rc_top.py.
@@ -333,3 +348,33 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_enum_bar, cocotb_enum_bar]
     toplevel : [tb_pcie_enum_bar]
+
+  # 2b-3 integration: E1..E7. THE ACCEPTANCE TARGET -- an NVMe-like endpoint
+  # enumerated end to end from FC init to enum_done_o, every emitted DW asserted
+  # against SPEC_PREDICTIONS_ENUM.md SSE.8 with payloads, run both saturated and
+  # under the Table 2-37 minimum credit drip.
+  verilate_enum_bar_tlp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bar_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bar_tlp, cocotb_enum_bar_tlp]
+    toplevel : [tb_pcie_enum_bar_tlp]
+
+  # Waveform variant; debug-only, not part of the regression gate.
+  verilate_enum_bar_tlp_trace:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bar_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bar_tlp, cocotb_enum_bar_tlp]
+    toplevel : [tb_pcie_enum_bar_tlp]
