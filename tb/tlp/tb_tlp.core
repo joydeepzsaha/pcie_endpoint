@@ -44,6 +44,10 @@ filesets:
     files:
       - tb_tlp_payload_formatter.sv
     file_type: systemVerilogSource
+  bench_credit_manager:
+    files:
+      - tb_tlp_credit_manager.sv
+    file_type: systemVerilogSource
 
   # TL conformance sweep: parser wrapper exposing poisoned/attributes/BE.
   bench_conf_parser:
@@ -76,6 +80,9 @@ filesets:
   cocotb_compile:
     files:
       - test_tlp_compile.py : {file_type : user, copyto : .}
+  cocotb_credit_manager:
+    files:
+      - test_tlp_credit_manager.py : {file_type : user, copyto : .}
 
   # Commit 1: CFG0 -> CPL spine, driven at the tlp_layer level.
   cocotb_cfg0_spine:
@@ -462,6 +469,29 @@ targets:
     filesets : [rtl, bench_request_tracker, cocotb_request_tracker]
     parameters : [CPL_TIMEOUT_CYCLES=0]
     toplevel : [tb_tlp_request_tracker]
+
+  # ---- VC0 flow control: tlp_credit_manager as the DUT ----------------------
+  # tlp_credit_manager (instantiated at tlp_layer.sv:474) supplies the
+  # credit_request_ready that gates vc_packet_ready at tlp_layer.sv:280, so it
+  # sits on the TX critical path -- and until now every FuseSoC harness
+  # advertised maximum credits (the RC1 fix, 7d471e0) and never approached a
+  # limit, leaving its exhaustion logic covered only incidentally.  The bundled
+  # bench is the one place a credit pool is actually driven to zero: it loads a
+  # short FC update, spends a posted request's data credits exactly, checks the
+  # resulting block, and proves the posted/non-posted/completion pools are
+  # independent.  Wiring only -- the RTL is untouched by this target.
+  verilate_tlp_credit_manager:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_credit_manager
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_credit_manager, cocotb_credit_manager]
+    toplevel : [tb_tlp_credit_manager]
 
 parameters:
   CPL_TIMEOUT_CYCLES:
