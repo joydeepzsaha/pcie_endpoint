@@ -86,6 +86,19 @@ filesets:
       - enum_tb_common.py    : {file_type : user, copyto : .}
       - test_pcie_enum_txn.py : {file_type : user, copyto : .}
 
+  # 2b-2: pcie_enum_scan standalone -- the sequencer plus the one pcie_cfg_txn
+  # it instantiates. The bench plays their shared socket via
+  # enum_tb_common.Socket, which asserts its own ordering invariants.
+  bench_enum_scan:
+    files:
+      - tb_pcie_enum_scan.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_scan:
+    files:
+      - enum_tb_common.py      : {file_type : user, copyto : .}
+      - test_pcie_enum_scan.py : {file_type : user, copyto : .}
+
   # 2b-1 integration: pcie_cfg_txn in front of a REAL pcie_rq_rc_top. The bench
   # plays the Data Link Layer and answers config requests with the swappable
   # completer (four-name interface preserved from test_pcie_rq_rc_top.py). MUST
@@ -232,3 +245,18 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_enum_txn_tlp, cocotb_enum_txn_tlp]
     toplevel : [tb_pcie_enum_txn_tlp]
+
+  # 2b-2: pcie_enum_scan standalone, S1..S14. Phase-dependent policy, every
+  # fault path, and the credit annotation proved to be annotation only.
+  verilate_enum_scan:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_scan
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_scan, cocotb_enum_scan]
+    toplevel : [tb_pcie_enum_scan]

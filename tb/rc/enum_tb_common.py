@@ -348,3 +348,218 @@ def cpl_dw2(requester_id, tag, lower_address=0):
     """{Requester ID[31:16], Tag[15:8], R[7], Lower Address[6:0]}."""
     return (((requester_id & 0xFFFF) << 16) | ((tag & 0xFF) << 8)
             | (lower_address & 0x7F))
+
+
+# ===========================================================================
+# SS THE SOCKET MODEL (Commit 2b-2)
+#
+# Plays pcie_rq_rc_top's user-facing socket for a standalone target.  This is
+# bench code that behaves like RTL, which makes it exactly as capable of being
+# wrong as RTL -- and its failure mode is worse, because a socket model that is
+# too POLITE makes a broken DUT look correct.
+#
+# !! IT ASSERTS ITS OWN PHYSICAL ORDERING RATHER THAN BEING TRUSTED TO PRESERVE
+# IT.  Commit 2b-1's bring-up lost two runs to this class of bug, both the model
+# being too AGGRESSIVE rather than too polite: it delivered completions, and
+# fired timeout strobes, before it had strobed the tag.  Neither ordering is
+# physically possible -- tlp_request_tracker allocates the tag, which is what
+# raises allocated_tag_valid_o, BEFORE the request TLP is generated and
+# transmitted, so any response is at minimum a link round trip later.  The three
+# invariants are now checked in the model:
+#
+#   1. a completion may not be delivered for a transaction whose tag has not
+#      been strobed;
+#   2. a timeout strobe may not fire for an allocated tag that has not been
+#      strobed;
+#   3. the tag strobe follows command accept by >= 1 cycle -- the surface
+#      mutation SM-1 attacks.
+#
+# A violated invariant raises AssertionError, which fails the ONE test that
+# tripped it.  That is the Python equivalent of the $warning-never-$error rule:
+# it must not take down the shared multi-test process.
+#
+# NOTE ON DUPLICATION: test_pcie_enum_txn.py carries an earlier, module-local
+# copy of this class without the invariants.  It is left alone deliberately --
+# the 2b-2 brief forbids touching an existing testbench, and rewriting a green
+# suite to share code is not worth perturbing a baseline for.  Migrate it the
+# next time that file is opened for a real reason.
+# ===========================================================================
+import cocotb                                          # noqa: E402
+from cocotb.triggers import ReadOnly, RisingEdge       # noqa: E402
+
+
+class SocketRequest:
+    """One RQ packet the DUT drove, plus the tag the socket gave it."""
+
+    def __init__(self, beats, tag, accept_cycle):
+        self.beats = beats
+        self.tag = tag
+        self.accept_cycle = accept_cycle
+        self.desc = beats[0][0] & ((1 << 128) - 1)
+        self.tkeep = beats[0][1]
+        self.tuser = beats[0][3]
+        self.payload = [b[0] & 0xFFFFFFFF for b in beats[1:]]
+        self.write = len(beats) > 1
+
+    def __repr__(self):
+        kind = "CfgWr0" if self.write else "CfgRd0"
+        return (f"{kind}(tag={self.tag:#04x}, reg={(self.desc >> 2) & 0x3F:#04x}, "
+                f"desc=0x{self.desc:032X})")
+
+
+class Socket:
+    """pcie_rq_rc_top's socket, played in Python.  See the block comment above."""
+
+    def __init__(self, dut, tag_delay=2, first_tag=0x5A):
+        assert tag_delay >= 1, (
+            "INVARIANT 3: tag_delay must be >= 1. The core cannot present the "
+            "tag in the cycle the descriptor is accepted -- it allocates in "
+            "REQ_TAG a cycle or more later (tlp_requester.sv:211, 215-218), "
+            "which is why the socket pairs the tag with its own strobe.")
+        self.dut = dut
+        self.tag_delay = tag_delay
+        self.requests = []
+        self.tags = []
+        self.strobed = {}          # tag -> cycle the strobe was driven
+        self.cycle = 0
+        self._next_tag = first_tag
+        self._stall_left = 0
+
+    def start(self):
+        cocotb.start_soon(self._cycle_counter())
+        cocotb.start_soon(self._rq())
+
+    def stall_beats(self, cycles):
+        """Hold s_axis_rq_tready low for `cycles` cycles, starting now."""
+        self._stall_left = cycles
+
+    async def _cycle_counter(self):
+        while True:
+            await RisingEdge(self.dut.clk_i)
+            self.cycle += 1
+
+    async def wait_for(self, count, cycles=6000):
+        for _ in range(cycles):
+            await RisingEdge(self.dut.clk_i)
+            if len(self.requests) >= count:
+                return
+        raise AssertionError(
+            f"expected {count} RQ packets, saw {len(self.requests)}: {self.requests}")
+
+    async def _rq(self):
+        d = self.dut
+        beats = []
+        while True:
+            await RisingEdge(d.clk_i)
+            if int(d.rst_i.value):
+                d.s_axis_rq_tready_i.value = 1
+                beats = []
+                continue
+            ready = 0 if self._stall_left > 0 else 1
+            if self._stall_left > 0:
+                self._stall_left -= 1
+            d.s_axis_rq_tready_i.value = ready
+            await ReadOnly()
+            if ready and int(d.s_axis_rq_tvalid_o.value):
+                beats.append((int(d.s_axis_rq_tdata_o.value),
+                              int(d.s_axis_rq_tkeep_o.value),
+                              int(d.s_axis_rq_tlast_o.value),
+                              int(d.s_axis_rq_tuser_o.value)))
+                if len(beats) == 1:
+                    self._accept_cycle = self.cycle
+                    self._arm_tag()
+                if beats[-1][2]:
+                    self.requests.append(
+                        SocketRequest(beats, self.tags[-1], self._accept_cycle))
+                    beats = []
+
+    def _arm_tag(self):
+        tag = self._next_tag
+        self._next_tag = (self._next_tag + 1) & 0xFF
+        self.tags.append(tag)
+        cocotb.start_soon(self._strobe_tag(tag, self.cycle))
+
+    async def _strobe_tag(self, tag, accept_cycle):
+        d = self.dut
+        for _ in range(self.tag_delay):
+            await RisingEdge(d.clk_i)
+        # INVARIANT 3, checked rather than assumed.
+        assert self.cycle > accept_cycle, (
+            f"INVARIANT 3 violated: tag {tag:#04x} strobed in the same cycle "
+            f"the descriptor was accepted ({accept_cycle}). The real core "
+            "cannot do this (pcie_rq_rc_top.sv:51-60).")
+        d.pcie_rq_tag_i.value = tag
+        d.pcie_rq_tag_vld_i.value = 1
+        await RisingEdge(d.clk_i)
+        d.pcie_rq_tag_vld_i.value = 0
+        self.strobed[tag] = self.cycle
+
+    async def _await_strobe(self, tag, cycles=400):
+        """Block until this request's tag strobe has actually been driven.
+
+        ORDERING CONSTRAINT, not a convenience -- see INVARIANT 1 above.
+        """
+        for _ in range(cycles):
+            if tag in self.strobed:
+                return
+            await RisingEdge(self.dut.clk_i)
+        raise AssertionError(
+            f"INVARIANT 1: tag {tag:#04x} was never strobed, so no completion "
+            "for it can legally be delivered. The socket model is broken, not "
+            "the DUT.")
+
+    async def complete(self, req=None, tag=None, status=CPL_SC, data=None,
+                       request_completed=1, dword_count=None, payload=None,
+                       byte_count=None, error_code=None):
+        """Deliver one completion on the RC stream."""
+        if req is not None:
+            await self._await_strobe(req.tag)          # INVARIANT 1
+        if tag is None:
+            tag = req.tag
+        is_read = (req is not None) and (not req.write)
+        has_data = is_read and status == CPL_SC
+        if payload is None:
+            payload = [0xD0000000 | tag if data is None else data] if has_data else []
+        if dword_count is None:
+            dword_count = len(payload)
+        desc = encode_rc_desc(
+            tag=tag, status=status, dword_count=dword_count,
+            request_completed=request_completed, byte_count=byte_count,
+            error_code=error_code)
+        await self._drive_rc(rc_beats(desc, payload))
+
+    async def _drive_rc(self, beats):
+        d = self.dut
+        for tdata, tkeep, tlast in beats:
+            d.m_axis_rc_tdata_i.value = tdata
+            d.m_axis_rc_tkeep_i.value = tkeep
+            d.m_axis_rc_tlast_i.value = tlast
+            d.m_axis_rc_tvalid_i.value = 1
+            # The DUT ties tready high, but honour it anyway: a socket that
+            # ignored tready could not detect a DUT that started lowering it.
+            for _ in range(4000):
+                await ReadOnly()
+                fired = int(d.m_axis_rc_tready_o.value) == 1
+                await RisingEdge(d.clk_i)
+                if fired:
+                    break
+            else:
+                raise AssertionError("m_axis_rc_tready_o never asserted")
+        d.m_axis_rc_tvalid_i.value = 0
+        d.m_axis_rc_tlast_i.value = 0
+
+    async def fire_timeout(self, tag):
+        """One-cycle cpl_timeout_valid_o strobe naming `tag`.
+
+        INVARIANT 2: the tracker cannot time out a tag it has not allocated, so
+        a strobe for an allocated tag waits for that tag's strobe first.  A tag
+        the socket never handed out fires immediately -- that is deliberate
+        stimulus, not an ordering violation.
+        """
+        d = self.dut
+        if tag in self.tags:
+            await self._await_strobe(tag)
+        d.cpl_timeout_tag_i.value = tag
+        d.cpl_timeout_valid_i.value = 1
+        await RisingEdge(d.clk_i)
+        d.cpl_timeout_valid_i.value = 0

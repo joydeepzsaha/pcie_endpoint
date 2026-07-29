@@ -34,6 +34,7 @@ filesets:
       - pcie_rc_if.sv
       - pcie_rq_rc_top.sv
       - pcie_cfg_txn.sv
+      - pcie_enum_scan.sv
     file_type: systemVerilogSource
 
 targets:

@@ -147,4 +147,78 @@ package pcie_enum_pkg;
   localparam int unsigned CRS_RETRY_MAX_DEFAULT     = 16;
   localparam int unsigned CRS_BACKOFF_CYCLES_DEFAULT = 64;
 
+  // -------------------------------------------------------------------------
+  // SS PRESENCE SCAN (Commit 2b-2)
+  // -------------------------------------------------------------------------
+
+  // ⭐ DEVICE 0 ONLY. There is no device-number loop, and this is a derived
+  // constant rather than a tuning parameter.
+  //
+  // [BASE] SS7.3.1 p.479 twice: (1) "Configuration Requests specifying all other
+  // Device Numbers (1-31) must be terminated by the Switch Downstream Port or
+  // the Root Port with an Unsupported Request Completion Status" -- in a
+  // conventional Root Complex that UR is synthesised by the Downstream Port and
+  // the request never reaches the wire, but THIS DESIGN HAS NO SUCH LOGIC (CQ/CC
+  // is tied off, pcie_rq_rc_top.sv:83-99), so such a request would actually be
+  // transmitted, which the rule forbids. And (2) "Non-ARI Devices must respond
+  // to all Type 0 Configuration Read Requests, REGARDLESS of the Device Number
+  // specified in the Request" -- so if one were transmitted, the attached device
+  // would answer it. A 0-31 sweep on a direct-attach link would therefore
+  // discover the SAME DEVICE 32 TIMES, not one device and 31 absences.
+  //
+  // Scanning device 0 only satisfies SS7.3.1 BY CONSTRUCTION: no request naming
+  // device 1-31 is ever formed, so there is nothing to terminate. Root-Port
+  // termination logic becomes relevant only when a switch can sit below the
+  // port, which is Commits 3/4.
+  //
+  // Full derivation: SPEC_PREDICTIONS_ENUM.md SSD.1.
+  localparam int unsigned DEVICES_TO_SCAN = 1;
+
+  // Header Type lives in byte 2 of register 3 -- byte offset 0Eh.
+  // [BASE] Figure 7-5 p.491 (and Figure 7-4 p.484, Figure 7-6 p.492).
+  localparam int HDR_TYPE_LSB = 16;   // bits [23:16] of the register-3 Dword
+
+  // Header Type bit fields.
+  // [PCI3-REF] -- PCI 3.0 SS6.1. Base 2.1 shows Header Type only in the figures
+  // above and never defines its bits. THIRD instance of this debt (BAR layout
+  // and Command bits 0/1 are the others; see SS0.2).
+  //
+  // Base 2.1 DOES independently establish what the two layouts MEAN, which is
+  // what actually justifies the FSM's behaviour: SS7.5.2 p.491 titles the Type 0
+  // header as the one for "PCI Express device Functions", SS7.5.3 p.492 titles
+  // Type 1 as the one for "Switch and Root Complex virtual PCI Bridges". Only
+  // the numeric encoding is owed to PCI 3.0.
+  localparam int         HDR_MULTIFUNCTION_BIT = 7;
+  localparam logic [6:0] HDR_LAYOUT_TYPE0 = 7'h00;  // endpoint Function
+  localparam logic [6:0] HDR_LAYOUT_TYPE1 = 7'h01;  // PCI-PCI bridge
+
+  // -------------------------------------------------------------------------
+  // Why the scan stopped badly.
+  //
+  // There is deliberately NO code for "device absent": absence is not an error.
+  // On a point-to-point link with link_up_i asserted a device is always
+  // attached, so absence means "nothing here to enumerate" -- an Unsupported
+  // Request to the Function 0 probe (SS7.3.1 p.479, SS7.3.3 p.480) -- and lands in
+  // the normal terminal state with device_present_o low.
+  //
+  // Nor is there a code for "unsupported device": a Type 1 header is a valid
+  // device that answered correctly and that this commit cannot enumerate yet.
+  // Reporting it as an error would conflate "the link misbehaved" with "the
+  // topology is richer than I handle", and only the first is a fault.
+  // -------------------------------------------------------------------------
+  typedef enum logic [2:0] {
+    ENUM_ERR_NONE          = 3'd0,
+    // UR on anything AFTER the probe: a device that answered register 0 has no
+    // business rejecting a legal configuration read of register 3.
+    ENUM_ERR_UR_POST_PROBE = 3'd1,
+    ENUM_ERR_CA            = 3'd2,  // Completer Abort, any phase
+    ENUM_ERR_CRS_EXHAUSTED = 3'd3,  // CRS_RETRY_MAX retries all returned CRS
+    // Completion timeout, any phase -- INCLUDING the probe. Absence answers
+    // with UR (SS2.3.2 Implementation Note p.122, which names the device
+    // existence probe explicitly); silence is a reported error that "should
+    // never occur under normal operating conditions" (SS2.8 p.152). The two are
+    // different events and the FSM must not merge them.
+    ENUM_ERR_TIMEOUT       = 3'd4
+  } enum_error_e;
+
 endpackage
