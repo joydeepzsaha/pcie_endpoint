@@ -30,15 +30,58 @@
 // The failure mode is SILENT. With any of them missing the RQ interface still
 // accepts descriptors and still asserts s_axis_rq_tready, the command still
 // reaches the Transaction Layer, and then nothing comes out: no TLP on
-// m_dllp_axis_*, no pulse on any error output, no tag on pcie_rq_tag_o. It
-// looks exactly like a broken wrapper. This exact omission was regression RC1.
+// m_dllp_axis_*, and no pulse on any error output. It looks exactly like a
+// broken wrapper. This exact omission was regression RC1.
+//
+// !! A TAG IS STILL ALLOCATED, AND pcie_rq_tag_o STILL STROBES.
+//
+// (This block previously claimed "no tag on pcie_rq_tag_o". That was wrong;
+// corrected after Commit 2b-1 measured it -- see tb/rc/test_pcie_enum_txn_tlp.py,
+// test i8, which pins the behaviour.)
+//
+// Tag allocation sits UPSTREAM of the credit gate. tlp_requester enters REQ_TAG
+// as soon as the command is accepted and raises tag_request_valid_o there
+// (tlp_requester.sv:138, 211), referencing neither fc_initialized_i nor any
+// credit signal. The gate is further down, at the VC-buffer-to-transmit
+// boundary: vc_packet_ready = credit_request_ready && transmit_enable_i &&
+// link_up_i (tlp_layer.sv:280). So the tag is handed out, the TLP is assembled,
+// and only then does it park in the VC buffer with nothing to spend.
+//
+// CONSEQUENCE FOR A CLIENT: a tag strobe is NOT evidence that a request reached
+// the link. Correlate on the completion or the timeout strobe, never on the tag
+// alone.
+//
+// !! AND THE COMPLETION TIMER IS ALREADY RUNNING.
+//
+// tlp_request_tracker measures per-tag age from ALLOCATION (that module's
+// header, :39). Combined with the above, a request held off by credit for
+// longer than CPL_TIMEOUT_CYCLES TIMES OUT WITHOUT EVER HAVING BEEN
+// TRANSMITTED, and reports as an ordinary completion timeout -- no TLP on the
+// wire, no error output, indistinguishable from a dead device. Commit 2b-1's
+// test i9 predicts and confirms it.
+//
+// That bounds what any client above this module can promise: continuous credit
+// starvation beyond CPL_TIMEOUT_CYCLES cannot be ridden out, no matter how the
+// client is written. The limit is here, not in the client. Raising
+// CPL_TIMEOUT_CYCLES toward the 10 ms the spec recommends is what moves it, and
+// that is Stage-H work (see the KNOWN_GAPS note below).
 //
 // tx_fc_blocked_o is the signal that distinguishes "blocked on credit" from
 // "blocked on something else"; watch it first.
 //
-// Configuration requests consume NPH and NPD credit. Completions consume CPLH
-// and CPLD. A credit pool that is initialised but saturated at zero for the
-// class being used is the same silence.
+// Configuration requests are NON-POSTED. A CfgRd0 consumes NPH=1 and NPD=0 --
+// it carries no data, and tlp_vc_buffer.sv:91 charges data credits only when
+// the packet has a payload; a CfgWr0 consumes NPH=1 and NPD=1
+// (tlp_pkg.sv:121-133). Completions consume CPLH and CPLD. A credit pool that
+// is initialised but saturated at zero for the class being used is the same
+// silence.
+//
+// !! ZERO IS NOT EMPTY. An advertisement of 00h/000h made AT FC INITIALISATION
+// means INFINITE credit for that type, not none (PCIe Base 2.1 SS2.6.1 p.138 and
+// footnote 33 p.137; tlp_credit_manager.sv:106-120 latches it at init). Starving
+// a pool therefore requires a small FINITE advertisement that is never
+// replenished. Advertising zero to "starve" a class does the opposite and
+// produces a test that passes while proving nothing.
 //
 // These four are deliberately EXPOSED rather than tied off internally: the
 // integrator (or Commit 2b) owns link bring-up, and the Data Link Layer's
