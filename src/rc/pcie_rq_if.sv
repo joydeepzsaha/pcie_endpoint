@@ -168,9 +168,15 @@ module pcie_rq_if
     // strobes once per segment, each with that segment's own tag.
     //
     // The descriptor's Tag field [103:96] is read nowhere in this module.
-    // command_context_o remains available as a second, wrapper-chosen
-    // correlation channel -- the TL echoes it back on result_context_o -- and
-    // the two are complementary, not alternatives.
+    //
+    // command_context_o is NOT a spare correlation channel. It is INTERNALLY
+    // CONSUMED by the 2a-ii wrapper pair: this module loads it with
+    // {mem_read_r, addr_r[11:0]} (:345 below) and pcie_rc_if reads it back to
+    // reconstruct the RC descriptor's Lower Address, which the CPL header does
+    // not otherwise carry (pcie_rc_if.sv:240, 252). It is not raised to a port
+    // on pcie_rq_rc_top and must not be treated as client-visible -- see that
+    // module's header, pcie_rq_rc_top.sv:65-77, which is authoritative.
+    // Correlate completions BY TAG, via pcie_rq_tag_o / pcie_rq_tag_vld_o.
     input  logic [7:0]                  allocated_tag_i,
     input  logic                        allocated_tag_valid_i,
     output logic [7:0]                  pcie_rq_tag_o,
