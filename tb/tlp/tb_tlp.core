@@ -84,6 +84,13 @@ filesets:
     files:
       - test_tlp_credit_manager.py : {file_type : user, copyto : .}
 
+  # Flow-control gating driven at the tlp_layer level: proves the credit
+  # accounting fix where it throttles real traffic (vc_packet_ready,
+  # tlp_layer.sv:280), not just at the credit manager's own boundary.
+  cocotb_credit_integration:
+    files:
+      - test_tlp_credit_integration.py : {file_type : user, copyto : .}
+
   # Commit 1: CFG0 -> CPL spine, driven at the tlp_layer level.
   cocotb_cfg0_spine:
     files:
@@ -492,6 +499,22 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_credit_manager, cocotb_credit_manager]
     toplevel : [tb_tlp_credit_manager]
+
+  # ---- Flow-control gating at the layer level -------------------------------
+  # No SV wrapper -- drives tlp_layer's real fc_* / command_* ports directly and
+  # watches what actually reaches the DLL AXIS port.
+  verilate_tlp_credit_integration:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_credit_integration
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, cocotb_credit_integration]
+    toplevel : [tlp_layer]
 
 parameters:
   CPL_TIMEOUT_CYCLES:

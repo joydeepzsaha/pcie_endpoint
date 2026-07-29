@@ -271,3 +271,132 @@ Not a bug fix; recorded here so the decision is made once, with the evidence in 
 
 Existing harnesses set credits to `0xFF`/`0xFFF` in a single pulse, so **nothing pre-existing
 should move** under any of this. Recorded per the brief; not exercised, since no RTL was changed.
+
+---
+---
+
+# REV 3 — the implementation, written against `03d4915`
+
+Sections A–H above are the Phase 0 read that stopped REV 2 at its gate. Everything below is the
+REV 3 build that acts on it. **§J was written and committed before the modified DUT was run.**
+
+## I. Recon (§2.1) — answers
+
+### I.1 Pool set and widths — confirmed six, spec-matched
+
+`tlp_credit_manager.sv:31-32` declares exactly six: `ph_r`/`nph_r`/`cplh_r` at **8 bits** and
+`pd_r`/`npd_r`/`cpld_r` at **12 bits**. These are already the spec's `[Field Size]` moduli
+(§2.6.1.1, p.139: "8 for PH, NPH, and CPLH and 12 for PD, NPD and CPLD"), so **plain N-bit
+arithmetic gives the required `mod 2^[Field Size]` behaviour for free** — no explicit masking is
+needed anywhere, provided every counter and every subtraction stays at its native width.
+
+### I.2 ⭐ Can the module distinguish InitFC from UpdateFC? — **Yes, without a port change**
+
+This was the brief's stated hinge for Commit B. The answer is yes, and the mechanism is
+**"the first `fc_update_valid_i` pulse after reset is the FC-initialisation load."** Evidence:
+
+1. `pcie_datalink_layer.sv:176`: `assign fc_update_valid_o = update_fc || fc_init_done;` — the
+   strobe has exactly two sources.
+2. `update_fc` is asserted **only** by the three `UpdateFC_*` cases in `dllp_handler.sv`
+   (`update_fc_c = '1` at `:320`, `:326`, `:332`). The six `InitFC1_*`/`InitFC2_*` cases store
+   values but **never** set it (`:281-316`).
+3. `fc_init_done` (`pcie_datalink_layer.sv:413`) is
+   `fc2_values_stored && !fc2_values_stored_reg` — a **one-cycle rising-edge pulse** on
+   "all three InitFC2 DLLPs stored", i.e. precisely FC-initialisation completion.
+4. Per §3.3, UpdateFC DLLPs cannot legally precede the exit from FC_INIT2.
+
+So the first strobe the module ever sees carries the **initial advertisement**, and every later
+strobe carries an **update**. A single `fc_init_seen_r` bit is sufficient; no DLL-side signal and
+no new port is required. **Commit B is feasible as scoped.**
+
+*Why not use `fc_initialized_i` instead:* it is `fc2_values_sent && fc2_values_stored`
+(`pcie_datalink_layer.sv:175`), which gates on *our* InitFC2 having been sent as well. Its rising
+edge therefore need not coincide with the `fc_init_done` strobe, so it is not a reliable
+same-cycle discriminator. It remains what it already is — the transmit-enable gate at `:53`.
+
+*Caveat recorded, not acted on:* `fc2_values_stored` is cleared only by the DLL's `rst_i`
+(`dllp_handler.sv:164-166`), while the credit manager is reset by
+`layer_reset = rst_i || !link_up_i` (`tlp_layer.sv:225`). A retrain that drops `link_up_i` without
+asserting `rst_i` would reset the credit manager without producing a fresh `fc_init_done`, leaving
+the pools at zero and TX wedged. That is a **pre-existing relink concern in the DLL/TL reset
+coupling**, orthogonal to this brief, and is not addressed here.
+
+### I.3 Consumers of the module's outputs
+
+| Output | Consumer | Note |
+|---|---|---|
+| `request_ready_o` | `tlp_layer.sv:280` → `vc_packet_ready` | the TX gate |
+| `blocked_o` | `tlp_layer.sv:481` → `tx_fc_blocked_o` | externally visible |
+| `error_o` | `tlp_layer.sv:283` → `tx_error_valid_o`; `:286` → `TLP_ERR_CREDIT_UNDERFLOW` | **not inert** — Commit C's assertion raises the TL error path |
+| all six `*_available_o` | **unconnected** — `tlp_layer.sv:482-485` | read only by the bench |
+
+The six `*_available_o` being unconnected means their semantics are free. **They keep reporting the
+remainder** (`limit − consumed`), which is what the existing bench's `ph_av`/`pd_av`/`cplh_av`/
+`cpld_av`/`nph_av`/`npd_av` assertions already expect — so no existing assertion needs to move.
+
+## J. The gating comparison — derivation and wrap argument
+
+*(Committed before the modified DUT was run, per brief §7.2.)*
+
+**Claim.** With `R` the N-bit remainder computed as `limit_r − consumed_r` (native N-bit
+subtraction, hence automatically `mod 2^N`), the simple unsigned test
+
+> `R >= required`
+
+is **exactly equivalent** to the spec's half-space test (§2.6.1.1, p.140)
+
+> `(CREDIT_LIMIT − CUMULATIVE_CREDITS_REQUIRED) mod 2^N <= 2^N / 2`
+
+under two preconditions, both of which the spec itself guarantees.
+
+**Preliminary.** `CUMULATIVE_CREDITS_REQUIRED = (CREDITS_CONSUMED + required) mod 2^N`, so the
+spec's left-hand side is `(limit − consumed − required) mod 2^N = (R − required) mod 2^N`.
+
+**Precondition 1 — `R <= 2^N/2 − 1`.** §2.6.1, p.138: *"A Receiver must never cumulatively issue
+more than 2047 outstanding unused credits to the Transmitter for data payload or 127 for header."*
+Outstanding unused credits *is* `R`. And `2047 = 2^12/2 − 1`, `127 = 2^8/2 − 1` — the spec's cap is
+exactly this bound, for both widths.
+
+**Precondition 2 — `required <= 2^N/2 − 1`.** Headers: Table 2-36 (p.136) gives every TLP exactly
+**1** header credit, so `required = 1`. Data: `n = Roundup(Length / FC unit size)` with the FC data
+unit 4 DW (p.135) and Length at most 1024 DW, so `n <= 256`, well under 2047.
+
+**Proof.**
+- *Case `R >= required`.* Then `R − required ∈ [0, R] ⊆ [0, 2^N/2 − 1]`; no borrow, so
+  `(R − required) mod 2^N = R − required <= 2^N/2`. Spec test **true**; simple test **true**. ✓
+- *Case `R < required`.* Then `required − R ∈ [1, 2^N/2 − 1]` by Precondition 2, so
+  `(R − required) mod 2^N = 2^N − (required − R) ∈ [2^N/2 + 1, 2^N − 1]`, strictly greater than
+  `2^N/2`. Spec test **false**; simple test **false**. ✓
+
+**Where it would break, and why it cannot.** The two forms diverge at exactly one point: if
+`required − R = 2^N/2`, the spec's expression evaluates to `2^N/2`, which *satisfies* `<= 2^N/2`
+while the simple test rejects. Precondition 2 excludes that point by a strict inequality, and it is
+excluded with enormous margin (256 vs 2048 for data; 1 vs 128 for headers). This is the only
+boundary in the equivalence and it is worth naming rather than hand-waving past.
+
+**Header form.** Since `required = 1` always for headers, `R >= 1` ≡ `R != 0`. The existing
+`!= 0` comparisons at `:41,:45,:49` are therefore kept verbatim — they are already the correct
+test, they were merely being applied to the wrong quantity.
+
+**Why the modulo needs no explicit handling.** Both `limit_r` and `consumed_r` are cumulative
+counters that wrap at `2^N` (spec: "modulo 2^[Field Size]", p.139/p.141). Their N-bit difference is
+`(limit − consumed) mod 2^N` regardless of whether either has wrapped, which by Precondition 1 is
+the true outstanding credit. A wrapped `CREDIT_LIMIT` — including one that has wrapped to exactly
+`0` — therefore needs no special case: it is a legitimate cumulative value and the subtraction
+handles it. This is precisely the property the old single-register design destroyed.
+
+## K. What Commit A alone fixes, and what it does not
+
+Recorded so the interim state is not overstated (brief §2.3.4).
+
+**A fixes:** the over-statement of available credit under repeated UpdateFC (§D.3); the `:76-99`
+load/consume collision, which disappears structurally because limits and consumption now live in
+different registers written by disjoint logic (§0.6).
+
+**A does *not* fix §0.5** — it changes its failure mode. A zero-valued `UpdateFC` on a pool that
+should be infinite currently zeroes the remainder and **wedges** TX. After A, that zero is
+interpreted as a legitimately-wrapped cumulative limit, giving `R = (0 − consumed) mod 2^N`, a
+large value — so the pool becomes **over-permissive** instead of wedged. Neither is correct.
+Only **Commit B** makes it correct, by latching the pool as infinite at init and thereafter
+**ignoring** the credit field of updates for that pool (p.138). Test 2.3.4 asserts the
+not-wedged property that A does deliver, and Commit B's tests close the rest.
