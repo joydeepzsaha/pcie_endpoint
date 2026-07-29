@@ -179,18 +179,127 @@ package pcie_enum_pkg;
   localparam int HDR_TYPE_LSB = 16;   // bits [23:16] of the register-3 Dword
 
   // Header Type bit fields.
-  // [PCI3-REF] -- PCI 3.0 SS6.1. Base 2.1 shows Header Type only in the figures
-  // above and never defines its bits. THIRD instance of this debt (BAR layout
-  // and Command bits 0/1 are the others; see SS0.2).
+  // [PCI3] PCI 3.0 SS6.2.1 p.216 :10685. Base 2.1 shows Header Type only in the
+  // figures above and never defines its bits.
+  //
+  // !! THE [PCI3-REF] DEBT THAT USED TO SIT HERE IS DISCHARGED (Commit 2b-3).
+  // PCI Local Bus 3.0 is now on the spec shelf at
+  //   /home/kourosh/openPCIE/0.doc/pci-local-bus-3.0.txt
+  // and every constant below carries a section + page + line anchor. The full
+  // anchor table, and the page-numbering correction it needed (page markers in
+  // this extraction are FOOTERS, so content after marker N is on page N+1), are
+  // in SPEC_PREDICTIONS_ENUM.md SSE.0.
   //
   // Base 2.1 DOES independently establish what the two layouts MEAN, which is
   // what actually justifies the FSM's behaviour: SS7.5.2 p.491 titles the Type 0
   // header as the one for "PCI Express device Functions", SS7.5.3 p.492 titles
   // Type 1 as the one for "Switch and Root Complex virtual PCI Bridges". Only
-  // the numeric encoding is owed to PCI 3.0.
+  // the numeric encoding was ever owed to PCI 3.0.
   localparam int         HDR_MULTIFUNCTION_BIT = 7;
   localparam logic [6:0] HDR_LAYOUT_TYPE0 = 7'h00;  // endpoint Function
   localparam logic [6:0] HDR_LAYOUT_TYPE1 = 7'h01;  // PCI-PCI bridge
+
+  // -------------------------------------------------------------------------
+  // SS BAR SIZING, ASSIGNMENT AND ENABLE (Commit 2b-3)
+  //
+  // Every constant in this section is [PCI3], cited to section + page + line.
+  // Derivations in SPEC_PREDICTIONS_ENUM.md SSE.1-SSE.7.
+  // -------------------------------------------------------------------------
+
+  // The candidate register window. A Type 0 header has SIX Base Address
+  // registers at offsets 10h..24h == registers 4..9 -- [BASE] Figure 7-5 p.491.
+  //
+  // ⭐ THE WINDOW IS CLOSED AT 9, AND THAT IS A DECISION, NOT AN OVERSIGHT.
+  // The Expansion ROM Base Address register sits at offset 30h == register 12
+  // ([PCI3] SS6.2.5.2 p.227 :11283, :11287) and behaves ALMOST like a BAR --
+  // :11290 "functions exactly like a 32-bit Base Address register except that
+  // the encoding (and usage) of the bottom bits is different", and p.228 :11307
+  // gives it the same all-ones sizing procedure. That near-identity is exactly
+  // why it needs an explicit exclusion rather than silence: its bit 0 is
+  // Expansion ROM Enable, NOT a Memory Space Indicator (Figure 6-7, p.228
+  // :11318, :11323), so feeding it to the SSE.2 decoder would produce a WRONG
+  // answer rather than a harmless one. Asserted on the wire as P-NO-ROM.
+  localparam logic [5:0] CFG_REG_BAR_FIRST = CFG_REG_BAR0;   // 4
+  localparam logic [5:0] CFG_REG_BAR_LAST  = CFG_REG_BAR5;   // 9
+  // Six registers, hence at most six BARs -- and at most six only if every one
+  // of them is 32-bit. A 64-bit BAR occupies two registers but is ONE BAR.
+  localparam int unsigned BAR_SLOTS = 6;
+
+  // Base Address register bit layout -- [PCI3] SS6.2.5.1 p.225-226.
+  //
+  // The load-bearing sentence is p.226 :11205, "Bits 0-3 are read-only." That
+  // one clause is what makes all-ones sizing work at all: the write cannot
+  // disturb the type/prefetch encoding, so the readback still identifies the
+  // BAR while its upper bits report the size.
+  localparam int BAR_BIT_IO        = 0;  // 1 = I/O space, 0 = memory  -- :11187, :11190
+  localparam int BAR_TYPE_LSB      = 1;  // bits [2:1], Table 6-4      -- :11207
+  localparam int BAR_BIT_PREFETCH  = 3;  // memory BARs only           -- :11193
+
+  // Table 6-4 Bits 2/1 Encoding, ALL FOUR ROWS -- [PCI3] p.226 :11207.
+  //
+  // !! BOTH reserved encodings are decoded, not just 01. Footnote 46 (:11243)
+  // records that 01 formerly meant "below 1 MB" and that "System software should
+  // recognize this encoding and handle appropriately" -- it is a LEGACY encoding,
+  // not a free slot, and 11 is Reserved in exactly the same way. Neither can
+  // legitimately appear on a PCI Express endpoint, and treating an unknown type
+  // as 32-bit would silently mis-size the device, so both are faults.
+  localparam logic [1:0] BAR_TYPE_32BIT     = 2'b00;
+  localparam logic [1:0] BAR_TYPE_RESERVED1 = 2'b01;
+  localparam logic [1:0] BAR_TYPE_64BIT     = 2'b10;
+  localparam logic [1:0] BAR_TYPE_RESERVED3 = 2'b11;
+
+  // Sizing masks. Two bits wide for I/O, four for memory -- a real spec
+  // distinction, not an off-by-one: an I/O BAR has no prefetch bit and no type
+  // field, so its bits 3:2 are ORDINARY ADDRESS BITS.
+  //   memory: bits 3:0 read-only                        -- :11205
+  //   I/O:    bit 0 hardwired 1, bit 1 reserved-reads-0 -- :11187
+  localparam logic [31:0] BAR_MEM_MASK = ~32'hF;
+  localparam logic [31:0] BAR_IO_MASK  = ~32'h3;
+
+  // The all-ones probe value -- [PCI3] SS6.2.5.1 p.226 :11222: "writing a value
+  // of all 1's to the register and then reading the value back".
+  localparam logic [31:0] BAR_PROBE_ALL_ONES = 32'hFFFF_FFFF;
+
+  // ⭐ THE MINIMUM LEGAL MEMORY BAR IS 128 BYTES, NOT 16.
+  //
+  // Two specifications disagree and the tighter one governs:
+  //   PCI 3.0    "a single memory size that is a power of 2 from 16 bytes to
+  //              2 GB"                        -- SS6.2.5.1 p.226 :11219
+  //   PCIe 2.1   "The minimum Memory Space address range requested by a BAR is
+  //              128 bytes."                  -- [BASE] SS7.5.2.1 p.491-492
+  //
+  // This design enumerates a PCI Express link. PCI 3.0 is incorporated only for
+  // definitions Base 2.1 does not restate; where Base 2.1 states a STRICTER
+  // requirement it wins. A 16-byte memory BAR is legal PCI and illegal PCIe.
+  //
+  // !! AND THE DISAGREEMENT IS WHAT MAKES A MIS-DECODE DETECTABLE. The upper
+  // half of a 64-bit size field reads back FFFFFFFF; decoded as a standalone
+  // 32-bit BAR that is ~FFFFFFF0 + 1 = 16 bytes -- precisely PCI 3.0's minimum,
+  // which is precisely what PCIe forbids. So a 64-bit pair mis-decoded as two
+  // independent 32-bit BARs trips this floor BY SPEC rather than because a test
+  // happened to look. SPEC_PREDICTIONS_ENUM.md SSE.4.1.
+  localparam logic [63:0] BAR_MEM_MIN_BYTES = 64'd128;
+
+  // Command register bits -- [PCI3] SS6.2.2 Table 6-1 p.218.
+  //
+  // ⭐ ALL THREE ARE 0 AFTER RESET (":10761", ":10764", ":10767" each say "State
+  // after RST# is 0"), AND THAT IS THE FACT THAT MAKES ALL-ONES SIZING SAFE. At
+  // enumeration time the device's decoders are off, so a BAR momentarily holding
+  // FFFFFFFF -- naming an enormous range -- cannot make the device claim any
+  // transaction. A device with Memory Space Enable already set would briefly
+  // decode that range. The same fact is what makes it safe to assign BAR N while
+  // BAR N+2 is still unprobed, and to write the two halves of a 64-bit pair
+  // non-atomically. ONE invariant covers all three: SSE.5.
+  localparam int CMD_BIT_IO_ENABLE     = 0;  // :10761
+  localparam int CMD_BIT_MEM_ENABLE    = 1;  // :10764
+  localparam int CMD_BIT_BUS_MASTER    = 2;  // :10767, and [BASE] Table 7-3
+
+  // The value written at the end of enumeration: Memory Space Enable + Bus
+  // Master Enable. I/O Space Enable stays 0 because no I/O BAR is ever assigned
+  // (SSE.7.2), so enabling I/O decode would advertise ranges that were never
+  // programmed. Bits 15:3 stay 0: SERR#/parity/interrupt policy is Stage H.
+  localparam logic [31:0] CMD_ENABLE_VALUE =
+      (32'd1 << CMD_BIT_MEM_ENABLE) | (32'd1 << CMD_BIT_BUS_MASTER);   // 0x0006
 
   // -------------------------------------------------------------------------
   // Why the scan stopped badly.
@@ -205,20 +314,56 @@ package pcie_enum_pkg;
   // device that answered correctly and that this commit cannot enumerate yet.
   // Reporting it as an error would conflate "the link misbehaved" with "the
   // topology is richer than I handle", and only the first is a fault.
+  //
+  // !! WIDENED FROM [2:0] TO [3:0] IN COMMIT 2b-3. The four BAR-phase faults
+  // below need codes 5..8 and would not fit. Codes 0..4 keep their values
+  // BYTE-IDENTICALLY, so every existing scan assertion is unaffected; the two
+  // scan shims widen their flattening cast by one bit and nothing else moves.
+  // Each BAR fault gets its OWN code rather than sharing one, because SSE.1,
+  // SSE.4 and SSE.7.1 each independently ask for "a distinct code" -- and
+  // because SSE.9's EF8 requires the allocator test to assert WHICH fault fired,
+  // not merely that enum_error_o rose.
   // -------------------------------------------------------------------------
-  typedef enum logic [2:0] {
-    ENUM_ERR_NONE          = 3'd0,
+  typedef enum logic [3:0] {
+    ENUM_ERR_NONE          = 4'd0,
     // UR on anything AFTER the probe: a device that answered register 0 has no
     // business rejecting a legal configuration read of register 3.
-    ENUM_ERR_UR_POST_PROBE = 3'd1,
-    ENUM_ERR_CA            = 3'd2,  // Completer Abort, any phase
-    ENUM_ERR_CRS_EXHAUSTED = 3'd3,  // CRS_RETRY_MAX retries all returned CRS
+    ENUM_ERR_UR_POST_PROBE = 4'd1,
+    ENUM_ERR_CA            = 4'd2,  // Completer Abort, any phase
+    ENUM_ERR_CRS_EXHAUSTED = 4'd3,  // CRS_RETRY_MAX retries all returned CRS
     // Completion timeout, any phase -- INCLUDING the probe. Absence answers
     // with UR (SS2.3.2 Implementation Note p.122, which names the device
     // existence probe explicitly); silence is a reported error that "should
     // never occur under normal operating conditions" (SS2.8 p.152). The two are
     // different events and the FSM must not merge them.
-    ENUM_ERR_TIMEOUT       = 3'd4
+    ENUM_ERR_TIMEOUT       = 4'd4,
+
+    // ---- BAR phase (Commit 2b-3) -------------------------------------------
+    // A memory BAR whose Type field [2:1] decoded to a RESERVED encoding, 01 or
+    // 11 -- [PCI3] Table 6-4 p.226 :11207. Neither can legitimately appear on a
+    // PCI Express endpoint. Guessing 32-bit would silently mis-size the device.
+    ENUM_ERR_BAR_TYPE      = 4'd5,
+    // The decoded size is not a legal PCIe memory BAR size: either below the
+    // 128-byte floor ([BASE] SS7.5.2.1 p.491-492) or not a power of two
+    // ([PCI3] p.226 :11226, "all address spaces used are a power of two in size
+    // and are naturally aligned"). Both mean the same thing operationally --
+    // THE DECODE ITSELF IS WRONG -- so they share one code. Continuing would
+    // assign an address derived from a size just proved untrustworthy, and the
+    // natural-alignment mask ~(size-1) is meaningless for a non-power-of-two.
+    ENUM_ERR_BAR_SIZE      = 4'd6,
+    // Allocating this BAR would run past MEM_BAR_BASE + MEM_BAR_WINDOW.
+    // NEVER a silent wraparound: a wrapped allocation produces OVERLAPPING BARs
+    // that appear to enumerate successfully and fail much later, in Stage F, as
+    // data corruption. SSE.7.1.
+    ENUM_ERR_BAR_WINDOW    = 4'd7,
+    // A 32-bit BAR was allocated an address that does not fit in 32 bits.
+    // Reachable only when MEM_BAR_BASE is set above 4 GB, which is a legitimate
+    // parameterization for a 64-bit-BAR-only device -- so the case is real, and
+    // the alternative is truncating the upper half and producing an overlap.
+    // Distinct from ENUM_ERR_BAR_WINDOW: the window is fine, the REGISTER is
+    // too narrow to name the address. (Beyond SSE's named set; see the module
+    // header, SS ONE FAULT SSE DOES NOT NAME.)
+    ENUM_ERR_BAR_ADDR32    = 4'd8
   } enum_error_e;
 
 endpackage

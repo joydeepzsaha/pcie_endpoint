@@ -131,6 +131,23 @@ filesets:
       - enum_tb_common.py          : {file_type : user, copyto : .}
       - test_pcie_enum_scan_tlp.py : {file_type : user, copyto : .}
 
+  # 2b-3: the BAR phase standalone. DUT is the WHOLE enumeration assembly --
+  # pcie_enum_scan, pcie_enum_bar, the one pcie_cfg_txn and the REAL static
+  # handoff mux -- so the observed transaction sequence begins with the two scan
+  # transactions and the handoff is part of what is tested. bar_enable_i is HIGH
+  # here and low in the two scan shims; see pcie_enum_top, SS WHY THE BAR PHASE
+  # NEEDS AN ENABLE. The shim carries two extra instances whose allocator
+  # geometry the shipped MEM_BAR_BASE / MEM_BAR_WINDOW cannot reach.
+  bench_enum_bar:
+    files:
+      - tb_pcie_enum_bar.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_bar:
+    files:
+      - enum_tb_common.py     : {file_type : user, copyto : .}
+      - test_pcie_enum_bar.py : {file_type : user, copyto : .}
+
   # 2a-iii: pcie_rq_rc_top -- the assembled Root Complex requester surface.
   # The bench plays the Data Link Layer on both DLL streams and answers config
   # requests with a small, swappable Python completer; see test_pcie_rq_rc_top.py.
@@ -283,3 +300,36 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_enum_scan_tlp, cocotb_enum_scan_tlp]
     toplevel : [tb_pcie_enum_scan_tlp]
+
+  # 2b-3: the BAR phase standalone, B1..B25. Sizing, the 64-bit pair, the
+  # allocator, every decode and outcome fault, P-CMD-LAST and P-NO-ROM asserted
+  # on the wire, and the handoff proved by the Command write's byte enables.
+  verilate_enum_bar:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bar
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bar, cocotb_enum_bar]
+    toplevel : [tb_pcie_enum_bar]
+
+  # Waveform variant of the above. --trace-fst was removed from every functional
+  # target (nothing in the flow consumes a waveform, and the flag was the only
+  # reason Verilator's FST tracer compiled at all -- see that commit). Debugging
+  # is an explicit opt-in instead, and this target is NOT part of the regression
+  # gate: it runs the same 25 tests and differs only in emitting a trace.
+  verilate_enum_bar_trace:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bar
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bar, cocotb_enum_bar]
+    toplevel : [tb_pcie_enum_bar]

@@ -98,6 +98,17 @@ CFG_REG_COMMAND_STATUS = 0x01
 CFG_REG_REVISION_CLASS = 0x02
 CFG_REG_CACHE_HEADER = 0x03
 CFG_REG_BAR0 = 0x04
+CFG_REG_BAR1 = 0x05
+CFG_REG_BAR2 = 0x06
+CFG_REG_BAR3 = 0x07
+CFG_REG_BAR4 = 0x08
+CFG_REG_BAR5 = 0x09
+CFG_REG_BAR_FIRST = CFG_REG_BAR0
+CFG_REG_BAR_LAST = CFG_REG_BAR5
+BAR_SLOTS = 6
+# The Expansion ROM Base Address register, [PCI3] SS6.2.5.2 p.227 :11283/:11287.
+# Present here ONLY so P-NO-ROM can assert that nothing ever touches it.
+CFG_REG_EXPANSION_ROM = 0x0C
 
 # Byte enables.  Base 2.1 SS2.2.7 p.79 pins Last DW BE to 0000b for every
 # Configuration Request, so only first_be is ever a choice.
@@ -643,6 +654,40 @@ ENUM_ERR_UR_POST_PROBE = 1
 ENUM_ERR_CA = 2
 ENUM_ERR_CRS_EXHAUSTED = 3
 ENUM_ERR_TIMEOUT = 4
+# BAR phase (Commit 2b-3).  enum_error_e widened to [3:0] to hold these; codes
+# 0..4 above keep their values byte-identically.
+ENUM_ERR_BAR_TYPE = 5
+ENUM_ERR_BAR_SIZE = 6
+ENUM_ERR_BAR_WINDOW = 7
+ENUM_ERR_BAR_ADDR32 = 8
+
+ERR_NAME = {
+    ENUM_ERR_NONE: "ENUM_ERR_NONE",
+    ENUM_ERR_UR_POST_PROBE: "ENUM_ERR_UR_POST_PROBE",
+    ENUM_ERR_CA: "ENUM_ERR_CA",
+    ENUM_ERR_CRS_EXHAUSTED: "ENUM_ERR_CRS_EXHAUSTED",
+    ENUM_ERR_TIMEOUT: "ENUM_ERR_TIMEOUT",
+    ENUM_ERR_BAR_TYPE: "ENUM_ERR_BAR_TYPE",
+    ENUM_ERR_BAR_SIZE: "ENUM_ERR_BAR_SIZE",
+    ENUM_ERR_BAR_WINDOW: "ENUM_ERR_BAR_WINDOW",
+    ENUM_ERR_BAR_ADDR32: "ENUM_ERR_BAR_ADDR32",
+}
+
+
+def err_name(value):
+    return ERR_NAME.get(value, f"<unknown {value}>")
+
+
+# The shipped allocator geometry -- pcie_enum_bar's parameter defaults.  The
+# addresses every BAR test asserts derive from these, and they were pinned in
+# SPEC_PREDICTIONS_ENUM.md SSE.7.4 before the RTL existed.
+MEM_BAR_BASE = 0x0000_0000_8000_0000
+MEM_BAR_WINDOW = 0x0000_0000_1000_0000
+
+# The Command register value written last.  Memory Space Enable | Bus Master
+# Enable -- [PCI3] Table 6-1 p.218 :10764, :10767.  I/O Space Enable stays 0
+# because no I/O BAR is ever assigned (SSE.6, SSE.7.2).
+CMD_ENABLE_VALUE = 0x0000_0006
 
 
 class TlpRequest:
@@ -901,3 +946,262 @@ def reg3(header_type, bist=0x00, mlt=0x00, cls=0x10):
 def outcome_name(value):
     """pcie_enum_pkg::txn_outcome_e as a name, for assertion messages."""
     return TXN_NAME.get(value, f"<unknown {value}>")
+
+
+# ===========================================================================
+# SS ⭐ THE CONFIGURATION SPACE, WITH REAL BASE ADDRESS REGISTER SEMANTICS
+#
+# This is bench code that behaves like hardware, so it is exactly as capable of
+# being wrong as hardware -- and here its failure mode is specific and nasty.
+#
+# !! A COMPLETER THAT ECHOES BAR WRITES VERBATIM MAKES SIZING RETURN GARBAGE,
+# !! AND THE DUT LOOKS BROKEN WHEN THE BENCH IS.
+#
+# The whole all-ones sizing algorithm rests on ONE sentence -- [PCI3] SS6.2.5.1
+# p.226 :11205, "Bits 0-3 are read-only" -- plus the don't-care behaviour of
+# :11222, "The device will return 0's in all don't-care address bits".  A model
+# that stored FFFFFFFF and handed it back would report every BAR as 4 GB and
+# would destroy the type/prefetch encoding the very next read depends on.
+#
+# So the model implements the masking, and COUNTS IT.  mask_hits and
+# ro_low_hits exist so a test can assert the arm was actually exercised rather
+# than merely present -- the 2b-2 silent-UR trap, one layer up.
+# ===========================================================================
+
+BAR_MEM32 = "mem32"
+BAR_MEM64 = "mem64"
+BAR_IO = "io"
+
+
+class BarSpec:
+    """One Base Address register as a device implements it.
+
+    size is in bytes and must be a power of two.  A BAR_MEM64 spec occupies the
+    candidate register it is placed at AND the next one -- that is what makes it
+    a pair, and the model expands it so a test cannot forget.
+    """
+
+    def __init__(self, kind, size, prefetch=False):
+        assert kind in (BAR_MEM32, BAR_MEM64, BAR_IO), kind
+        assert size > 0 and (size & (size - 1)) == 0, \
+            f"BAR size {size:#x} is not a power of two -- [PCI3] p.226 :11226"
+        self.kind = kind
+        self.size = size
+        self.prefetch = prefetch
+
+    @property
+    def type_field(self):
+        """Bits [3:0], the read-only field.  [PCI3] p.225 :11187, :11190, :11193."""
+        if self.kind == BAR_IO:
+            return 0b0001                     # bit 0 = 1, bit 1 reserved reads 0
+        bits = 0b0000 if self.kind == BAR_MEM32 else 0b0100   # [2:1] = 00 or 10
+        return bits | (0b1000 if self.prefetch else 0)
+
+    @property
+    def registers(self):
+        return 2 if self.kind == BAR_MEM64 else 1
+
+
+class ConfigDevice:
+    """A Type 0 configuration space the enumeration benches can enumerate.
+
+    bars is a mapping {candidate register number: BarSpec}.  Every candidate
+    register not named is UNIMPLEMENTED and reads hardwired zero
+    ([PCI3] p.226 :11224); the upper half of a BAR_MEM64 is filled in
+    automatically and may not be named separately.
+
+    Registers outside the model return None from read(), which the completers
+    turn into an Unsupported Request -- Base 2.1 SS7.3.3 p.480.
+    """
+
+    def __init__(self, bars=None, header_type=HDR_TYPE0, vendor=VENDOR,
+                 device=DEVICE, raw=None):
+        # ⭐ raw is {register: fixed readback value} and it MODELS A MALFORMED
+        # DEVICE. Such a register answers the same value no matter what is
+        # written to it, which is the only way to present an encoding BarSpec
+        # cannot legally build -- a Reserved Type field, or a size whose two's
+        # complement is not a power of two.
+        #
+        # !! IT MUST IGNORE WRITES, AND THAT IS THE WHOLE POINT. A first attempt
+        # injected these values into the ordinary register store instead; the
+        # all-ones sizing write promptly overwrote them with FFFFFFFF, the
+        # readback came back with bit 0 set, and the FSM correctly classified the
+        # register as an I/O BAR and skipped it. Three fault tests then passed
+        # their DUT and failed their own premise.
+        self._raw = dict(raw or {})
+        self.raw_reads = 0
+        self.raw_writes_discarded = 0
+        self.vendor = vendor
+        self.device = device
+        self.header_type = header_type
+        self.mask_hits = 0        # a write had bits dropped by the size mask
+        self.ro_low_hits = 0      # ...and specifically in the read-only bits 3:0
+        self.writes = []          # (reg, value, first_be), in order
+
+        # reg -> (read_only_bits, writable_mask)
+        self._bar = {}
+        # reg -> stored value, already masked
+        self._stored = {}
+        # ordinary registers, byte-writable
+        self._plain = {
+            CFG_REG_VENDOR_DEVICE: (device << 16) | vendor,
+            CFG_REG_CACHE_HEADER: reg3(header_type),
+            CFG_REG_COMMAND_STATUS: 0x0000_0000,
+        }
+
+        for reg in range(CFG_REG_BAR_FIRST, CFG_REG_BAR_LAST + 1):
+            self._stored[reg] = 0
+
+        for reg, spec in sorted((bars or {}).items()):
+            assert CFG_REG_BAR_FIRST <= reg <= CFG_REG_BAR_LAST, \
+                f"register {reg} is not a candidate BAR register"
+            assert reg not in self._bar, f"register {reg} already claimed"
+            if spec.kind == BAR_IO:
+                # 32 bits wide always, bit 0 hardwired 1, bit 1 reserved reads 0.
+                mask = (~(spec.size - 1)) & 0xFFFF_FFFC
+                self._bar[reg] = (spec.type_field, mask)
+            elif spec.kind == BAR_MEM32:
+                mask = (~(spec.size - 1)) & 0xFFFF_FFFF
+                self._bar[reg] = (spec.type_field, mask)
+            else:
+                assert reg < CFG_REG_BAR_LAST, (
+                    f"a 64-bit BAR at register {reg} has no register to pair "
+                    "with -- offset 28h is the Cardbus CIS Pointer")
+                assert (reg + 1) not in self._bar, \
+                    f"register {reg + 1} is the upper half of the pair at {reg}"
+                mask64 = (~(spec.size - 1)) & 0xFFFF_FFFF_FFFF_FFFF
+                self._bar[reg] = (spec.type_field, mask64 & 0xFFFF_FFFF)
+                self._bar[reg + 1] = (0, (mask64 >> 32) & 0xFFFF_FFFF)
+
+    # ---- the RC's view -----------------------------------------------------
+    def read(self, reg):
+        if reg in self._raw:
+            self.raw_reads += 1
+            return self._raw[reg]         # malformed: fixed, write-immune
+        if reg in self._bar:
+            ro, mask = self._bar[reg]
+            return (self._stored[reg] & mask) | ro
+        if reg in self._stored:
+            return 0                      # unimplemented: hardwired zero
+        return self._plain.get(reg)       # None -> the completer answers UR
+
+    def write(self, reg, value, first_be=CFG_BE_DWORD):
+        self.writes.append((reg, value & 0xFFFF_FFFF, first_be))
+        if reg in self._raw:
+            self.raw_writes_discarded += 1
+            return                        # a fixed-response register absorbs it
+        byte_mask = 0
+        for byte in range(4):
+            if (first_be >> byte) & 1:
+                byte_mask |= 0xFF << (8 * byte)
+
+        if reg in self._bar:
+            _ro, mask = self._bar[reg]
+            effective = mask & byte_mask
+            dropped = value & byte_mask & ~effective & 0xFFFF_FFFF
+            if dropped:
+                self.mask_hits += 1
+                if dropped & 0xF:
+                    self.ro_low_hits += 1
+            self._stored[reg] = ((self._stored[reg] & ~effective)
+                                 | (value & effective)) & 0xFFFF_FFFF
+        elif reg in self._stored:
+            pass                          # unimplemented: writes are discarded
+        else:
+            current = self._plain.get(reg, 0)
+            self._plain[reg] = ((current & ~byte_mask)
+                                | (value & byte_mask)) & 0xFFFF_FFFF
+
+    # ---- what a test asserts against --------------------------------------
+    @property
+    def command(self):
+        """The low half of register 1 -- the Command register."""
+        return self._plain[CFG_REG_COMMAND_STATUS] & 0xFFFF
+
+    def bar_written(self, reg):
+        """The raw stored value of one BAR register, mask applied."""
+        return self._stored[reg]
+
+    def assert_mask_exercised(self, what=""):
+        """⭐ The write-mask arm actually ran.
+
+        Brief SS3.1: a completer that echoes BAR writes verbatim makes sizing
+        return garbage, so the mask must be proved live rather than assumed.
+
+        !! ONE GATE, NOT TWO, AND THE MUTATION CAMPAIGN IS WHY. This first read
+        "assert mask_hits > 0" and then "assert ro_low_hits > 0", with a comment
+        claiming the second caught something the first did not. The comment was
+        WRONG -- ro_low_hits counts a subset of what mask_hits counts, so the
+        second strictly implies the first, and defeating the first alone could
+        not change any verdict. It duly survived as a mutation.
+        A redundant assertion is not a stronger check; it is an untested one.
+        mask_hits stays as a diagnostic in the message.
+        """
+        assert self.ro_low_hits > 0, (
+            f"{what}no write was ever masked inside the read-only low field, so "
+            "the BAR write mask never protected it ([PCI3] p.226 :11205 for a "
+            "memory BAR's bits 3:0, p.225 :11187 for an I/O BAR's bits 1:0). "
+            "This test would pass against a completer that echoed writes "
+            "verbatim, which is the bug the mask exists to model. "
+            f"(mask_hits={self.mask_hits}, ro_low_hits={self.ro_low_hits})")
+
+
+# ---------------------------------------------------------------------------
+# SS ⭐ THE EMPTY-SET GUARD
+#
+# "A green diff, an empty finding list, and a passing assertion over an empty
+# set are the same bug" -- RECON_commit2b3.md SS2, where it fired on the recon
+# itself.  Brief SS3.2 trap 3 makes the guard mandatory for every on-wire
+# assertion in Commits D and E, and for any helper that iterates a collected
+# list.
+#
+# These are deliberately tiny and deliberately loud.  The alternative -- trusting
+# each call site to remember -- is what produced the trap in the first place.
+# ---------------------------------------------------------------------------
+def nonempty(seq, what):
+    """Return seq, having proved it has something in it."""
+    items = list(seq)
+    assert items, (
+        f"{what}: the observation set is EMPTY, so every assertion over it "
+        "would pass vacuously. Nothing was collected -- check the DUT emitted "
+        "anything at all before trusting a green result.")
+    return items
+
+
+def expect_count(seq, count, what):
+    """Return seq, having proved it is exactly `count` long and non-empty."""
+    items = nonempty(seq, what) if count else list(seq)
+    assert len(items) == count, (
+        f"{what}: expected exactly {count} item(s), saw {len(items)}:\n  "
+        + "\n  ".join(repr(i) for i in items[:24]))
+    return items
+
+
+def assert_sequence(observed, golden, what="", render=repr):
+    """Whole-sequence compare with an empty-set guard and a first-diff report.
+
+    Used for the transaction sequence of a whole enumeration run.  A per-item
+    loop that happened to iterate zero times is exactly the vacuous pass this
+    exists to prevent, so the length is checked FIRST and the emptiness of the
+    golden is checked too -- a golden that is itself empty would make the
+    comparison meaningless in the other direction.
+    """
+    golden = list(golden)
+    assert golden, (
+        f"{what}: the GOLDEN sequence is empty, so this comparison asserts "
+        "nothing. That is a bench bug, not a DUT result.")
+    observed = list(observed)
+    for index, (got, exp) in enumerate(zip(observed, golden)):
+        if got != exp:
+            raise AssertionError(
+                f"{what}: transaction {index} differs\n"
+                f"  observed {render(got)}\n"
+                f"  golden   {render(exp)}\n"
+                f"  (full observed sequence, {len(observed)} items:)\n    "
+                + "\n    ".join(render(o) for o in observed))
+    assert len(observed) == len(golden), (
+        f"{what}: the first {min(len(observed), len(golden))} transactions "
+        f"match but the lengths differ -- observed {len(observed)}, golden "
+        f"{len(golden)}.\n  observed:\n    "
+        + "\n    ".join(render(o) for o in observed)
+        + "\n  golden:\n    " + "\n    ".join(render(g) for g in golden))

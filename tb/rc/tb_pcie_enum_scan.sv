@@ -36,8 +36,8 @@ module tb_pcie_enum_scan
   logic        scan_done_o;
   logic        scan_error_o;
   enum_error_e scan_error_code;
-  logic [2:0]  scan_error_code_o;
-  assign scan_error_code_o = 3'(scan_error_code);
+  logic [3:0]  scan_error_code_o;
+  assign scan_error_code_o = 4'(scan_error_code);
   logic        err_credit_blocked_o;
 
   logic        device_present_o;
@@ -84,6 +84,13 @@ module tb_pcie_enum_scan
 
       .scan_start_i(scan_start_i),
       .scan_bus_i  (scan_bus_i),
+      // ⭐ THE BAR PHASE IS OFF IN THIS TARGET, AND THAT IS THE SUBJECT, NOT A
+      // CONVENIENCE. Three tests here assert the exact transaction count a
+      // presence scan emits (test_pcie_enum_scan.py:199, :438, :533). A BAR
+      // phase starting automatically at scan_done_o would falsify all three --
+      // correctly, because they are the SCAN's property, not enumeration's.
+      // pcie_enum_bar is exercised by verilate_enum_bar / _tlp instead.
+      .bar_enable_i(1'b0),
 
       .scan_busy_o         (scan_busy_o),
       .scan_done_o         (scan_done_o),
@@ -98,6 +105,20 @@ module tb_pcie_enum_scan
       .device_id_o         (device_id_o),
       .header_type_o       (header_type_o),
       .multifunction_o     (multifunction_o),
+
+      // BAR-phase surface: unused here, and provably inert with bar_enable_i
+      // tied low -- pcie_enum_bar never leaves S_IDLE.
+      .bar_busy_o       (),
+      .enum_done_o      (),
+      .enum_error_o     (),
+      .enum_error_code_o(),
+      .bar_count_o      (),
+      .bar_valid_o      (),
+      .bar_is_64_o      (),
+      .bar_prefetch_o   (),
+      .bar_size_o       (),
+      .bar_addr_o       (),
+      .io_bar_mask_o    (),
 
       .tx_fc_blocked_i(tx_fc_blocked_i),
 
