@@ -13,6 +13,27 @@ bug or a prediction bug, never a golden retro-fitted to observed behaviour.
 **PG213:line**. The 512-bit-interface duplicates at `:5222+` are never cited —
 wrong width. MindShare and Southwell are background only and are cited nowhere.
 
+> ### ✅ Citation debt discharged, 2026-07-29 (Commit 2b-3)
+>
+> **Second normative source added to the shelf:** PCI Local Bus Specification
+> 3.0, as text (`/home/kourosh/openPCIE/0.doc/pci-local-bus-3.0.txt`, 16433
+> lines), cited as **[PCI3] §section p.page `:line`**. Line anchors were verified
+> identical across two independent extractions.
+>
+> This closes **§0.2** and discharges option (1) of **§9**. The **`[PCI3-REF]`**
+> tag — "normative source is PCI 3.0 … not readable on this shelf; citation
+> pending" — is **RETIRED**. All eleven occurrences have been replaced in place
+> with real citations; where the tag still appears below it is marked
+> ~~struck~~ and kept only so the historical record of §9/§10 stays readable.
+>
+> ⚠️ **Page convention for [PCI3]:** the page number in this extraction is a
+> **footer**, printed at the *end* of the page it labels. Content following
+> marker *N* is on page ***N+1***. See §E.0.
+>
+> No prediction changed. As §0.2 anticipated, the debt was only ever about
+> numeric constants, never about FSM shape — but the constants are now cited
+> rather than asserted from convention. Full anchor table in **§E.0**.
+
 ---
 
 ## ⛔ 0. THREE FINDINGS THAT CHANGE THE WORK — read before anything else
@@ -59,8 +80,13 @@ is not possible. Searched exhaustively:
 
 Those definitions live in the **PCI Local Bus Specification 3.0** (§6.2.5.1 for
 BARs), which Base 2.1 incorporates by reference (definitions p.30-31: *"Memory
-Space defined in PCI 3.0"*) but which is **not on the spec shelf** (brief §2
-lists only Base 2.1, PG213, MindShare, Southwell).
+Space defined in PCI 3.0"*) but which was **not on the spec shelf** when this
+section was written (brief §2 listed only Base 2.1, PG213, MindShare, Southwell).
+
+> ✅ **RESOLVED in Commit 2b-3.** PCI 3.0 is now on the shelf and every constant
+> named in this section carries a real **[PCI3]** citation. See the header note
+> and **§E.0**. The paragraph above is kept as written because it is what
+> motivated adding the source; the gap it describes no longer exists.
 
 Every constant below carries an explicit **citation-status** tag:
 
@@ -68,11 +94,13 @@ Every constant below carries an explicit **citation-status** tag:
 |---|---|
 | **[BASE]** | cited to PCIe Base 2.1, section + page. Golden. |
 | **[PG213]** | cited to PG213 by line. Interface shape only, never protocol. |
-| **[PCI3-REF]** | normative source is PCI 3.0, incorporated by reference by Base 2.1 but **not readable on this shelf**. Value stated from established hardware convention; **citation pending**. |
+| **[PCI3]** | cited to PCI Local Bus 3.0, **section + page + line**. Golden. Added 2b-3. |
+| ~~**[PCI3-REF]**~~ | ~~normative source is PCI 3.0 … not readable on this shelf; citation pending.~~ **RETIRED 2b-3** — every occurrence replaced with a **[PCI3]** citation. |
 
-**This is a gate, not a blocker.** Nothing tagged `[PCI3-REF]` changes the FSM's
-*shape* — only the numeric constants in the BAR decode and the Command-register
-bit positions. §9 states what I need to close it.
+**This was a gate, not a blocker — and the gate is now open.** Nothing tagged
+`[PCI3-REF]` ever changed the FSM's *shape*, only the numeric constants in the
+BAR decode and the Command-register bit positions. §9 stated what was needed to
+close it; **§E.0 records that it was closed by option (1)**, adding the source.
 
 ### 0.3 The probe-timeout question resolves to **FAULT**, not absent-continue.
 
@@ -306,11 +334,18 @@ sequence.** Any pulse is a stop-and-report event (brief §11.6).
 
 ## 4. BAR sizing and assignment
 
-> ⚠️ **Citation status: the arithmetic below is `[PCI3-REF]` except where marked.**
-> See §0.2. Base 2.1 gives the offsets and the usage policy; it does **not**
-> define the bit layout or the sizing algorithm.
+> ✅ **Citation status: DISCHARGED in Commit 2b-3.** Every value below now carries
+> a **[PCI3]** citation (section + page + line). **§E.1-E.3 is the current,
+> fully-cited statement of this material** and supersedes this section on any
+> point of detail; §4 is retained because §4.4's assignment policy and the
+> `MEM_BAR_BASE`/`BAR_BASE` warning are referenced from later sections.
+>
+> Originally written when PCI 3.0 was off the shelf (§0.2). The observation that
+> motivated the tag still stands and is worth keeping: **Base 2.1 gives the
+> offsets and the usage policy; it does not define the BAR bit layout or the
+> sizing algorithm.** That is precisely why the second source was needed.
 
-### 4.1 BAR bit layout  **[PCI3-REF — PCI 3.0 §6.2.5.1]**
+### 4.1 BAR bit layout  **[PCI3 §6.2.5.1 p.225-226 `:11187`,`:11190`,`:11193`,`:11205`,`:11207`]** — full statement in §E.1
 
 | bits | field | values |
 |---|---|---|
@@ -329,7 +364,7 @@ sequence.** Any pulse is a stop-and-report event (brief §11.6).
   This is the one BAR *arithmetic* constraint with a real Base 2.1 citation, and
   the FSM should treat a sub-128-byte decode as an enumeration fault.
 
-### 4.2 Sizing algorithm  **[PCI3-REF]**
+### 4.2 Sizing algorithm  **[PCI3 §6.2.5.1 p.226 `:11222`-`:11226`]** — full statement in §E.2
 
 For a 32-bit memory BAR at register `r`:
 
@@ -357,7 +392,7 @@ Combined 64-bit decode:
 `encoded64 = (0xFFFFFFFF << 32) | (0xFFFFC00C & 0xFFFFFFF0) = 0xFFFFFFFF_FFFFC000`
 → `size = ~encoded64 + 1 = 0x4000 = 16 KB` ✓, `prefetchable = 1`, `type = 10`.
 
-### 4.3 The 64-bit pair rule  **[PCI3-REF]**, cross-checked **[BASE p.491-492]**
+### 4.3 The 64-bit pair rule  **[PCI3 Table 6-4 §6.2.5.1 p.226 `:11207`]**, cross-checked **[BASE p.491-492]** — full statement in §E.3
 
 When `readback[2:1] == 10`, the BAR is 64-bit and **consumes registers `r` and
 `r+1`**. The sizing sequence is therefore:
@@ -651,7 +686,17 @@ and the four firm entries are committed now.
 
 ---
 
-## 9. What I need to close §0.2 (BAR / Command-register citations)
+## 9. ✅ CLOSED — what I needed to close §0.2 (BAR / Command-register citations)
+
+> **Resolved 2026-07-29, Commit 2b-3, by option (1).** PCI 3.0 was added to the
+> shelf and every constant re-cited. The section is kept unedited below as the
+> record of the decision; **§E.0 is the discharge**. Option (2), which this
+> section was proceeding on, was never needed. Option (3) was correctly refused.
+>
+> The forward-looking claim in option (1) — that Commits 3/4 would need the
+> source far more than 2b does — is already bearing out: **§E** cites PCI 3.0 for
+> the Header Type layout encodings and the Expansion ROM offset as well as for
+> the BAR material, and Stage D's Type 1 header lives in the same chapter.
 
 Everything tagged `[PCI3-REF]` — BAR bits `[0]`, `[2:1]`, `[3]`, the
 write-all-ones sizing algorithm, and Command register bits 0/1 — has its
@@ -682,7 +727,7 @@ in place so the debt is visible and mechanically greppable rather than buried.
 | # | item | severity | blocks 2b-1? |
 |---|---|---|---|
 | 1 | **P-NPD0 inverted** — `NPD=0` at init means infinite; the brief's and the recon's stated prediction is wrong (§0.1) | **High** — would have produced a vacuous "passing" credit test | No. Corrected here; P-NPD-INF / P-NPD1-STALL replace it. |
-| 2 | **BAR sizing + Command bits 0/1 are not in Base 2.1** (§0.2, §9) | Medium — citation quality, not correctness | No. Tagged `[PCI3-REF]`; proceeding on option (2). |
+| 2 | **BAR sizing + Command bits 0/1 are not in Base 2.1** (§0.2, §9) | Medium — citation quality, not correctness | No. ~~Tagged `[PCI3-REF]`; proceeding on option (2).~~ ✅ **CLOSED 2b-3 by option (1)** — PCI 3.0 added to the shelf, all eleven constants re-cited (§E.0). |
 | 3 | **Probe timeout ⇒ FAULT** (§5.3) — the derivation resolved *against* the "absent-continue" reading | Medium — and it imposes a hard requirement on the bench completer | No, but §5.3's harness consequence must be built into the 2b-2 completer from the start. |
 | 4 | **Reserved completion status must map to UR**, not to a bare `default` (§5.1) | Low, but an X-prop/latch hazard in a `unique case` | No. |
 | 5 | Baseline was **30/172**, not the recon's 29/171 (§1) | Resolved | No. |
@@ -812,19 +857,37 @@ byte offset `0Ch`, byte 2 — i.e. **register 3, bits [23:16]** of the returned
 Dword. The same layout appears in Figure 7-4 p.484 (common header) and
 Figure 7-6 p.492 (Type 1).
 
-**Bit fields — [PCI3-REF]:** Base 2.1 shows Header Type only in those figures and
-nowhere defines its bits. Bit 7 = Multi-Function, bits [6:0] = header layout, and
-the layout encodings `00h`/`01h`/`02h`, are PCI 3.0 §6.1. **Third instance of the
-same debt** (BAR bit layout §0.2, Command register bits 0/1 §0.2, now Header
-Type). Tagged, not hidden.
+**Bit fields — ✅ [PCI3 §6.2.1 p.216 `:10685`]:** Base 2.1 shows Header Type only
+in those figures and nowhere defines its bits. **Discharged in Commit 2b-3** —
+this was the third instance of the §0.2 debt (BAR bit layout, Command register
+bits 0/1, then Header Type) and the one discharge that falls outside §4's BAR
+material. The normative text, quoted:
+
+> *"**Bit 7** in this register is used to identify a **multi-function device**.
+> If the bit is 0, then the device is single function. If the bit is 1, then the
+> device has multiple functions. **Bits 6 through 0** identify the layout of the
+> second part of the predefined header. The encoding **00h** specifies the layout
+> shown in Figure 6-1. The encoding **01h** is defined for **PCI-to-PCI
+> bridges** … The encoding **02h** is defined for a **CardBus bridge** … **All
+> other encodings are reserved.**"*
+
+Two corrections to what this section previously asserted from convention:
+
+1. The section number is **§6.2.1 (Device Identification)**, not §6.1 as guessed
+   here before the source was readable.
+2. The spec's own closing clause — *"All other encodings are reserved"* — was not
+   captured. It **strengthens** the prediction below rather than changing it: an
+   encoding of `03h`-`7Fh` is reserved, not merely unknown, so routing it to
+   `SCAN_UNSUPPORTED_DEVICE` alongside `01h`/`02h` is the spec-aligned behaviour
+   and the FSM needs no separate arm for it.
 
 **Partially corroborated by [BASE], which is worth stating:** Base 2.1
 independently establishes that the two layouts *exist* and *who uses which* —
 §7.5.2 p.491 titles the Type 0 header as the one for *"PCI Express device
 Functions"*, and §7.5.3 p.492 titles Type 1 as the one for *"Switch and Root
 Complex virtual PCI Bridges"*. So the **meaning** of the distinction is [BASE];
-only the numeric encoding is [PCI3-REF]. That is enough to justify the FSM's
-behaviour even before PCI 3.0 is on the shelf.
+only the numeric encoding is [PCI3]. That was enough to justify the FSM's
+behaviour even before PCI 3.0 was on the shelf — and now both halves are cited.
 
 **Prediction:** `header_layout != 00h` → terminal state
 **`SCAN_UNSUPPORTED_DEVICE`**, *not* `SCAN_ERROR`. A Type 1 response means a
@@ -1064,3 +1127,645 @@ status output — with the exact per-Dword count, V9-style.
 > → **34 targets / 219 tests**.
 
 All 32 pre-existing targets identical in count, verdict and sim end time.
+
+---
+---
+
+# E. Commit 2b-3 addendum — BAR sizing, assignment, and enable
+
+**Date:** 2026-07-29 · **Branch:** `kourosh/dev` @ `ffea7a4` · **written before
+`pcie_enum_bar` and `pcie_enum_top` exist.** Same rule as the rest of this
+document: a later disagreement is a DUT bug or a prediction bug, never a golden
+fitted to observed behaviour.
+
+**Baseline this section is written against:** 34 targets / 219 tests, all PASS,
+reproduced at `ffea7a4` (`RECON_commit2b3.md` §1).
+
+---
+
+## ⭐ E.0 The `[PCI3-REF]` debt is DISCHARGED
+
+`§0.2` opened this document with a citation gap: the BAR bit layout, the sizing
+algorithm, the Command-register bit positions and the Header Type bit fields all
+have their normative home in the **PCI Local Bus Specification 3.0**, which Base
+2.1 incorporates by reference but which was **not on the spec shelf**. Eleven
+constants were tagged `[PCI3-REF]` — "value stated from established hardware
+convention; citation pending" — and §9 recommended closing the gap by adding
+PCI 3.0 to the shelf (option 1) while proceeding on option (2).
+
+**Option (1) has now been taken.** The shelf gained:
+
+```
+/home/kourosh/openPCIE/0.doc/pci-local-bus-3.0.txt   (16433 lines)
+```
+
+extracted from `pci-local-bus-3.0.pdf`. Line anchors were verified identical
+across two independent extractions, so `:line` citations are stable.
+
+**New citation tag, used throughout this section:**
+
+| tag | meaning |
+|---|---|
+| **[PCI3]** | cited to PCI Local Bus 3.0, **section + page + line**. Golden. |
+
+**`[PCI3-REF]` is retired.** Every one of the eleven occurrences has been
+replaced in place with a real `[PCI3]` citation; the tag no longer appears in
+this document except in this paragraph and in the historical record of §9/§10.
+Nothing about the FSM's *shape* changed — as §0.2 predicted, the debt was only
+ever about numeric constants — but the constants are now cited rather than
+asserted.
+
+⚠️ **Page-number convention, and a correction.** In this extraction the page
+number is a **footer**: it appears at the *end* of the page it labels, just
+before the form feed. Content following marker *N* is therefore on page ***N+1***.
+A first pass at the anchor table read the markers as headers and came out one
+page low throughout; the mapping below is the corrected one, cross-checked
+against markers 226 (`:11248`) and 227 (`:11299`) bracketing `:11283`.
+
+| what | section | page | line |
+|---|---|---:|---|
+| Header Type byte, bit 7 and layout encodings | §6.2.1 | 216 | `:10685` |
+| Table 6-1 Command Register Bits (bits 0/1/2) | §6.2.2 | 218 | `:10759` |
+| §6.2.5.1 Address Maps (opening) | §6.2.5.1 | 225 | `:11134` |
+| I/O BAR: 32-bit, bit 0 = 1, bit 1 reserved reads 0 | §6.2.5.1 | 225 | `:11187` |
+| Memory BAR: bit 0 = 0, bits 2/1 per Table 6-4, bit 3 prefetchable | §6.2.5.1 | 225 | `:11190` |
+| **"Bits 0-3 are read-only."** | §6.2.5.1 | 226 | `:11205` |
+| Table 6-4 Bits 2/1 Encoding (all four rows) | §6.2.5.1 | 226 | `:11207` |
+| "power of 2 from 16 bytes to 2 GB" | §6.2.5.1 | 226 | `:11219` |
+| **The sizing algorithm paragraph** | §6.2.5.1 | 226 | `:11222` |
+| "power of two in size and are naturally aligned" | §6.2.5.1 | 226 | `:11226` |
+| §6.2.5.2 Expansion ROM BAR at offset `30h` | §6.2.5.2 | 227 | `:11283` |
+
+Figures 6-5 and 6-6 are cited **by number only, never by their extracted
+rendering** — the text extractor interleaved the two captions with one figure
+body, so the drawn bit positions in the `.txt` are not trustworthy. Every claim
+below rests on prose lines, which are unambiguous.
+
+---
+
+## E.1 BAR bit layout  **[PCI3 §6.2.5.1 p.225-226]**
+
+Discharges the former §4.1. Same values, now cited.
+
+| bits | field | values | citation |
+|---|---|---|---|
+| `[0]` | Memory Space Indicator | `0` = memory BAR · `1` = I/O BAR | p.225 `:11187`, `:11190` |
+| `[2:1]` | Type (memory BARs) | `00` 32-bit · `01` **reserved** · `10` 64-bit · `11` **reserved** | Table 6-4, p.226 `:11207` |
+| `[3]` | Prefetchable (memory BARs) | `1` = prefetchable | p.225 `:11193` |
+| `[31:4]` | Base address / size-encoding bits | writable above the alignment boundary, read-as-0 below | p.226 `:11222` |
+
+**The load-bearing sentence** — p.226 `:11205`:
+
+> **"Bits 0-3 are read-only."**
+
+That single clause is what makes the sizing algorithm work at all: writing all
+1's cannot disturb the type/prefetch encoding, so the readback still identifies
+the BAR while its upper bits report the size. It is also the source of §E.2's
+`mask = ~4'hF`, and it is the reason a bench completer that echoes writes
+verbatim produces garbage (brief §7).
+
+**I/O BARs** — p.225 `:11187`:
+
+> *"Base Address registers that map into I/O Space are **always 32 bits wide**
+> with bit 0 hardwired to a **1**. **Bit 1 is reserved and must return 0 on
+> reads** and the other bits are used to map the device into I/O Space."*
+
+So an I/O BAR is never part of a 64-bit pair and always advances the candidate
+index by exactly 1.
+
+**Memory BARs** — p.225 `:11190`:
+
+> *"Base Address registers that map into Memory Space can be 32 bits or 64 bits
+> wide … with bit 0 hardwired to a 0. For Memory Base Address registers, bits 2
+> and 1 have an encoded meaning as shown in Table 6-4. Bit 3 should be set to 1
+> if the data is prefetchable and reset to 0 otherwise."*
+
+⚠️ **Both reserved encodings must be handled, not just `01`.** The former §4.1
+listed `00`, `10` and `01` but omitted `11`. Table 6-4 p.226 `:11207` defines all
+four rows, and `11` is Reserved exactly as `01` is. Footnote 46 (`:11243`)
+records that `01` formerly meant "below 1 MB" and that *"System software should
+recognize this encoding and handle appropriately"* — i.e. it is a legacy
+encoding, not a free slot.
+
+**Prediction:** a memory BAR whose `[2:1]` decodes to `01` or `11` is a **sticky
+ERROR** with a distinct code, not a silent skip and not a guess at 32-bit. This
+design targets PCIe endpoints, where neither encoding can legitimately appear;
+treating an unknown type as 32-bit would silently mis-size the device.
+
+---
+
+## E.2 The sizing algorithm  **[PCI3 §6.2.5.1 p.226 `:11222`]**
+
+The normative paragraph, quoted in full because every step below comes from it:
+
+> *"Power-up software can determine how much address space the device requires by
+> **writing a value of all 1's to the register and then reading the value back**.
+> The device will **return 0's in all don't-care address bits**, effectively
+> specifying the address space required. **Unimplemented Base Address registers
+> are hardwired to zero.**"*
+
+and immediately following, `:11226`:
+
+> *"This design implies that all address spaces used are a **power of two** in
+> size and are **naturally aligned**."*
+
+### E.2.1 The committed arithmetic
+
+For a 32-bit memory BAR at candidate register `r`:
+
+```
+1. CfgWr0 reg r, first_be=1111, data = 0xFFFFFFFF
+2. CfgRd0 reg r, first_be=1111            -> readback
+3. encoded = readback & ~32'hF            ; bits 3:0 are RO   [PCI3 p.226 :11205]
+4. if encoded == 0  -> BAR UNIMPLEMENTED, skip, r += 1        [PCI3 p.226 :11224]
+5. size = (~encoded) + 1                  ; 32-bit two's complement
+```
+
+Masks, stated once so the mutation set has a target:
+
+| BAR kind | mask | why |
+|---|---|---|
+| memory | `~32'hF` (clear bits 3:0) | bits 3:0 read-only — `:11205` |
+| I/O | `~32'h3` (clear bits 1:0) | bit 0 hardwired 1, bit 1 reserved-reads-0 — `:11187` |
+
+**The I/O mask is 2 bits, not 4.** This is the "mask width wrong" mutation in
+brief §7 and it is a real spec distinction, not an off-by-one: an I/O BAR has no
+prefetch bit and no type field, so bits 3:2 are ordinary address bits.
+
+### E.2.2 ⭐ Why the all-ones write cannot be skipped
+
+A tempting simplification is to read the BAR without writing first and call a
+zero readback "unimplemented". **That is wrong, and the difference is
+observable.**
+
+After reset, an *implemented* 32-bit non-prefetchable memory BAR reads
+`0x00000000` — its base address is unassigned and every size bit is a don't-care
+returning 0, while bits `[3:0]` are all legitimately zero (memory, 32-bit, not
+prefetchable). It is **bit-for-bit identical** to an unimplemented BAR's
+hardwired zero.
+
+Only after the all-ones write do the two diverge: the implemented BAR returns its
+size bits, the unimplemented one still returns zero (`:11224`). **Prediction: the
+write is mandatory for correctness, not merely conventional**, and a mutation
+that removes it mis-reports every unassigned 32-bit non-prefetchable BAR as
+absent. (A 64-bit prefetchable BAR would survive such a mutation, reading
+`0x0000000C` — which is why the mutation test must use a *32-bit
+non-prefetchable* BAR to reach the condition. Brief §7's reach-the-condition
+rule, applied ahead of time.)
+
+### E.2.3 Worked examples
+
+| case | readback | `encoded` | size |
+|---|---|---|---|
+| 16 KB 32-bit non-prefetchable | `0xFFFFC000` | `0xFFFFC000` | `~ + 1 = 0x4000` = 16 KB |
+| unimplemented | `0x00000000` | `0x00000000` | skip (step 4) |
+| 256-byte 32-bit | `0xFFFFFF00` | `0xFFFFFF00` | `0x100` = 256 B |
+
+---
+
+## E.3 ⭐ 64-bit BAR pairs
+
+**[PCI3 Table 6-4 p.226 `:11207`]** — `[2:1] == 10`:
+
+> *"Base register is 64 bits wide and can be mapped anywhere in the 64-bit
+> address space."*
+
+The pair consumes registers **N and N+1**, and the next candidate index is
+**N+2**.
+
+### E.3.1 The probe order — lazy, not speculative
+
+The FSM cannot know a BAR is 64-bit until it has read register N. Two orders are
+possible:
+
+| order | sequence | verdict |
+|---|---|---|
+| speculative | W(N), W(N+1), R(N), R(N+1) | rejected |
+| **lazy** | **W(N), R(N)** → *decode type* → **W(N+1), R(N+1)** | **chosen** |
+
+**Chosen: lazy.** Rationale, in order of weight:
+
+1. **The speculative order writes a register it may have no business writing.**
+   If N turns out to be 32-bit, the all-ones already sitting in N+1 is harmless
+   only because N+1 is the next candidate anyway — a coincidence, not an
+   argument, and it evaporates if N is the last candidate (register 9).
+2. **There is no pipelining to gain.** The stack is single-outstanding by
+   construction (§2, and `pcie_enum_top` holds exactly one `pcie_cfg_txn`), so
+   both orders cost four serialized transactions. Speculation buys nothing.
+3. **The FSM is simpler:** one uniform "probe register" step, plus a *conditional*
+   second probe. The speculative form needs a two-register write phase whose
+   second half is sometimes wasted.
+
+This is consistent with the brief's §E.3 ("all-ones to both halves, read both") —
+lazy still writes and reads both halves, it just interleaves them in register
+order.
+
+### E.3.2 The combine
+
+```
+encoded64 = {readback_upper, readback_lower & ~32'hF}
+size64    = (~encoded64) + 1                        ; 64-bit two's complement
+```
+
+The mask applies to the **lower half only** — bits 3:0 of the pair are the lower
+register's read-only field; the upper register is 32 ordinary address bits with
+no reserved field at all.
+
+### E.3.3 The assignment write order — and why it is immaterial *here*
+
+**Chosen: lower (N) first, then upper (N+1).**
+
+**Whether it matters:** it does **not**, and the reason is exactly §E.5's
+invariant. Between the two writes the BAR pair holds a half-updated 64-bit
+address — `{old_upper, new_lower}`. On an *enabled* device that transient would
+be a real hazard: the device would briefly decode a garbage address range. Here
+it cannot be, because **Command bit 1 (Memory Space Enable) is still 0** — it is
+0 after reset (`[PCI3]` Table 6-1 p.218 `:10759`) and this FSM does not write it
+until B15, after every BAR is assigned.
+
+So the order is chosen for legibility (ascending register order, matching the
+probe order) rather than for safety, **and the thing that makes it safe is an
+invariant, not the order**. Stated explicitly because it is the kind of
+"harmless today" detail that becomes a bug the moment enumeration re-entry is
+added (Stage H): a re-enumeration of an already-enabled device would have to
+clear Command bit 1 first, and *then* the write order would matter.
+
+### E.3.4 Predicted decode for the acceptance device
+
+NVMe-like: BAR0/1 a 64-bit **prefetchable** 16 KB pair; BAR2-5 unimplemented.
+
+| step | register | written | predicted readback |
+|---|---|---|---|
+| B1/B2 | reg 4 (BAR0, `10h`) | `0xFFFFFFFF` | `0xFFFFC00C` |
+| B3/B4 | reg 5 (BAR1, `14h`) | `0xFFFFFFFF` | `0xFFFFFFFF` |
+
+`0xFFFFC00C` decodes as bit 0 = 0 (memory), `[2:1]` = `10` (64-bit), bit 3 = 1
+(prefetchable).
+
+```
+encoded64 = 0xFFFFFFFF_FFFFC000
+size64    = 0x0000_0000_0000_4000 = 16384 = 16 KB     ✓
+```
+
+Base 2.1 independently corroborates that this is the *normal* shape rather than
+an exotic one: prefetchable BARs **must** support 64-bit addressing
+**[BASE §7.5.2.1 p.491-492]**, and a compliant memory BAR **should** be
+prefetchable. **The 64-bit pair is the expected case for the target device, not
+a corner case.**
+
+---
+
+## E.4 ⭐ The 16-vs-128-byte divergence — a mutation killer that comes free
+
+Two specifications give different floors for a memory BAR:
+
+| source | floor | citation |
+|---|---|---|
+| PCI Local Bus 3.0 | **16 bytes** | §6.2.5.1 p.226 `:11219` — *"a single memory size that is a power of 2 from 16 bytes to 2 GB"* |
+| PCIe Base 2.1 | **128 bytes** | §7.5.2.1 p.491-492 — *"The minimum Memory Space address range requested by a BAR is 128 bytes."* |
+
+**Resolution: PCIe is tighter and wins.** This design enumerates a PCI Express
+link; PCI 3.0 is incorporated only for definitions Base 2.1 does not restate, and
+where Base 2.1 *does* state a stricter requirement it governs. A 16-byte memory
+BAR is legal PCI and **illegal PCIe**.
+
+**Committed decision: a memory-BAR decode below 128 bytes is a sticky ERROR**,
+with its own code, not a warning-and-continue.
+
+> This is **carried forward, not newly decided.** §4.1 already committed to it
+> ("the FSM should treat a sub-128-byte decode as an enumeration fault") while
+> the supporting citation was still `[PCI3-REF]`. §E re-affirms the decision and
+> discharges the citation; the brief's §E.4 "decide and commit" is therefore a
+> confirmation step, not an open question.
+
+Rationale for ERROR over warn-and-continue: a sub-128-byte decode is not a small
+BAR, it is **evidence the decode itself is wrong**. Continuing would assign an
+address derived from a size the FSM has just proved it cannot trust.
+
+### E.4.1 Why this catches the pair mis-decode *by spec*
+
+The brief's most interesting mutation is **"64-bit pair decoded as two
+independent 32-bit BARs."** Trace it on the acceptance device:
+
+1. reg 4 readback `0xFFFFC00C` → `[2:1]` = `10` **ignored** → treated as 32-bit
+   → `encoded = 0xFFFFC000` → size 16 KB. *Plausible. No alarm.*
+2. Candidate index advances by **1** instead of 2 → reg 5 is probed as a BAR in
+   its own right.
+3. reg 5 readback is `0xFFFFFFFF` — the upper half of a 64-bit size field.
+   Decoded as a standalone 32-bit BAR: `encoded = 0xFFFFFFF0`,
+   `size = ~0xFFFFFFF0 + 1 = 0x10` = **16 bytes**.
+4. **16 < 128** → the E.4 floor fires.
+
+**Prediction: the sub-128-byte check kills this mutation, and it does so because
+of a Base 2.1 requirement rather than because a test happened to look.** 16 bytes
+is not an arbitrary tripwire value — it is precisely PCI 3.0's *minimum legal
+32-bit memory BAR* (`:11219`), which is exactly what the upper half of a 64-bit
+size field masquerades as. The two specifications' disagreement is what makes the
+mis-decode detectable.
+
+Secondary predicted kills for the same mutation: `bar_count_o` reports 6 where 5
+is expected, and `bar_is_64_o[0]` reads 0.
+
+⚠️ **Brief §7 requires this be confirmed, not assumed.** If the floor check turns
+out *not* to fire first — e.g. if the index-advance error trips an allocator or
+candidate-range assertion earlier — that ordering must be recorded in the kill
+map as measured, not as predicted here.
+
+---
+
+## E.5 ⭐ Ordering: size everything, enable last
+
+**[PCI3 §6.2.2 Table 6-1 p.218 `:10759`]** gives, for the three Command bits this
+FSM cares about, both the meaning and the reset state:
+
+| bit | function | reset state | line |
+|---|---|---|---|
+| 0 | response to **I/O Space** accesses; 0 disables | **"State after RST# is 0."** | `:10761` |
+| 1 | response to **Memory Space** accesses; 0 disables | **"State after RST# is 0."** | `:10764` |
+| 2 | ability to act as **bus master**; 0 disables | **"State after RST# is 0."** | `:10767` |
+
+**This is the fact that makes all-ones sizing safe.** At enumeration time the
+device's decoders are off, so writing `0xFFFFFFFF` into a BAR — momentarily
+naming an enormous address range — cannot cause the device to claim any
+transaction. A device with Memory Space Enable already set would, briefly,
+decode that range.
+
+**Therefore the invariant:**
+
+> **All sizing and all assignment complete before the Command write, and the
+> Command write is the last transaction of enumeration.**
+
+### E.5.1 Predicted as an on-wire property, not an intention
+
+This must be asserted **on the wire**, not inferred from the FSM's structure:
+
+> **P-CMD-LAST:** across an entire enumeration run, **no CfgWr0 to register 1
+> appears before the final one**, and that final one is the last Configuration
+> Request emitted before `enum_done_o`.
+
+The bench proves this by monitoring every emitted TLP, not by reading a state
+variable. A structural argument ("the FSM can't reach S_CMD early") is exactly
+what the mutation "Command write moved before sizing completes" invalidates, so
+the test must be able to see the violation on the link.
+
+### E.5.2 The interleaving that *is* permitted, and why
+
+The invariant constrains the Command write only. Per-BAR **assignment is
+interleaved with sizing** (assign BAR N as soon as N is decoded, then move to the
+next candidate) rather than deferred to a second pass. The sequence in §E.8 shows
+BAR0/1 assigned at B5/B6 while BAR2-5 are still unprobed.
+
+That is safe for the same reason all-ones sizing is safe — Command bit 1 is still
+0, so a BAR holding a real address decodes nothing. **The single invariant covers
+both**, which is why it is worth stating once, precisely, rather than as a vague
+"do things in the right order".
+
+A second pass would cost 0 extra transactions but would need the FSM to hold all
+six decoded sizes and addresses in registers simultaneously. Interleaving needs
+only the running allocator cursor.
+
+---
+
+## E.6 The Command register enable value
+
+**Write `0x0006`** — bit 1 (Memory Space Enable) + bit 2 (Bus Master Enable).
+
+| bit | value | why | citation |
+|---|---|---|---|
+| 0 — I/O Space Enable | **0** | no I/O BAR is assigned (§E.7), so enabling I/O decode would advertise ranges that were never programmed | [PCI3] Table 6-1 p.218 `:10761` |
+| 1 — Memory Space Enable | **1** | the whole point: the device must answer the memory ranges just assigned | [PCI3] Table 6-1 p.218 `:10764` |
+| 2 — Bus Master Enable | **1** | an NVMe controller DMAs; without this it cannot originate a request | [PCI3] Table 6-1 p.218 `:10767`, and **[BASE Table 7-3]** |
+| 15:3 | **0** | not required for first enumeration; SERR#/parity/interrupt policy is Stage H | — |
+
+> **Note on the brief's §E.6 citation plan.** It asks for [PCI3] Table 6-1 on
+> bits 0/1 and Base 2.1 Table 7-3 on bit 2, "which Base does define". That split
+> is still valid, but it is no longer *necessary*: **PCI 3.0 Table 6-1 covers bit
+> 2 as well**, including its reset state (`:10767`). Both are cited above; the
+> [PCI3] anchor is the primary one, so all three bits rest on a single table.
+
+**Transaction shape:** register 1, `first_be = 0b0011`, 2 bytes. The Command
+register is the **lower** half of the Dword at offset `04h`; the upper half is
+the Status register **[BASE Figure 7-5 p.491]**, which must not be disturbed —
+several Status bits are write-1-to-clear, so a whole-Dword write would clear
+sticky error state the RC has not read.
+
+This reuses the byte-granular config-write path already verified by V2
+(`verilate_rq_rc_top`) and I2 (`verilate_enum_txn_tlp`), and its descriptor is
+already pinned as **E9** in §3.4. Legality re-checked in §3.7: `off=0, bc=2` →
+`tlp_first_be=0011`, `tlp_last_be=0000`, `bc ≤ 4-off` ✓.
+
+---
+
+## E.7 Assignment policy
+
+### E.7.1 The allocator
+
+- Parameter **`MEM_BAR_BASE`**, 64-bit. ⚠️ **Not `BAR_BASE`** — that name is taken
+  by `tlp_bar_decoder.sv:4` / `tlp_layer.sv:15` for the **endpoint-side decode
+  aperture** (inbound CQ, tied off in this design). Different concept, opposite
+  direction. Confirmed still true at `ffea7a4`: `MEM_BAR_BASE` appears nowhere in
+  `src/`, `BAR_BASE` appears only in those endpoint-side files.
+- Allocate **ascending** from `MEM_BAR_BASE`, each BAR **naturally aligned to its
+  own size** — required, not chosen: **[PCI3 §6.2.5.1 p.226 `:11226`]**
+  *"all address spaces used are a power of two in size and are naturally
+  aligned."*
+
+```
+addr   = (cursor + size - 1) & ~(size - 1)      ; round up to natural alignment
+cursor = addr + size
+```
+
+- **Exhaustion → sticky ERROR with a distinct code.** If `addr + size` would
+  exceed a parameterized window (`MEM_BAR_BASE + MEM_BAR_WINDOW`), the FSM stops
+  with a dedicated error code. **Never silent wraparound** — a wrapped allocation
+  produces overlapping BARs that appear to enumerate successfully and fail much
+  later, in Stage F, as data corruption.
+
+### E.7.2 What is skipped
+
+| kind | test | action | citation |
+|---|---|---|---|
+| unimplemented | `encoded == 0` | skip, index += 1, consumes no address space | [PCI3] p.226 `:11224` |
+| **I/O BAR** | `readback[0] == 1` | **skip and log**, index += 1, no assignment | [PCI3] p.225 `:11187` |
+| reserved type | `[2:1]` ∈ {`01`,`11`} | sticky ERROR (§E.1) | [PCI3] Table 6-4 p.226 `:11207` |
+
+**I/O BAR deferral, documented.** NVMe is a memory-BAR device; I/O space is a
+legacy PC mechanism that a PCIe endpoint on this stack has no use for, and
+assigning it would require an I/O address allocator with none of the 64-bit
+headroom the memory allocator has. Skipping is safe **because Command bit 0 stays
+0** (§E.6) — the device is never told to decode I/O space, so an unassigned I/O
+BAR is inert. Assignment is future work (brief §11).
+
+### E.7.3 ⭐ The Expansion ROM BAR is NOT probed
+
+**[PCI3 §6.2.5.2 p.227 `:11283`]** places the Expansion ROM Base Address register
+at offset **`30h`** in a Type 0 header — *"The four-byte register at offset 30h
+in a type 00h predefined header"* (`:11287`) — i.e. **register 12** (`0x30 / 4`).
+The Figure 6-1 header map at p.215 `:10623` independently confirms the offset.
+
+It behaves *almost* like a BAR — p.227 `:11290` says it *"functions exactly like
+a 32-bit Base Address register except that the encoding (and usage) of the bottom
+bits is different"*, and p.228 `:11307` gives it the same all-ones sizing
+procedure — which is exactly why it is worth an explicit exclusion rather than
+silence.
+
+⚠️ The ROM material **straddles a page break**: `:11283`-`:11298` are on p.227,
+`:11300` onward on p.228 (markers 227 at `:11299`). Anchors below carry their own
+page because they fall on the far side of it.
+
+**Candidate registers are 4–9 only.** Prediction, asserted on the wire:
+
+> **P-NO-ROM:** no CfgRd0 and no CfgWr0 to **register 12** ever appears during
+> enumeration.
+
+Reasons: the ROM is an add-in-card boot mechanism with no role in this design;
+its bottom bits use a *different* encoding (bit 0 is Expansion ROM Enable, not a
+Memory Space Indicator — Figure 6-7, p.228 `:11318`,`:11323`), so feeding it to
+the §E.2 decoder would produce a wrong answer rather than a harmless one; and
+p.228 `:11331` notes the
+ROM decodes only when *both* Memory Space Enable and the ROM Enable bit are set,
+so leaving it untouched is inert by construction.
+
+### E.7.4 Predicted assignment for the acceptance device
+
+`MEM_BAR_BASE = 0x0000_0000_8000_0000`, one 16 KB 64-bit prefetchable pair:
+
+| BAR | size | assigned address | register writes |
+|---|---|---|---|
+| 0/1 (64-bit pair) | 16 KB | `0x0000_0000_8000_0000` | reg 4 ← `0x80000000`, reg 5 ← `0x00000000` |
+| 2–5 | — | unimplemented, skipped | none |
+
+Cursor ends at `0x8000_4000`. `bar_count_o = 1` (**one BAR**, not two — a 64-bit
+pair is one BAR occupying two registers), `bar_is_64_o[0] = 1`,
+`bar_prefetch_o[0] = 1`, `bar_size_o[0] = 0x4000`.
+
+⚠️ **`bar_count_o` counts BARs, not registers.** The mutation "64-bit pair
+treated as two 32-bit BARs" reports 2 here. Stated because "count" is ambiguous
+in English and unambiguous in the RTL, and the test must assert the RTL's meaning.
+
+---
+
+## E.8 Exact RQ descriptors for the BAR sequence
+
+Same method as §3.4 and §D.4. Target BDF = bus 1, device 0, function 0
+(`completer_id = 0x0100`). All: `dword_count = 1`, `last_be = 0000`, `tc = 0`,
+`attr = 0`, `poisoned = 0`, Tag field zero (core-managed, ignored).
+`tuser[3:0] = first_be`, `tuser[7:4] = last_be = 0`.
+
+Field positions **[PG213 Table 61 `:3711`,`:3720`,`:3728`,`:3735`]**; request type
+encodings **[PG213 Table 57 via `:3725`]**; on-wire DW2 packing
+**[BASE Figure 2-18 p.80]**; the fixed Length/Last-DW-BE/TC/Attr
+**[BASE §2.2.7 p.79]**.
+
+**Sequence for the acceptance device** (64-bit prefetchable BAR0/1, BAR2-5
+unimplemented) — 15 transactions:
+
+| # | transaction | type | reg | first_be | `s_axis_rq_tdata[127:0]` | on-wire DW2 | payload |
+|---|---|---|---|---|---|---|---|
+| **B1** | BAR0 all-ones write | CfgWr0 `1010` | 4 | `0b1111` | `0x00010000000050010000000000000010` | `0x01000010` | `0xFFFFFFFF` |
+| **B2** | BAR0 readback | CfgRd0 `1000` | 4 | `0b1111` | `0x00010000000040010000000000000010` | `0x01000010` | — |
+| **B3** | BAR1 all-ones write | CfgWr0 `1010` | 5 | `0b1111` | `0x00010000000050010000000000000014` | `0x01000014` | `0xFFFFFFFF` |
+| **B4** | BAR1 readback | CfgRd0 `1000` | 5 | `0b1111` | `0x00010000000040010000000000000014` | `0x01000014` | — |
+| **B5** | BAR0 assign (lower) | CfgWr0 `1010` | 4 | `0b1111` | `0x00010000000050010000000000000010` | `0x01000010` | `0x80000000` |
+| **B6** | BAR1 assign (upper) | CfgWr0 `1010` | 5 | `0b1111` | `0x00010000000050010000000000000014` | `0x01000014` | `0x00000000` |
+| **B7** | BAR2 all-ones write | CfgWr0 `1010` | 6 | `0b1111` | `0x00010000000050010000000000000018` | `0x01000018` | `0xFFFFFFFF` |
+| **B8** | BAR2 readback | CfgRd0 `1000` | 6 | `0b1111` | `0x00010000000040010000000000000018` | `0x01000018` | — |
+| **B9** | BAR3 all-ones write | CfgWr0 `1010` | 7 | `0b1111` | `0x0001000000005001000000000000001C` | `0x0100001C` | `0xFFFFFFFF` |
+| **B10** | BAR3 readback | CfgRd0 `1000` | 7 | `0b1111` | `0x0001000000004001000000000000001C` | `0x0100001C` | — |
+| **B11** | BAR4 all-ones write | CfgWr0 `1010` | 8 | `0b1111` | `0x00010000000050010000000000000020` | `0x01000020` | `0xFFFFFFFF` |
+| **B12** | BAR4 readback | CfgRd0 `1000` | 8 | `0b1111` | `0x00010000000040010000000000000020` | `0x01000020` | — |
+| **B13** | BAR5 all-ones write | CfgWr0 `1010` | 9 | `0b1111` | `0x00010000000050010000000000000024` | `0x01000024` | `0xFFFFFFFF` |
+| **B14** | BAR5 readback | CfgRd0 `1000` | 9 | `0b1111` | `0x00010000000040010000000000000024` | `0x01000024` | — |
+| **B15** | **Command write** | CfgWr0 `1010` | 1 | `0b0011` | `0x00010000000050010000000000000004` | `0x01000004` | `0x00000006` |
+
+Write payloads are one beat: `tdata` as shown, `tkeep = 0x1`, `tlast = 1`.
+
+### E.8.1 Cross-check against the goldens pinned before this section existed
+
+The descriptor builder used to generate the table above was independently
+re-derived from §3.2's field positions, then checked against the **eight**
+descriptors already pinned in §3.4 and §D.4 — which were committed in earlier
+increments, before `pcie_enum_bar` was contemplated:
+
+| §3.4 / §D.4 golden | reg | type | result |
+|---|---|---|---|
+| E1 / D-P | 0 | CfgRd0 | ✅ match |
+| E3 / D-H | 3 | CfgRd0 | ✅ match |
+| E4 | 4 | CfgWr0 | ✅ match |
+| E5 | 4 | CfgRd0 | ✅ match |
+| E6 | 5 | CfgWr0 | ✅ match |
+| E7 | 5 | CfgRd0 | ✅ match |
+| E8 | 9 | CfgRd0 | ✅ match |
+| E9 | 1 | CfgWr0 | ✅ match |
+
+**All eight match exactly.** The four descriptors that are new here (regs 6, 7,
+8 — B7-B12) follow the identical construction with only `reg_num` varying, so the
+whole table rests on a builder validated against previously committed goldens
+rather than on fresh arithmetic.
+
+### E.8.2 Descriptors that repeat, and what the bench must therefore assert
+
+⚠️ **B1, B5 and B2 differ only in payload and request type; B1 and B5 have
+byte-identical descriptors.** Both are CfgWr0 to register 4 with `first_be=1111`.
+The all-ones write and the assignment write are indistinguishable on `tdata`
+alone.
+
+**Consequence, the same shape as §3.4's E2/E3 warning:** a test that asserts only
+on the RQ descriptor cannot tell the sizing write from the assignment write, and
+would pass against an FSM that emitted the all-ones write twice and never
+assigned anything. **Every BAR-phase write assertion must include the payload
+Dword**, and the acceptance test must assert the payloads in sequence.
+
+This is the §E.9 `EF3` prediction and it is the most likely way to build a
+vacuously-passing BAR bench.
+
+### E.8.3 Legality pre-check
+
+Every descriptor above is a `first_be=1111` or `first_be=0011` single-Dword
+config request to a register in `[1, 9]`. These are the same two shapes already
+hand-evaluated against `pcie_rq_if.sv:272-319` in §3.7, with only `reg_num`
+varying — and `reg_num` enters only `bad_4kb` (`0x24 + 4 ≪ 4096` ✓).
+
+**Prediction: `rq_protocol_error_o` stays low for the entire BAR sequence.** Any
+pulse is a stop-and-report event.
+
+---
+
+## E.9 Predicted FAIL sets for the falsification runs
+
+Following §D.7's method: predict what the *first* run does before the RTL exists,
+so a surprise is informative.
+
+| # | run | prediction |
+|---|---|---|
+| **EF1** | Commit D: `verilate_enum_bar` with the bench wired and `pcie_enum_bar.sv` / `pcie_enum_top.sv` absent from `rc_core.core` | Elaboration failure, **zero `TESTS=` lines**, exit non-zero. Expected `%Error-MODMISSING: … Cannot find file containing module: 'pcie_enum_top'` — naming **`pcie_enum_top`**, not `pcie_enum_bar`, because the shim instantiates the top and Verilator reports the first unresolvable module it reaches. |
+| **EF2** | Commit E: `verilate_enum_bar_tlp` likewise | Same, naming `pcie_enum_top` from the integration shim. |
+| **EF3** | ⭐ any BAR write test asserting only on the RQ **descriptor** | **Vacuous** — §E.8.2. B1 and B5 have identical descriptors, so such a test passes against an FSM that never assigns. Every write assertion must include the payload Dword. |
+| **EF4** | the "all BARs unimplemented" test | Must assert `enum_done_o = 1` **and** `bar_count_o = 0` **and** `enum_error_o = 0`. Asserting only `bar_count_o = 0` passes against a dead FSM — `bar_count_o` is reset-low. **This is DF4's shape, one increment on**; the reset-value trap recurs wherever a "nothing found" outcome is encoded as a zero. |
+| **EF5** | the E.5 ordering test (P-CMD-LAST) | Must be asserted **on the wire** over the whole run, not as "the FSM was in S_CMD last". A state-based assertion cannot fail for the mutation it exists to catch. |
+| **EF6** | the sub-128-byte test | Must reach the condition with a **memory** BAR. An I/O BAR decoding below 128 bytes is legal and must *not* error, so a test using an I/O BAR would assert the opposite of the intended property. |
+| **EF7** | ⭐ the "all-ones write removed" mutation test | Must use a **32-bit non-prefetchable** BAR (§E.2.2). With a 64-bit or prefetchable BAR the readback is `0x0000000C`, not `0x00000000`, and the mutation survives — the test would reach the mutated *line* without reaching the mutated *condition*. Brief §7's rule, applied before the test is written. |
+| **EF8** | the allocator-exhaustion test | Must distinguish exhaustion from wraparound: assert the **error code**, not merely `enum_error_o`. A wrapping allocator asserts no error at all, so `enum_error_o = 1` is the right assertion for the *fixed* design and proves nothing about *which* fault fired. |
+
+### E.9.1 The `settle()`-first blind spot — designed against, third occurrence
+
+Brief §7 requires this be addressed explicitly rather than discovered a third
+time. The pattern: a test that calls `settle()` before injecting an event gives
+the DUT a quiet window it would not have in traffic, and hides survivors that
+depend on an event landing *mid-sequence* (2b-1 e9/e10; 2b-2 socket invariant 2).
+
+**Committed for Commit D:** at least two BAR-phase tests must exercise a timeout
+or late-CPL event **with no preceding `settle()`** — the event lands while a
+transaction is in flight and the FSM is between candidate registers.
+
+Predicted candidates, chosen because they straddle the awkward boundaries:
+
+| test | event lands | why this boundary |
+|---|---|---|
+| timeout on the **upper half** of a 64-bit pair (B4) | between B3 and B4, no settle | the FSM is mid-pair — it has consumed index N but not yet committed N+2 |
+| late CPL arriving during the **assignment** write (B5/B6) | mid-assignment, no settle | the only phase where the FSM holds a decoded size *and* an allocator cursor |
+
+**Whether this changes any kill is an open measurement**, to be recorded in the
+Commit-D kill map either way. Recording "it changed nothing" is a real result and
+must not be silently dropped — that is what makes the third occurrence a test of
+the *pattern* rather than another anecdote.
