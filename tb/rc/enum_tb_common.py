@@ -5,6 +5,34 @@ and decoders below are GOLDENS, and a golden that exists in three slightly
 divergent copies is not a golden.  `tb_rc.core` gives this file its own `copyto`
 entry in every fileset that needs it.
 
+Commit 2b-3 widened the module's remit from goldens to the whole shared bench
+surface -- the pcie_rq_rc_top monitor, the cumulative credit drip, the TLP
+request decoder, the on-wire assertion, the enum_error_e codes and the golden
+device the benches model.  Those were per-file copies until the BAR benches were
+about to make a third and fourth.  Measured effect: symbols defined in more than
+one bench file went from 29 to 9, and the nine that remain are per-bench by
+design, not by neglect:
+
+  settle, init                    -- see the exclusions note below
+  CRS_RETRY_MAX                   -- each bench's own .sv shim override
+  send_cmd, recv_rsp              -- pcie_cfg_txn's command port; no analogue
+                                     in a sequencer bench
+  assert_on_wire                  -- now a ~10-line BINDING onto the shared
+                                     assert_cfg_tlp_on_wire, not a second copy
+                                     of the goldens; each bench binds the
+                                     optional properties it actually owns
+  start_scan, status, wait_terminal -- the scan phase's status surface.  Left
+                                     until Commit D on purpose: pcie_enum_top's
+                                     surface grows BAR outputs there, so
+                                     consolidating now would mean doing it
+                                     twice against a shape that is about to
+                                     change.
+
+!! Two exclusions are deliberate and load-bearing; both are argued in full at
+SS THE INTEGRATION-BENCH HELPERS below.  `settle()` stays local because its
+default IS sim time, and the completers stay separate because what they share is
+an interface contract, not an implementation.
+
 Everything here is hand-derived from the specification:
 
   RQ descriptor, Configuration form ... PG213 v1.3 Table 61
@@ -563,3 +591,313 @@ class Socket:
         d.cpl_timeout_valid_i.value = 1
         await RisingEdge(d.clk_i)
         d.cpl_timeout_valid_i.value = 0
+
+
+# ===========================================================================
+# SS THE INTEGRATION-BENCH HELPERS (Commit 2b-3)
+#
+# Everything below is shared by the _tlp benches -- the ones that put a REAL
+# pcie_rq_rc_top behind the DUT. They were duplicated per file until 2b-3.
+# Consolidated here BEFORE a third copy was created by the BAR benches, which
+# is the point at which a divergent copy stops being a nuisance and starts
+# being a silent disagreement between two goldens.
+#
+# !! WHAT IS DELIBERATELY *NOT* HERE, AND WHY
+#
+#   settle()      -- three different defaults across four benches (20 / 30 /
+#                    40) and, unlike every waiter below, it is NOT an
+#                    early-exit loop: it always runs its full count, so the
+#                    default IS sim time. Sharing it under one default would
+#                    move verilate_enum_txn and verilate_enum_scan off their
+#                    pinned sim end times. Four honest local copies beat one
+#                    shared body wrapped per bench to restore a per-bench
+#                    constant. See the Commit 2b-3 message.
+#
+#   init()        -- four variants with different signatures, because the
+#                    benches drive different DUT port sets.
+#
+#   the completers -- ConfigCompleter (2b-1) and ConfigSpaceCompleter (2b-2)
+#                    are genuinely different models. What they SHARE is the
+#                    four-name interface .start / .seen / .wait_for /
+#                    .complete, and that contract is specified in
+#                    EP_VERIFICATION_MODEL_SPEC.md rather than forced into a
+#                    common base class. A third implementation (BAR write-mask
+#                    semantics) joins them in Commit D.
+#
+#   send_cmd / recv_rsp -- pcie_cfg_txn's command port only; no analogue in a
+#                    sequencer bench.
+# ===========================================================================
+
+# The RC's own identity and its target, identical in every integration bench.
+CLK_NS = 4
+CPL_TIMEOUT_CYCLES = 4096       # the SHIPPED default; credit-starvation tests
+                                # need the real value, not a shortened one
+RID = 0x1234                    # the Root Complex's own requester_id_i
+BDF = 0x0100                    # the target: bus 1, device 0, function 0
+BUS, DEV, FN = 0x01, 0x00, 0x00
+
+# pcie_enum_pkg::enum_error_e. Duplicated in both scan benches before 2b-3;
+# the BAR benches would have made four copies.
+ENUM_ERR_NONE = 0
+ENUM_ERR_UR_POST_PROBE = 1
+ENUM_ERR_CA = 2
+ENUM_ERR_CRS_EXHAUSTED = 3
+ENUM_ERR_TIMEOUT = 4
+
+
+class TlpRequest:
+    """One request TLP observed leaving the Transaction Layer.
+
+    The field set is the UNION of what the two _tlp benches decoded before
+    consolidation: 2b-1 needed tlp_type and ext_reg, 2b-2 needed bus/dev/fn for
+    its device-0 assertion. Both are cheap, and the BAR benches need both --
+    they assert on writes (tlp_type) and on the routing Dword (bus/dev/fn).
+    """
+
+    def __init__(self, dwords):
+        dw0, dw1, dw2 = dwords[0], dwords[1], dwords[2]
+        self.dwords = dwords
+        self.dw0, self.dw1, self.dw2 = dw0, dw1, dw2
+        self.fmt = (dw0 >> 5) & 0x7
+        self.tlp_type = dw0 & 0x1F
+        self.length_dw = dw0_length(dw0)
+        self.requester_id = (dw1 >> 16) & 0xFFFF
+        self.tag = (dw1 >> 8) & 0xFF
+        self.last_be = (dw1 >> 4) & 0xF
+        self.first_be = dw1 & 0xF
+        self.reg_num = (dw2 >> 2) & 0x3F
+        self.ext_reg = (dw2 >> 8) & 0xF
+        self.bus = (dw2 >> 24) & 0xFF
+        self.dev = (dw2 >> 19) & 0x1F
+        self.fn = (dw2 >> 16) & 0x7
+        self.payload = dwords[3:]
+        self.is_read = (self.fmt & 0b010) == 0
+
+    def __repr__(self):
+        kind = "Rd" if self.is_read else "Wr"
+        return (f"Cfg{kind}0(tag={self.tag:#04x}, "
+                f"bdf={self.bus:02x}:{self.dev:02x}.{self.fn}, "
+                f"reg={self.reg_num:#04x}, fbe={self.first_be:#06b}, "
+                f"payload={[hex(w) for w in self.payload]})")
+
+
+# ---------------------------------------------------------------------------
+# Flow control
+# ---------------------------------------------------------------------------
+def set_credits(dut, ph=0xFF, pd=0xFFF, nph=0xFF, npd=0xFFF, cplh=0xFF, cpld=0xFFF):
+    dut.fc_ph_i.value = ph
+    dut.fc_pd_i.value = pd
+    dut.fc_nph_i.value = nph
+    dut.fc_npd_i.value = npd
+    dut.fc_cplh_i.value = cplh
+    dut.fc_cpld_i.value = cpld
+
+
+class CreditDrip:
+    """A receiver returning credit the way a real one does: CUMULATIVELY.
+
+    !! fc_*_i is the raw CREDITS_ALLOCATED off the wire (Base 2.1 SS2.6.1.2
+    p.141) -- there is no arithmetic anywhere on the path.  An UpdateFC
+    therefore advertises a RUNNING TOTAL that only ever grows, and a drip that
+    re-pulses a constant is advertising "I have still only ever allocated N",
+    which blocks the transmitter forever once N are consumed.
+
+    That failure is indistinguishable from a DUT deadlock, which is exactly why
+    the drip is itself mutation-tested: re-pulsing a constant must make the
+    tests that depend on this coroutine FAIL, proving they test the DUT and not
+    the coroutine.
+    """
+
+    def __init__(self, dut, nph=1, npd=1, period=40, step=1):
+        self.dut = dut
+        self.nph = nph
+        self.npd = npd
+        self.period = period
+        self.step = step
+        self.updates = 0
+        self._run_flag = True
+
+    def start(self):
+        cocotb.start_soon(self._run())
+
+    def stop(self):
+        self._run_flag = False
+
+    async def _run(self):
+        d = self.dut
+        while True:
+            for _ in range(self.period):
+                await RisingEdge(d.clk_i)
+            if not self._run_flag:
+                continue
+            self.nph = (self.nph + self.step) & 0xFF
+            self.npd = (self.npd + self.step) & 0xFFF
+            d.fc_nph_i.value = self.nph
+            d.fc_npd_i.value = self.npd
+            d.fc_update_valid_i.value = 1
+            await RisingEdge(d.clk_i)
+            d.fc_update_valid_i.value = 0
+            self.updates += 1
+
+
+class Mon:
+    """Every error and event surface of pcie_rq_rc_top, sampled each cycle.
+
+    !! THE WAITER BOUNDS WERE UNIFIED *UPWARD* AT CONSOLIDATION.  The two _tlp
+    benches carried different defaults (2b-1: CPL_TIMEOUT_CYCLES+600 and 400;
+    2b-2: +900 and 600).  Both waiters are EARLY-EXIT loops -- they return on
+    the cycle the expected count is reached and raise only on exhaustion, which
+    is a failure, never a normal path.  So while the suite is green every call
+    returns early and the bound is never reached, which makes raising it
+    provably sim-time-neutral.  Lowering it would not be: a call that genuinely
+    needed more than 400 cycles would turn a PASS into a FAIL.  The asymmetry is
+    the whole argument for picking the larger value rather than either one.
+    """
+
+    def __init__(self, dut):
+        self.dut = dut
+        self.tags_presented = []
+        self.rq_errors = []
+        self.rc_errors = []
+        self.unexpected = []
+        self.command_errors = []
+        self.tx_errors = []
+        self.timeouts = []
+        self.lates = []
+        self.credit_errors = 0
+        self.blocked_seen = False
+        self.rq_tvalid_seen = False
+
+    def start(self):
+        cocotb.start_soon(self._run())
+
+    async def _run(self):
+        d = self.dut
+        while True:
+            await RisingEdge(d.clk_i)
+            await ReadOnly()
+            if int(d.rst_i.value):
+                continue
+            if int(d.pcie_rq_tag_vld_o.value):
+                self.tags_presented.append(int(d.pcie_rq_tag_o.value))
+            if int(d.rq_protocol_error_o.value):
+                self.rq_errors.append(int(d.rq_error_code_o.value))
+            if int(d.rc_protocol_error_o.value):
+                self.rc_errors.append(int(d.rc_error_code_o.value))
+            if int(d.rc_unexpected_completion_o.value):
+                self.unexpected.append(int(d.rc_completion_error_code_o.value))
+            if int(d.command_error_valid_o.value):
+                self.command_errors.append(int(d.command_error_code_o.value))
+            if int(d.tx_error_valid_o.value):
+                self.tx_errors.append(int(d.tx_error_code_o.value))
+            if int(d.cpl_timeout_valid_o.value):
+                self.timeouts.append(int(d.cpl_timeout_tag_o.value))
+            if int(d.late_cpl_valid_o.value):
+                self.lates.append(int(d.late_cpl_tag_o.value))
+            if int(d.credit_error_o.value):
+                self.credit_errors += 1
+            if int(d.tx_fc_blocked_o.value):
+                self.blocked_seen = True
+            if int(d.s_axis_rq_tvalid.value):
+                self.rq_tvalid_seen = True
+
+    async def wait_timeouts(self, count, cycles=CPL_TIMEOUT_CYCLES + 900):
+        for _ in range(cycles):
+            await RisingEdge(self.dut.clk_i)
+            if len(self.timeouts) >= count:
+                return
+        raise AssertionError(
+            f"expected {count} cpl_timeout strobes, saw {len(self.timeouts)}")
+
+    async def wait_lates(self, count, cycles=600):
+        for _ in range(cycles):
+            await RisingEdge(self.dut.clk_i)
+            if len(self.lates) >= count:
+                return
+        raise AssertionError(
+            f"expected {count} late_cpl strobes, saw {len(self.lates)}")
+
+    def clean(self, allow_timeouts=False, allow_orphans=False):
+        """Nothing fired that the prediction did not name.
+
+        credit_error_o is asserted silent unconditionally: a single-Dword config
+        request can never trip it by construction, since that needs a request
+        exceeding the peer's ENTIRE initial data advertisement.
+        """
+        assert self.rq_errors == [], f"RQ protocol errors: {self.rq_errors}"
+        assert self.unexpected == [], f"unexpected completions: {self.unexpected}"
+        assert self.command_errors == [], f"TL command errors: {self.command_errors}"
+        assert self.tx_errors == [], f"TX errors: {self.tx_errors}"
+        assert self.credit_errors == 0, \
+            (f"credit_error_o fired {self.credit_errors}x -- a one-Dword config "
+             "request cannot exhaust an entire data advertisement")
+        if not allow_orphans:
+            assert self.rc_errors == [], f"RC protocol errors: {self.rc_errors}"
+        if not allow_timeouts:
+            assert self.timeouts == [], f"completion timeouts: {self.timeouts}"
+            assert self.lates == [], f"late completions drained: {self.lates}"
+
+
+def assert_cfg_tlp_on_wire(req, *, write, reg_num, first_be, tag, what="",
+                           require_device0=False):
+    """Assert one emitted Configuration TLP against hand-derived goldens.
+
+    Base 2.1 SS2.2.7 p.79 fixes Length to 1 Dword, Last DW BE to 0000b and
+    TC/Attr/AT to zero for every Configuration Request; Figure 2-18 p.80 fixes
+    the third header Dword's BDF packing.  SPEC_PREDICTIONS_ENUM.md SS3.4,
+    SSD.4 and SSE.8 pin the resulting values.
+
+    require_device0 is opt-IN, not the default.  It is the SS7.3.1 p.479
+    device-0-only property, which is the presence scan's subject; a bench that
+    does not own that property should not silently start asserting it.
+    """
+    exp0 = cfg_wire_dw0(write=write, length_dw=1)
+    exp1 = cfg_wire_dw1(RID, tag, first_be)
+    exp2 = cfg_wire_dw2(BUS, DEV, FN, reg_num)
+    assert req.dw0 == exp0, \
+        f"{what}DW0 {req.dw0:#010x} != golden {exp0:#010x}"
+    assert req.dw1 == exp1, \
+        f"{what}DW1 {req.dw1:#010x} != golden {exp1:#010x} (rid/tag/BE)"
+    assert req.dw2 == exp2, \
+        f"{what}DW2 {req.dw2:#010x} != golden {exp2:#010x} (BDF routing Dword)"
+    assert req.length_dw == 1, \
+        f"{what}Length {req.length_dw} != 1 (Base 2.1 SS2.2.7 p.79)"
+    assert req.last_be == 0, \
+        f"{what}Last DW BE {req.last_be:#06b} != 0000b (Base 2.1 SS2.2.7 p.79)"
+    if require_device0:
+        assert req.dev == 0 and req.fn == 0, (
+            f"{what}the request named device {req.dev} function {req.fn}. Only "
+            "device 0 may be probed on this link (SS7.3.1 p.479)")
+
+
+# ---------------------------------------------------------------------------
+# The golden device the enumeration benches model, and its Type 0 header.
+#
+# One device description, not one per bench.  Commit D's acceptance test
+# enumerates this same device end to end (SPEC_PREDICTIONS_ENUM.md SSE.8), so
+# consolidating here is the "before a third copy" case the 2b-3 brief names.
+# ---------------------------------------------------------------------------
+SCAN_BUS = 0x01
+
+VENDOR = 0x144D             # a real-looking Vendor ID; NOT 0xFFFF -- absence is
+                            # signalled by UR alone, never by a sentinel (SSD)
+DEVICE = 0xA80A
+REG0 = (DEVICE << 16) | VENDOR
+
+HDR_TYPE0 = 0x00            # endpoint Function
+HDR_TYPE0_MF = 0x80         # endpoint Function, multi-function (bit 7)
+HDR_TYPE1 = 0x01            # PCI-to-PCI bridge -- [PCI3 SS6.2.1 p.216 :10685]
+
+
+def reg3(header_type, bist=0x00, mlt=0x00, cls=0x10):
+    """Configuration register 3 (byte offset 0Ch).
+
+    {BIST[31:24], Header Type[23:16], Master Latency Timer[15:8],
+     Cache Line Size[7:0]} -- [BASE Figure 7-5 p.491].
+    """
+    return (bist << 24) | ((header_type & 0xFF) << 16) | (mlt << 8) | cls
+
+
+def outcome_name(value):
+    """pcie_enum_pkg::txn_outcome_e as a name, for assertion messages."""
+    return TXN_NAME.get(value, f"<unknown {value}>")

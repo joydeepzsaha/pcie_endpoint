@@ -40,24 +40,23 @@ from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge
 
 from enum_tb_common import (
+    BDF, BUS, CLK_NS, CPL_TIMEOUT_CYCLES, DEV, FN, RID,
     CFG_BE_DWORD, CFG_BE_LOWER_HALF,
     CFG_REG_BAR0, CFG_REG_CACHE_HEADER, CFG_REG_COMMAND_STATUS,
     CFG_REG_VENDOR_DEVICE,
     CPL_CRS, CPL_SC, CPL_UR,
     RC_ERR_ORPHAN_DATA,
     TXN_NAME, TXN_OK, TXN_TIMEOUT, TXN_UR,
+    CreditDrip, Mon, TlpRequest,
+    assert_cfg_tlp_on_wire, outcome_name, set_credits,
     cfg_wire_dw0, cfg_wire_dw1, cfg_wire_dw2,
     cpl_dw0, cpl_dw1, cpl_dw2, dw0_length,
 )
 
-CLK_NS = 4
-
 CRS_RETRY_MAX = 3            # tb_pcie_enum_txn_tlp.sv override
-CPL_TIMEOUT_CYCLES = 4096    # left at the SHIPPED default deliberately
 
-RID = 0x1234                 # the Root Complex's own requester_id_i
-BDF = 0x0100                 # the target: bus 1, device 0, function 0
-BUS, DEV, FN = 0x01, 0x00, 0x00
+# CLK_NS / CPL_TIMEOUT_CYCLES / RID / BDF / BUS,DEV,FN now come from
+# enum_tb_common -- they were byte-identical in all four enum benches.
 
 
 # ==========================================================================
@@ -75,31 +74,6 @@ BUS, DEV, FN = 0x01, 0x00, 0x00
 # verification model.  Every assertion in this file is made by the test against
 # a hand-derived golden, never by the completer against the DUT.
 # ==========================================================================
-class TlpRequest:
-    """One request TLP observed leaving the Transaction Layer."""
-
-    def __init__(self, dwords):
-        dw0, dw1, dw2 = dwords[0], dwords[1], dwords[2]
-        self.dwords = dwords
-        self.dw0, self.dw1, self.dw2 = dw0, dw1, dw2
-        self.fmt = (dw0 >> 5) & 0x7
-        self.tlp_type = dw0 & 0x1F
-        self.length_dw = dw0_length(dw0)
-        self.requester_id = (dw1 >> 16) & 0xFFFF
-        self.tag = (dw1 >> 8) & 0xFF
-        self.last_be = (dw1 >> 4) & 0xF
-        self.first_be = dw1 & 0xF
-        self.reg_num = (dw2 >> 2) & 0x3F
-        self.ext_reg = (dw2 >> 8) & 0xF
-        self.payload = dwords[3:]
-        self.is_read = (self.fmt & 0b010) == 0
-
-    def __repr__(self):
-        kind = "Rd" if self.is_read else "Wr"
-        return (f"Cfg{kind}0(tag={self.tag:#04x}, reg={self.reg_num:#04x}, "
-                f"fbe={self.first_be:#06b}, payload={[hex(w) for w in self.payload]})")
-
-
 class ConfigCompleter:
     def __init__(self, dut, requester_id=RID, completer_id=BDF):
         self.dut = dut
@@ -170,150 +144,9 @@ class ConfigCompleter:
 # ==========================================================================
 # Monitor -- every error surface, concurrently
 # ==========================================================================
-class Mon:
-    def __init__(self, dut):
-        self.dut = dut
-        self.tags_presented = []
-        self.rq_errors = []
-        self.rc_errors = []
-        self.unexpected = []
-        self.command_errors = []
-        self.tx_errors = []
-        self.timeouts = []
-        self.lates = []
-        self.credit_errors = 0
-        self.blocked_seen = False
-        self.rq_tvalid_seen = False
-
-    def start(self):
-        cocotb.start_soon(self._run())
-
-    async def _run(self):
-        d = self.dut
-        while True:
-            await RisingEdge(d.clk_i)
-            await ReadOnly()
-            if int(d.rst_i.value):
-                continue
-            if int(d.pcie_rq_tag_vld_o.value):
-                self.tags_presented.append(int(d.pcie_rq_tag_o.value))
-            if int(d.rq_protocol_error_o.value):
-                self.rq_errors.append(int(d.rq_error_code_o.value))
-            if int(d.rc_protocol_error_o.value):
-                self.rc_errors.append(int(d.rc_error_code_o.value))
-            if int(d.rc_unexpected_completion_o.value):
-                self.unexpected.append(int(d.rc_completion_error_code_o.value))
-            if int(d.command_error_valid_o.value):
-                self.command_errors.append(int(d.command_error_code_o.value))
-            if int(d.tx_error_valid_o.value):
-                self.tx_errors.append(int(d.tx_error_code_o.value))
-            if int(d.cpl_timeout_valid_o.value):
-                self.timeouts.append(int(d.cpl_timeout_tag_o.value))
-            if int(d.late_cpl_valid_o.value):
-                self.lates.append(int(d.late_cpl_tag_o.value))
-            if int(d.credit_error_o.value):
-                self.credit_errors += 1
-            if int(d.tx_fc_blocked_o.value):
-                self.blocked_seen = True
-            if int(d.s_axis_rq_tvalid.value):
-                self.rq_tvalid_seen = True
-
-    async def wait_timeouts(self, count, cycles=CPL_TIMEOUT_CYCLES + 600):
-        for _ in range(cycles):
-            await RisingEdge(self.dut.clk_i)
-            if len(self.timeouts) >= count:
-                return
-        raise AssertionError(
-            f"expected {count} cpl_timeout strobes, saw {len(self.timeouts)}")
-
-    async def wait_lates(self, count, cycles=400):
-        for _ in range(cycles):
-            await RisingEdge(self.dut.clk_i)
-            if len(self.lates) >= count:
-                return
-        raise AssertionError(
-            f"expected {count} late_cpl strobes, saw {len(self.lates)}")
-
-    def clean(self, allow_timeouts=False, allow_orphans=False):
-        """Nothing fired that the prediction did not name.
-
-        credit_error_o is asserted silent unconditionally: a single-Dword config
-        request can never trip it by construction, since that needs a request
-        exceeding the peer's ENTIRE initial data advertisement.
-        """
-        assert self.rq_errors == [], f"RQ protocol errors: {self.rq_errors}"
-        assert self.unexpected == [], f"unexpected completions: {self.unexpected}"
-        assert self.command_errors == [], f"TL command errors: {self.command_errors}"
-        assert self.tx_errors == [], f"TX errors: {self.tx_errors}"
-        assert self.credit_errors == 0, \
-            (f"credit_error_o fired {self.credit_errors}x -- a one-Dword config "
-             "request cannot exhaust an entire data advertisement")
-        if not allow_orphans:
-            assert self.rc_errors == [], f"RC protocol errors: {self.rc_errors}"
-        if not allow_timeouts:
-            assert self.timeouts == [], f"completion timeouts: {self.timeouts}"
-            assert self.lates == [], f"late completions drained: {self.lates}"
-
-
 # ==========================================================================
 # Flow control
 # ==========================================================================
-def set_credits(dut, ph=0xFF, pd=0xFFF, nph=0xFF, npd=0xFFF, cplh=0xFF, cpld=0xFFF):
-    dut.fc_ph_i.value = ph
-    dut.fc_pd_i.value = pd
-    dut.fc_nph_i.value = nph
-    dut.fc_npd_i.value = npd
-    dut.fc_cplh_i.value = cplh
-    dut.fc_cpld_i.value = cpld
-
-
-class CreditDrip:
-    """A receiver returning credit the way a real one does: CUMULATIVELY.
-
-    !! fc_*_i is the raw CREDITS_ALLOCATED off the wire (Base 2.1 SS2.6.1.2
-    p.141) -- there is no arithmetic anywhere on the path.  An UpdateFC
-    therefore advertises a RUNNING TOTAL that only ever grows, and a drip that
-    re-pulses a constant is advertising "I have still only ever allocated N",
-    which blocks the transmitter forever once N are consumed.
-
-    That failure is indistinguishable from a DUT deadlock, which is exactly why
-    the drip is itself mutation-tested (see the commit message): re-pulsing a
-    constant must make the tests that depend on this coroutine FAIL, proving
-    they test the DUT and not the coroutine.
-    """
-
-    def __init__(self, dut, nph=1, npd=1, period=40, step=1):
-        self.dut = dut
-        self.nph = nph
-        self.npd = npd
-        self.period = period
-        self.step = step
-        self.updates = 0
-        self._run_flag = True
-
-    def start(self):
-        cocotb.start_soon(self._run())
-
-    def stop(self):
-        self._run_flag = False
-
-    async def _run(self):
-        d = self.dut
-        while True:
-            for _ in range(self.period):
-                await RisingEdge(d.clk_i)
-            if not self._run_flag:
-                continue
-            self.nph = (self.nph + self.step) & 0xFF
-            self.npd = (self.npd + self.step) & 0xFFF
-            d.fc_nph_i.value = self.nph
-            d.fc_npd_i.value = self.npd
-            d.fc_update_valid_i.value = 1
-            await RisingEdge(d.clk_i)
-            d.fc_update_valid_i.value = 0
-            self.updates += 1
-
-
 async def init(dut, credits=None, fc_init=True):
     """Bring the link up.  `credits` overrides the saturated default."""
     cocotb.start_soon(Clock(dut.clk_i, CLK_NS, units="ns").start())
@@ -421,30 +254,19 @@ async def settle(dut, cycles=40):
         await RisingEdge(dut.clk_i)
 
 
-def outcome_name(value):
-    return TXN_NAME.get(value, f"<unknown {value}>")
 
 
 def assert_on_wire(req, *, write, reg_num, first_be, tag, what=""):
-    """Assert one emitted Configuration TLP against hand-derived goldens.
+    """2b-1 binding of enum_tb_common.assert_cfg_tlp_on_wire.
 
-    Base 2.1 SS2.2.7 p.79 fixes Length to 1 Dword, Last DW BE to 0000b and
-    TC/Attr/AT to zero for every Configuration Request; Figure 2-18 p.80 fixes
-    the third header Dword's BDF packing.
+    The goldens and the five assertions are shared; only the choice of which
+    optional properties this bench owns is local.  require_device0 stays OFF
+    here: device-0-only is SS7.3.1's property and the presence scan's subject,
+    not pcie_cfg_txn's, and turning it on would silently widen what these
+    tests assert.
     """
-    exp0 = cfg_wire_dw0(write=write, length_dw=1)
-    exp1 = cfg_wire_dw1(RID, tag, first_be)
-    exp2 = cfg_wire_dw2(BUS, DEV, FN, reg_num)
-    assert req.dw0 == exp0, \
-        f"{what}DW0 {req.dw0:#010x} != golden {exp0:#010x}"
-    assert req.dw1 == exp1, \
-        f"{what}DW1 {req.dw1:#010x} != golden {exp1:#010x} (rid/tag/BE)"
-    assert req.dw2 == exp2, \
-        f"{what}DW2 {req.dw2:#010x} != golden {exp2:#010x} (BDF routing Dword)"
-    assert req.length_dw == 1, \
-        f"{what}Length {req.length_dw} != 1 (Base 2.1 SS2.2.7 p.79)"
-    assert req.last_be == 0, \
-        f"{what}Last DW BE {req.last_be:#06b} != 0000b (Base 2.1 SS2.2.7 p.79)"
+    assert_cfg_tlp_on_wire(req, write=write, reg_num=reg_num,
+                           first_be=first_be, tag=tag, what=what)
 
 
 # ==========================================================================

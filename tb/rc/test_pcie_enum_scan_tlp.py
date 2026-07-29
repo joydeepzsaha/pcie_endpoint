@@ -34,35 +34,26 @@ from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge
 
 from enum_tb_common import (
+    BDF, BUS, CLK_NS, CPL_TIMEOUT_CYCLES, DEV, FN, RID,
+    DEVICE, HDR_TYPE0, REG0, SCAN_BUS, VENDOR, reg3,
+    ENUM_ERR_CA, ENUM_ERR_CRS_EXHAUSTED, ENUM_ERR_NONE,
+    ENUM_ERR_TIMEOUT, ENUM_ERR_UR_POST_PROBE,
     CFG_BE_DWORD, CFG_REG_CACHE_HEADER, CFG_REG_VENDOR_DEVICE,
     CPL_CRS, CPL_SC, CPL_UR,
     RC_ERR_ORPHAN_DATA,
+    CreditDrip, Mon, TlpRequest,
+    assert_cfg_tlp_on_wire, set_credits,
     cfg_wire_dw0, cfg_wire_dw1, cfg_wire_dw2,
     cpl_dw0, cpl_dw1, cpl_dw2, dw0_length,
 )
 
-CLK_NS = 4
-CPL_TIMEOUT_CYCLES = 4096      # the SHIPPED default; K5 needs the real value
 
-RID = 0x1234                   # the Root Complex's own requester_id_i
-SCAN_BUS = 0x01
-BDF = 0x0100                   # {bus 1, device 0, function 0} -- SS7.3.1
-BUS, DEV, FN = 0x01, 0x00, 0x00
-
-ENUM_ERR_NONE = 0
-ENUM_ERR_UR_POST_PROBE = 1
-ENUM_ERR_CA = 2
-ENUM_ERR_CRS_EXHAUSTED = 3
-ENUM_ERR_TIMEOUT = 4
-
-VENDOR = 0x144D
-DEVICE = 0xA80A
-REG0 = (DEVICE << 16) | VENDOR
-HDR_TYPE0 = 0x00
+# CLK_NS / CPL_TIMEOUT_CYCLES / RID / BDF / BUS,DEV,FN and the ENUM_ERR_*
+# codes now come from enum_tb_common -- all byte-identical across benches, and
+# the BAR benches would otherwise have made a third and fourth copy.
 
 
-def reg3(header_type, bist=0x00, mlt=0x00, cls=0x10):
-    return (bist << 24) | ((header_type & 0xFF) << 16) | (mlt << 8) | cls
+
 
 
 DEFAULT_SPACE = {CFG_REG_VENDOR_DEVICE: REG0,
@@ -86,29 +77,6 @@ DEFAULT_SPACE = {CFG_REG_VENDOR_DEVICE: REG0,
 # handling Unsupported Requests".  ur_default_hits counts the arm so a test can
 # assert it was actually exercised rather than merely present.
 # ==========================================================================
-class TlpRequest:
-    def __init__(self, dwords):
-        dw0, dw1, dw2 = dwords[0], dwords[1], dwords[2]
-        self.dwords = dwords
-        self.dw0, self.dw1, self.dw2 = dw0, dw1, dw2
-        self.fmt = (dw0 >> 5) & 0x7
-        self.length_dw = dw0_length(dw0)
-        self.requester_id = (dw1 >> 16) & 0xFFFF
-        self.tag = (dw1 >> 8) & 0xFF
-        self.last_be = (dw1 >> 4) & 0xF
-        self.first_be = dw1 & 0xF
-        self.reg_num = (dw2 >> 2) & 0x3F
-        self.bus = (dw2 >> 24) & 0xFF
-        self.dev = (dw2 >> 19) & 0x1F
-        self.fn = (dw2 >> 16) & 0x7
-        self.payload = dwords[3:]
-        self.is_read = (self.fmt & 0b010) == 0
-
-    def __repr__(self):
-        return (f"CfgRd0(tag={self.tag:#04x}, bdf={self.bus:02x}:{self.dev:02x}."
-                f"{self.fn}, reg={self.reg_num:#04x})")
-
-
 class ConfigSpaceCompleter:
     def __init__(self, dut, space=None, crs_once=(), silent_regs=()):
         self.dut = dut
@@ -203,134 +171,9 @@ class ConfigSpaceCompleter:
 # ==========================================================================
 # Monitor
 # ==========================================================================
-class Mon:
-    def __init__(self, dut):
-        self.dut = dut
-        self.tags_presented = []
-        self.rq_errors = []
-        self.rc_errors = []
-        self.unexpected = []
-        self.command_errors = []
-        self.tx_errors = []
-        self.timeouts = []
-        self.lates = []
-        self.credit_errors = 0
-        self.blocked_seen = False
-        self.rq_tvalid_seen = False
-
-    def start(self):
-        cocotb.start_soon(self._run())
-
-    async def _run(self):
-        d = self.dut
-        while True:
-            await RisingEdge(d.clk_i)
-            await ReadOnly()
-            if int(d.rst_i.value):
-                continue
-            if int(d.pcie_rq_tag_vld_o.value):
-                self.tags_presented.append(int(d.pcie_rq_tag_o.value))
-            if int(d.rq_protocol_error_o.value):
-                self.rq_errors.append(int(d.rq_error_code_o.value))
-            if int(d.rc_protocol_error_o.value):
-                self.rc_errors.append(int(d.rc_error_code_o.value))
-            if int(d.rc_unexpected_completion_o.value):
-                self.unexpected.append(int(d.rc_completion_error_code_o.value))
-            if int(d.command_error_valid_o.value):
-                self.command_errors.append(int(d.command_error_code_o.value))
-            if int(d.tx_error_valid_o.value):
-                self.tx_errors.append(int(d.tx_error_code_o.value))
-            if int(d.cpl_timeout_valid_o.value):
-                self.timeouts.append(int(d.cpl_timeout_tag_o.value))
-            if int(d.late_cpl_valid_o.value):
-                self.lates.append(int(d.late_cpl_tag_o.value))
-            if int(d.credit_error_o.value):
-                self.credit_errors += 1
-            if int(d.tx_fc_blocked_o.value):
-                self.blocked_seen = True
-            if int(d.s_axis_rq_tvalid.value):
-                self.rq_tvalid_seen = True
-
-    async def wait_timeouts(self, count, cycles=CPL_TIMEOUT_CYCLES + 900):
-        for _ in range(cycles):
-            await RisingEdge(self.dut.clk_i)
-            if len(self.timeouts) >= count:
-                return
-        raise AssertionError(
-            f"expected {count} cpl_timeout strobes, saw {len(self.timeouts)}")
-
-    async def wait_lates(self, count, cycles=600):
-        for _ in range(cycles):
-            await RisingEdge(self.dut.clk_i)
-            if len(self.lates) >= count:
-                return
-        raise AssertionError(
-            f"expected {count} late_cpl strobes, saw {len(self.lates)}")
-
-    def clean(self, allow_timeouts=False, allow_orphans=False):
-        """Nothing fired that the prediction did not name."""
-        assert self.rq_errors == [], f"RQ protocol errors: {self.rq_errors}"
-        assert self.unexpected == [], f"unexpected completions: {self.unexpected}"
-        assert self.command_errors == [], f"TL command errors: {self.command_errors}"
-        assert self.tx_errors == [], f"TX errors: {self.tx_errors}"
-        assert self.credit_errors == 0, (
-            f"credit_error_o fired {self.credit_errors}x -- a one-Dword config "
-            "request cannot exhaust an entire data advertisement")
-        if not allow_orphans:
-            assert self.rc_errors == [], f"RC protocol errors: {self.rc_errors}"
-        if not allow_timeouts:
-            assert self.timeouts == [], f"completion timeouts: {self.timeouts}"
-            assert self.lates == [], f"late completions drained: {self.lates}"
-
-
 # ==========================================================================
 # Flow control + harness
 # ==========================================================================
-def set_credits(dut, ph=0xFF, pd=0xFFF, nph=0xFF, npd=0xFFF, cplh=0xFF, cpld=0xFFF):
-    dut.fc_ph_i.value = ph
-    dut.fc_pd_i.value = pd
-    dut.fc_nph_i.value = nph
-    dut.fc_npd_i.value = npd
-    dut.fc_cplh_i.value = cplh
-    dut.fc_cpld_i.value = cpld
-
-
-class CreditDrip:
-    """A receiver returning credit the way a real one does: CUMULATIVELY.
-
-    !! fc_*_i is the raw CREDITS_ALLOCATED off the wire (Base 2.1 SS2.6.1.2
-    p.141).  An UpdateFC advertises a RUNNING TOTAL that only ever grows; a drip
-    that re-pulses a constant says "I have still only ever allocated N" and
-    blocks the transmitter forever once N are consumed -- indistinguishable from
-    a DUT deadlock, which is why the coroutine is itself mutation-tested.
-    """
-
-    def __init__(self, dut, nph=1, npd=1, period=40, step=1):
-        self.dut = dut
-        self.nph = nph
-        self.npd = npd
-        self.period = period
-        self.step = step
-        self.updates = 0
-
-    def start(self):
-        cocotb.start_soon(self._run())
-
-    async def _run(self):
-        d = self.dut
-        while True:
-            for _ in range(self.period):
-                await RisingEdge(d.clk_i)
-            self.nph = (self.nph + self.step) & 0xFF
-            self.npd = (self.npd + self.step) & 0xFFF
-            d.fc_nph_i.value = self.nph
-            d.fc_npd_i.value = self.npd
-            d.fc_update_valid_i.value = 1
-            await RisingEdge(d.clk_i)
-            d.fc_update_valid_i.value = 0
-            self.updates += 1
-
-
 async def init(dut, credits=None, space=None, crs_once=(), silent_regs=(),
                serve=True):
     cocotb.start_soon(Clock(dut.clk_i, CLK_NS, units="ns").start())
@@ -427,25 +270,16 @@ async def status(dut):
 
 
 def assert_on_wire(req, *, reg_num, tag, what=""):
-    """Assert one emitted Configuration TLP against hand-derived goldens.
+    """2b-2 binding of enum_tb_common.assert_cfg_tlp_on_wire.
 
-    Base 2.1 SS2.2.7 p.79 fixes Length to 1 Dword, Last DW BE to 0000b and
-    TC/Attr/AT to zero for every Configuration Request; Figure 2-18 p.80 fixes
-    the routing Dword's BDF packing.  SPEC_PREDICTIONS_ENUM.md SSD.4 pins the
-    resulting values.
+    Both scan transactions are whole-Dword READS, so write/first_be are bound
+    here rather than passed at each call site.  require_device0 is ON: SS7.3.1
+    p.479 device-0-only is THIS bench's subject (SSD.1), which is exactly why the
+    shared helper makes it opt-in instead of always-on.
     """
-    exp0 = cfg_wire_dw0(write=False, length_dw=1)
-    exp1 = cfg_wire_dw1(RID, tag, CFG_BE_DWORD)
-    exp2 = cfg_wire_dw2(BUS, DEV, FN, reg_num)
-    assert req.dw0 == exp0, f"{what}DW0 {req.dw0:#010x} != golden {exp0:#010x}"
-    assert req.dw1 == exp1, f"{what}DW1 {req.dw1:#010x} != golden {exp1:#010x}"
-    assert req.dw2 == exp2, f"{what}DW2 {req.dw2:#010x} != golden {exp2:#010x}"
-    assert req.length_dw == 1, f"{what}Length {req.length_dw} != 1 (SS2.2.7 p.79)"
-    assert req.last_be == 0, f"{what}Last DW BE != 0000b (SS2.2.7 p.79)"
-    # SS7.3.1 p.479: device 0 only, function 0 only.
-    assert req.dev == 0 and req.fn == 0, (
-        f"{what}the request named device {req.dev} function {req.fn}. Only "
-        "device 0 may be probed on this link (SS7.3.1 p.479)")
+    assert_cfg_tlp_on_wire(req, write=False, reg_num=reg_num,
+                           first_be=CFG_BE_DWORD, tag=tag, what=what,
+                           require_device0=True)
 
 
 # ==========================================================================

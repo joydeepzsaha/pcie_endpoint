@@ -32,24 +32,21 @@ from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge
 
 from enum_tb_common import (
+    BDF, CLK_NS, DEVICE, HDR_TYPE0, HDR_TYPE0_MF, REG0, SCAN_BUS, VENDOR,
+    ENUM_ERR_CA, ENUM_ERR_CRS_EXHAUSTED, ENUM_ERR_NONE,
+    ENUM_ERR_TIMEOUT, ENUM_ERR_UR_POST_PROBE,
     CFG_BE_DWORD, CFG_REG_CACHE_HEADER, CFG_REG_VENDOR_DEVICE,
     CPL_CA, CPL_CRS, CPL_SC, CPL_UR,
     Socket, assert_rq_descriptor,
 )
 
-CLK_NS = 4
 
 CRS_RETRY_MAX = 3          # tb_pcie_enum_scan.sv override
 
-SCAN_BUS = 0x01
-BDF = 0x0100               # {bus 1, device 0, function 0} -- SS7.3.1: device 0 only
 
 # pcie_enum_pkg::enum_error_e
-ENUM_ERR_NONE = 0
-ENUM_ERR_UR_POST_PROBE = 1
-ENUM_ERR_CA = 2
-ENUM_ERR_CRS_EXHAUSTED = 3
-ENUM_ERR_TIMEOUT = 4
+# CLK_NS / BDF / ENUM_ERR_* now come from enum_tb_common -- byte-identical
+# across every enum bench, and the BAR benches would have made a fourth copy.
 
 ERR_NAME = {
     ENUM_ERR_NONE: "ENUM_ERR_NONE",
@@ -60,17 +57,12 @@ ERR_NAME = {
 }
 
 # Register 0 payload: {Device ID[31:16], Vendor ID[15:0]}
-VENDOR = 0x144D            # a real-looking Vendor ID; NOT 0xFFFF, see S12
-DEVICE = 0xA80A
-REG0 = (DEVICE << 16) | VENDOR
 
 # Register 3 payload: {BIST[31:24], Header Type[23:16], MLT[15:8], CLS[7:0]}
 def reg3(header_type, bist=0x00, mlt=0x00, cls=0x10):
     return (bist << 24) | ((header_type & 0xFF) << 16) | (mlt << 8) | cls
 
 
-HDR_TYPE0 = 0x00           # endpoint Function
-HDR_TYPE0_MF = 0x80        # endpoint Function, multi-function
 HDR_TYPE1 = 0x01           # PCI-PCI bridge -- valid, but not enumerable by 2b
 
 

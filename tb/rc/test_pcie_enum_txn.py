@@ -27,6 +27,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge
 
 from enum_tb_common import (
+    BDF, CLK_NS,
     CFG_BE_BYTE2, CFG_BE_DWORD, CFG_BE_LOWER_HALF,
     CFG_REG_BAR0, CFG_REG_CACHE_HEADER, CFG_REG_COMMAND_STATUS,
     CFG_REG_VENDOR_DEVICE,
@@ -35,14 +36,13 @@ from enum_tb_common import (
     assert_rq_descriptor, encode_rc_desc, rc_beats,
 )
 
-CLK_NS = 4
 
 # tb_pcie_enum_txn.sv overrides the shipped 16/64 defaults so the exhaustion
 # test costs ~32 cycles instead of ~1024.
 CRS_RETRY_MAX = 3
 CRS_BACKOFF_CYCLES = 8
 
-BDF = 0x0100          # bus 1, device 0, function 0 -- the target being configured
+# CLK_NS / BDF now come from enum_tb_common -- identical in every enum bench.
 OTHER_BDF = 0x0208    # bus 2, device 1, function 0
 
 # The socket hands out tags starting here.  DELIBERATELY NON-ZERO: a tag-match
