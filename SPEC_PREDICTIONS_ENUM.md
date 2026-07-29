@@ -968,3 +968,99 @@ a client-side problem.**
 
 DF4 is the one worth writing down: `device_present_o` is reset-low, so the
 obvious absence assertion is satisfied by a dead FSM.
+
+---
+
+## D.8 Measured results (Commit 2b-2, `c05ef1b`)
+
+### D.8.1 Falsification
+
+| # | predicted | measured | verdict |
+|---|---|---|---|
+| **DF1** | `verilate_enum_scan`: elaboration failure, zero `TESTS=`, `MODMISSING … 'pcie_enum_scan'` | exit 1, zero `TESTS=` lines, `%Error-MODMISSING: … Cannot find file containing module: 'pcie_enum_scan'` | ✅ exact |
+| **DF2** | `verilate_enum_scan_tlp`: same, from the integration shim | identical, at `tb_pcie_enum_scan_tlp.sv:175` | ✅ exact |
+| **DF3** | silence assertions must first prove the FSM tried | acted on: the RC1 control was run once in 2b-1 (`i8`) with `rq_tvalid_seen` asserted first, and is not repeated here | ✅ designed out |
+| **DF4** | the absence test must assert `scan_done_o` and `scan_error_o`, not just `device_present_o` (reset-low) | `s2` and `k2` assert all three | ✅ designed out |
+
+### D.8.2 RTL mutations — standalone, all killed first pass
+
+| mutation | killed by |
+|---|---|
+| UR during probe → ERROR (policy inversion) | `s2` |
+| UR after probe → absent (inverse inversion) | `s3` |
+| timeout during probe → absent (Phase-1 derivation inverted) | `s7`, `s14`, `s15` |
+| scan restarts after `scan_done_o` | `s1`, `s2`, `s9`, `s10`, `s12`, `s13` |
+| Vendor/Device ID halves swapped | `s1`, `s3`, `s13` |
+| Header-Type layout bits ignored (Type 1 accepted as Type 0) | `s8` |
+| MF bit read from bit 6 instead of bit 7 | `s9` |
+| `tx_fc_blocked_i` steers control flow | `s14` |
+
+### D.8.3 RTL mutations — integration, and the two that needed new tests
+
+| mutation | integration result |
+|---|---|
+| UR during probe → ERROR | killed by `k2` |
+| `tx_fc_blocked_i` steers the **probe-phase** timeout arm | **survived K1–K6, then survived K7, killed only by K8** |
+
+The second row is the session's main verification lesson and is worth keeping:
+
+1. It survived K1–K6 because **both** existing timeout tests (`k5`, `k6`) time
+   out during the **header** phase. The integration suite never reached the
+   mutated arm.
+2. `k7` was added — a device that never answers its first probe — which does
+   reach the probe-phase arm. **It still survived**, because `k7` runs with
+   saturated credit, so `tx_fc_blocked_i` is low and the mutated branch is not
+   taken.
+3. `k8` produces the only killing combination: a probe-phase timeout **while
+   credit-blocked** — a CRS-answering device behind a peer advertising the
+   Table 2-37 minimum of one NPH credit, where the first attempt spends the
+   credit and the retry, still in the probe phase, can never be sent.
+
+Together `k7` and `k8` are what make `err_credit_blocked_o` a diagnostic rather
+than decoration: it must be **clear** for a dead device and **set** for a
+starved one, and no single test can establish that.
+
+### D.8.4 Bench mutations
+
+| mutation | result |
+|---|---|
+| socket invariant 1 — completion delivered before the tag strobe | killed 12 of 15 standalone tests |
+| socket invariant 2 — timeout strobe before the tag strobe | **survived**; every timeout test happened to `settle()` first. Closed with a new test, **`s16`**, which fires the timeout at the earliest legal moment. Same shape as 2b-1, where `e9` passed only by settling and `e10` caught it. |
+| socket invariant 3 — the guard itself removed and `tag_delay = 0` | **survived, and unfalsifiable through this path** — see below |
+| socket invariant 3, *property* version (pre-arm the strobe before `ReadOnly`) | killed **all 16** |
+| completer's UR default arm replaced with silence | killed `k2` — the Phase-1 trap, made falsifiable |
+| credit drip re-pulses a constant instead of a cumulative total | killed `k4` |
+
+⚠️ **Invariant 3's assertion cannot fire, and that is worth recording rather
+than patching.** `_arm_tag()` runs inside the `ReadOnly` phase, and cocotb
+defers any signal write out of `ReadOnly` to the next writable phase. So even
+with `tag_delay = 0` the strobe physically lands in the cycle *after* the
+descriptor accept, and `self.cycle > accept_cycle` is always true. The guard is
+defence-in-depth against a future refactor that moved the strobe earlier; it is
+not load-bearing today.
+
+The **property** it protects is load-bearing and is tested: pre-arming the
+strobe before `ReadOnly` (the shape 2b-1's SM-1 used) makes the socket present
+the tag in the accept cycle, `awaiting_tag_r` is still low, the tag is never
+captured, and all 16 tests fail.
+
+### D.8.5 Scope adaptation recorded in `k6`
+
+The brief asked for "late CPL mid-scan → **scan continues**". That is
+unreachable by construction: `late_cpl_valid_o` fires only for a tag in ZOMBIE
+quarantine, which requires a completion timeout first, and a timeout is terminal
+for this sequencer (§D.5). With one transaction in flight there is no second tag
+to continue on.
+
+`k6` asserts the property that *is* reachable and is what actually matters — the
+orphan-data burst must not add an error, change the error code, or move any
+status output — with the exact per-Dword count, V9-style.
+
+### D.8.6 Baseline after 2b-2
+
+> **29 targets / 171 tests (23 TLP + 6 RC) + `verilate_conformance` control 1/1
+> = 30 / 172**, plus `verilate_enum_txn` 14/14, `verilate_enum_txn_tlp` 9/9,
+> `verilate_enum_scan` 16/16 and `verilate_enum_scan_tlp` 8/8
+> → **34 targets / 219 tests**.
+
+All 32 pre-existing targets identical in count, verdict and sim end time.
