@@ -31,6 +31,32 @@
 // where they would differ and why it is unreachable, is in
 // SPEC_PREDICTIONS_CREDIT.md SSJ.
 //
+// error_o -- IMPLEMENTATION-DEFINED, NOT A SPEC-CONFORMANCE SIGNAL.
+//
+//   The spec defines no transmitter-side flow-control error output at all.
+//   Every Flow Control Protocol Error it names -- more than 2047/127 outstanding
+//   unused credits (SS2.6.1 p.138), a non-zero UpdateFC field on a type
+//   advertised infinite (p.138), Receiver Overflow (SS2.6.1.2 p.141) -- is
+//   optional ("Components may optionally check") and associated with the
+//   RECEIVING port.  The only obligation SS2.6.1.1 p.140 places on a Transmitter
+//   that lacks credit is behavioural: "it must block the transmission of the
+//   TLP".  The spec is likewise silent on requests that can never be satisfied.
+//   error_o is therefore a local health signal of this implementation's own
+//   choosing, and must not be read as conformance reporting.
+//
+//   MEANING: the presented request needs more data credits than the Receiver's
+//   entire advertised buffer for that type, so no amount of credit return can
+//   ever admit it.  Ordinary blocking -- capacity sufficient, current remainder
+//   not -- is silent, and a pool advertised infinite can never raise it.
+//
+//   TIMING: registered and self-clearing.  It asserts for the cycle following
+//   each cycle in which such a request is presented, and returns low by itself
+//   once the request is withdrawn or replaced.  There is no sticky state and
+//   nothing to acknowledge.
+//
+//   VISIBLE AT: tlp_layer exports it as credit_error_o (tlp_layer.sv:482), which
+//   drives tx_error_valid_o (:283) and emits TLP_ERR_CREDIT_UNDERFLOW (:286).
+//
 // FC initialization is distinguished from a subsequent update by fc_init_seen_r:
 // fc_update_valid_i is driven by (update_fc || fc_init_done)
 // (pcie_datalink_layer.sv:176) and the InitFC1/InitFC2 cases never assert
@@ -93,6 +119,13 @@ module tlp_credit_manager
   logic ph_infinite_r, nph_infinite_r, cplh_infinite_r;
   logic pd_infinite_r, npd_infinite_r, cpld_infinite_r;
 
+  // The data advertisement made AT INITIALIZATION, i.e. the Receiver's buffer
+  // allocation for that type ("CREDITS_ALLOCATED ... Initially set according to
+  // the buffer size and allocation policies of the Receiver", SS2.6.1.2 p.141).
+  // Kept separately from *_limit_r because that register goes on to track the
+  // cumulative allocated count, which wraps and is therefore not a capacity.
+  logic [11:0] pd_capacity_r, npd_capacity_r, cpld_capacity_r;
+
   // Remaining credit = (CREDIT_LIMIT - CREDITS_CONSUMED) mod 2^[Field Size].
   // Native N-bit subtraction supplies the modulo; a wrapped limit -- including
   // one that has wrapped to exactly zero -- needs no special case.
@@ -108,27 +141,46 @@ module tlp_credit_manager
 
   logic selected_header_available;
   logic selected_data_available;
+  logic selected_data_infinite;
+  logic [11:0] selected_data_capacity;
+  logic request_unsatisfiable;
 
   always_comb begin
     selected_header_available = 1'b0;
     selected_data_available = 1'b0;
+    selected_data_infinite = 1'b0;
+    selected_data_capacity = '0;
     case (request_class_i)
       TLP_CREDIT_POSTED: begin
         selected_header_available = ph_infinite_r || (ph_available != 0);
         selected_data_available =
             pd_infinite_r || (pd_available >= request_data_credits_i);
+        selected_data_infinite = pd_infinite_r;
+        selected_data_capacity = pd_capacity_r;
       end
       TLP_CREDIT_COMPLETION: begin
         selected_header_available = cplh_infinite_r || (cplh_available != 0);
         selected_data_available =
             cpld_infinite_r || (cpld_available >= request_data_credits_i);
+        selected_data_infinite = cpld_infinite_r;
+        selected_data_capacity = cpld_capacity_r;
       end
       default: begin
         selected_header_available = nph_infinite_r || (nph_available != 0);
         selected_data_available =
             npd_infinite_r || (npd_available >= request_data_credits_i);
+        selected_data_infinite = npd_infinite_r;
+        selected_data_capacity = npd_capacity_r;
       end
     endcase
+
+    // Permanently unsatisfiable: the request needs more data credits than the
+    // Receiver's entire advertised buffer for that type, so no amount of credit
+    // return can ever admit it.  Distinct from ordinary blocking, where the
+    // capacity suffices and only the current remainder does not.  An infinite
+    // pool can never qualify.  See the header note on error_o.
+    request_unsatisfiable = fc_initialized_i && !selected_data_infinite &&
+                            (request_data_credits_i > selected_data_capacity);
     request_ready_o = fc_initialized_i && selected_header_available &&
                       selected_data_available;
     blocked_o = request_valid_i && !request_ready_o;
@@ -162,6 +214,9 @@ module tlp_credit_manager
       npd_infinite_r <= 1'b0;
       cplh_infinite_r <= 1'b0;
       cpld_infinite_r <= 1'b0;
+      pd_capacity_r <= '0;
+      npd_capacity_r <= '0;
+      cpld_capacity_r <= '0;
       error_o <= 1'b0;
     end else begin
       error_o <= 1'b0;
@@ -182,6 +237,9 @@ module tlp_credit_manager
           npd_infinite_r <= (fc_npd_i == '0);
           cplh_infinite_r <= (fc_cplh_i == '0);
           cpld_infinite_r <= (fc_cpld_i == '0);
+          pd_capacity_r <= fc_pd_i;
+          npd_capacity_r <= fc_npd_i;
+          cpld_capacity_r <= fc_cpld_i;
         end else begin
           // UpdateFC.  For a pool advertised infinite the credit field "must be
           // set to zero and must be ignored" (SS2.6.1 p.138) -- our own DLL
@@ -223,9 +281,10 @@ module tlp_credit_manager
           end
         endcase
       end
-      if (request_valid_i && fc_initialized_i &&
-          (!selected_header_available || !selected_data_available))
-        error_o <= 1'b0; // Normal credit blocking is not a protocol error.
+      // Normal credit blocking is not a protocol error and stays silent; only a
+      // permanently unsatisfiable request raises error_o.
+      if (request_valid_i && request_unsatisfiable)
+        error_o <= 1'b1;
     end
   end
 

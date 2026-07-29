@@ -428,3 +428,75 @@ Both gaps have the same shape: the property is about what happens on a path the
 positive tests never drive — a request that is *not* granted, and an
 advertisement that arrives *after* initialisation. Neither was reachable by
 strengthening an existing assertion; each needed its own test.
+
+## M. Commit C — `error_o`, as implemented
+
+**Implementation-defined, not conformance.** §F.2 stands: the spec defines no
+transmitter-side flow-control error output. This is stated in the module header
+so nobody later reads `credit_error_o` as a spec signal.
+
+**Meaning.** The presented request needs more data credits than the Receiver's
+entire advertised buffer for that type, so no amount of credit return can ever
+admit it. Ordinary blocking — capacity sufficient, current remainder not — stays
+silent, and a pool advertised infinite can never raise it.
+
+**Timing.** Registered and self-clearing: asserts for the cycle after each cycle
+in which such a request is presented, returns low once the request is withdrawn.
+No sticky state, nothing to acknowledge.
+
+### M.1 A deviation from the brief, stated rather than absorbed
+
+Brief §4 specifies the condition as "requested credits exceed the pool's
+**advertised limit**". Taken literally that is wrong after Commit A: `*_limit_r`
+now holds cumulative `CREDITS_ALLOCATED`, a counter that wraps, not a capacity —
+so comparing a request size against it stops being meaningful the moment it
+wraps, and would produce spurious errors on a long-lived link.
+
+The quantity that actually means capacity is the advertisement **at
+initialisation**: §2.6.1.2 p.141, "CREDITS_ALLOCATED ... Initially set according
+to the buffer size and allocation policies of the Receiver". So three 12-bit
+`*_capacity_r` registers are latched alongside the infinite flags at the
+initialisation strobe, and the comparison uses those.
+
+This is a refinement of the brief's intent, not a departure from it — but it is
+extra storage, which the brief flagged as a stop-and-report trigger, so it is
+called out here rather than absorbed silently. The brief's stop condition was
+"the advertised limit is not separably available"; it *is* separably available,
+it simply is not a capacity.
+
+**Header credits are deliberately not covered.** Every TLP needs exactly 1 header
+credit (Table 2-36 p.136) and Table 2-37 sets a minimum header advertisement of 1
+unit, so a permanently unsatisfiable *header* request is not constructible from
+an advertisement — and a header limit reading zero means a wrapped counter, not a
+zero-capacity buffer. Only the data direction admits the check.
+
+### M.2 Suite-wide silence, proven empirically
+
+A throwaway `$display` was placed on the assertion path, the full 30-target /
+172-test regression was run, and the hits counted:
+
+```
+TOTAL probe hits across all 30 targets: 1
+verilate_tlp_credit_manager.log:1
+CREDIT_ERROR_PROBE class=0 credits=20 capacity=16
+```
+
+The single hit is `error_fires_on_a_permanently_unsatisfiable_request` doing
+exactly what it is for. Every other test in every other target is silent. Probe
+then removed; the committed file contains no reference to it.
+
+### M.3 A third survived mutation, and the pattern behind all three
+
+`M-C-a` (raise `error_o` on *any* block) initially survived
+`error_stays_silent_for_ordinary_credit_blocking`, because that test probed the
+request combinationally and dropped `request_valid` before the clock edge —
+`error_o` is registered, so the condition was never sampled. Fixed by holding the
+blocked request across the edges.
+
+That is the third mutation in this brief to survive a test that looked like it
+covered the property (§L.1 has the other two). All three share one shape: **the
+property is about a path the positive tests never drive** — a request that is not
+granted, an advertisement that arrives after initialisation, a blocked request
+held long enough to be registered. Positive-path tests do not reach any of them,
+and no amount of strengthening an existing assertion would have. Each needed its
+own test, and only the mutation run revealed that.

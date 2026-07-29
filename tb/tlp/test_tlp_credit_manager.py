@@ -482,3 +482,86 @@ async def a_zero_valued_update_does_not_make_a_finite_pool_infinite(dut):
         raise AssertionError(
             "posted pool never blocked after a zero-valued UpdateFC -- a finite "
             "pool was promoted to infinite by a post-initialisation zero")
+
+
+# ---------------------------------------------------------------------------
+# Commit C -- error_o.
+#
+# IMPLEMENTATION-DEFINED, not conformance: the spec defines no transmitter-side
+# flow-control error at all (every FCPE it names is optional and receiver-side).
+# error_o means "this request needs more data credits than the Receiver's whole
+# advertised buffer for that type, so no credit return can ever admit it".
+# Ordinary blocking stays silent; an infinite pool can never raise it.
+# ---------------------------------------------------------------------------
+
+
+@cocotb.test()
+async def error_fires_on_a_permanently_unsatisfiable_request(dut):
+    """A request larger than the pool's entire advertised buffer can never be
+    satisfied by any amount of credit return, so it is reported rather than
+    blocked forever in silence."""
+    await _reset_and_init(dut, 8, 16, 8, 16, 8, 16)
+    assert int(dut.error.value) == 0
+
+    # 20 data credits against a 16-credit buffer: unsatisfiable by construction.
+    dut.request_class.value = POSTED
+    dut.request_data_credits.value = 20
+    dut.request_valid.value = 1
+    await RisingEdge(dut.clk_i)
+    await Timer(1, units="ps")
+    assert int(dut.error.value) == 1, "unsatisfiable request did not raise error_o"
+    assert int(dut.request_ready.value) == 0, "it must also not be granted"
+
+    # Self-clearing: withdrawing the request returns error_o low with no ack.
+    dut.request_valid.value = 0
+    await RisingEdge(dut.clk_i)
+    await Timer(1, units="ps")
+    assert int(dut.error.value) == 0, "error_o did not self-clear"
+
+
+@cocotb.test()
+async def error_stays_silent_for_ordinary_credit_blocking(dut):
+    """The SS:102 comment stays true: normal credit blocking is not an error.
+    This reproduces the bundled bench's py:30 scenario -- the data pool drained
+    to zero by consumption, with a request that the buffer could hold."""
+    await _reset_and_init(dut, 2, 4, 2, 4, 2, 4)
+
+    assert await _try_request(dut, POSTED, 4)
+    assert _avail(dut)["pd"] == 0
+    assert int(dut.error.value) == 0
+
+    # Exactly the py:30 case: blocked, but 1 <= capacity 4, so not an error.
+    # The request is HELD across the clock edges rather than probed
+    # combinationally: error_o is registered, so a probe that drops
+    # request_valid before the edge never samples the condition at all.  A
+    # mutation that raised error_o on every block survived the probing version
+    # of this test untouched.
+    dut.request_class.value = POSTED
+    dut.request_data_credits.value = 1
+    dut.request_valid.value = 1
+    for _ in range(4):
+        await Timer(1, units="ps")
+        assert int(dut.request_ready.value) == 0 and int(dut.blocked.value) == 1
+        await RisingEdge(dut.clk_i)
+        await Timer(1, units="ps")
+        assert int(dut.error.value) == 0, "ordinary credit blocking raised error_o"
+    dut.request_valid.value = 0
+    await Timer(1, units="ps")
+
+
+@cocotb.test()
+async def error_never_fires_for_an_infinite_pool(dut):
+    """The interaction between Commits B and C, and the reason C follows B:
+    nothing exceeds infinite, so an infinite pool can never be unsatisfiable --
+    however large the request."""
+    await _reset_and_init(dut, 8, 0, 8, 0, 8, 0)
+    for credits in (1, 100, 2000, 4095):
+        dut.request_class.value = COMPLETION
+        dut.request_data_credits.value = credits
+        dut.request_valid.value = 1
+        await RisingEdge(dut.clk_i)
+        await Timer(1, units="ps")
+        assert int(dut.error.value) == 0, (
+            f"infinite pool raised error_o for a {credits}-credit request")
+        assert int(dut.request_ready.value) == 1
+    dut.request_valid.value = 0
