@@ -545,6 +545,31 @@ count**, V9-style (`test_pcie_rq_rc_top.py:1007-1015`) — not merely "no failur
    init pulse and wedges TX. The FSM requires the four preconditions at start and
    does not support re-entry; documented in the module header with the reference.
 
+6. ⚠️ **MEASURED IN 2b-1 — the RC1 signature in `pcie_rq_rc_top.sv:33` is wrong
+   about the tag.** It states that with flow control uninitialised there is
+   "no TLP on `m_dllp_axis_*`, no pulse on any error output, **no tag on
+   `pcie_rq_tag_o`**". The last clause does not hold: a tag **is** allocated and
+   presented. The credit gate is at the VC-buffer-to-transmit boundary
+   (`tlp_layer.sv:280`), *downstream* of allocation in `REQ_TAG`
+   (`tlp_requester.sv:138`, `:211`), which references neither `fc_initialized_i`
+   nor any credit signal. Pinned by test **I8**.
+   **Consequence for the 2b-2 sequencer: a tag strobe is NOT evidence that a
+   request reached the link.**
+
+7. ⚠️ **MEASURED IN 2b-1 — the completion timer runs from ALLOCATION, so a long
+   credit stall produces a spurious timeout.** `tlp_request_tracker.sv:39`
+   measures per-tag age "from ALLOCATION", and by finding 6 allocation precedes
+   the credit gate. A request starved of credit for longer than
+   `CPL_TIMEOUT_CYCLES` therefore **times out without ever being transmitted**,
+   and reports as `TXN_TIMEOUT` — indistinguishable from a dead device, with no
+   error output anywhere. Predicted and confirmed by test **I9**.
+   **This bounds the master brief §4.1.** Its requirement that the FSM tolerate
+   `tx_fc_blocked_o` "for arbitrary spans — no cycle-count assumptions" cannot be
+   met above ~4096 cycles of continuous starvation by *any* FSM against this
+   stack; the limit is in the tracker, not in the enumeration logic. Raising
+   `CPL_TIMEOUT_CYCLES` toward the spec's recommended 10 ms (Stage-H work, see
+   `pcie_rq_rc_top.sv:114-117`) is what actually moves it.
+
 ---
 
 ## 7. Socket-model mutation set (bench-as-RTL discipline)
@@ -553,19 +578,43 @@ The 2b-1 standalone socket model is bench code that behaves like RTL, and a
 socket model that is *too polite* hides exactly the bugs the standalone target
 exists to catch (`RECON_commit2b.md` §5.2.6). Each mutation below is seeded into
 the socket model and **must fail at least one standalone test** before 2b-1 is
-accepted. Kill mapping is TBD until the 2b-1 test list exists; the list is
-committed now so the model is built against it.
+accepted.
 
-| id | mutation to the socket model | why it is dangerous | predicted killer | status |
-|---|---|---|---|---|
-| **SM-1** | tag strobed in the same cycle the command is accepted, instead of ≥1 cycle later | The real socket cannot present the tag at accept time (`pcie_rq_rc_top.sv:56-60`). An FSM that latches the tag combinationally from accept would work against the polite model and fail on real RTL. | a test that asserts the FSM's latched in-flight tag equals `pcie_rq_tag_o` when the strobe arrives **late** | TBD |
-| **SM-2** | `s_axis_rq_tready` held high forever | Hides every backpressure bug; §4.1 requires tolerating arbitrary-length stalls. | mid-sequence stall test with a randomised multi-hundred-cycle low period | TBD |
-| **SM-3** | `RC_ERR_ORPHAN_DATA` burst omitted after a late CPL | The FSM must tolerate the burst; if the model never emits it, the tolerance is never tested and real RTL trips the error path. | P-ORPHAN exact-count test (§5.4) | TBD |
-| **SM-4** | tag forced to 0 on every request | Degenerate value space — a tag-match assertion over an all-zero tag proves nothing (V8/`test_pcie_rq_rc_top.py:942` precedent). | tag-match test that **asserts the in-flight tag is non-zero and distinct** before relying on it | TBD |
-| **SM-5** | completion delivered with `request_completed` (bit 30) always 1, even on a non-final CPL | Bit 30, not `tlast`, releases the request (PG213 `:4049`). A model that always sets it hides a premature-release bug. | multi-CPL sequence where bit 30 arrives only on the last | TBD |
+**RESULTS FILLED IN 2026-07-29 at `3098c37` (Commit 2b-1).** The standalone
+target is `verilate_enum_txn` (E1..E14); the integration target is
+`verilate_enum_txn_tlp` (I1..I9).
 
-SM-5 is added beyond the brief's four: bit 30 is the single most load-bearing
-field in the RC descriptor and the brief's list did not cover it.
+| id | mutation to the socket model | why it is dangerous | MEASURED RESULT |
+|---|---|---|---|
+| **SM-1** | tag strobed in the same cycle the command is accepted, instead of ≥1 cycle later | The real socket cannot present the tag at accept time (`pcie_rq_rc_top.sv:56-60`). | **KILLED — all 14** (E1–E14). `awaiting_tag_r` is armed *by* the descriptor handshake, so a same-cycle strobe is never captured, no completion ever matches, and every test needing a response fails. The strongest kill in the set. |
+| **SM-2** | `s_axis_rq_tready` held high forever | Hides every backpressure bug; §4.1 requires tolerating arbitrary-length stalls. | **KILLED — E12** (`e12_arbitrary_tready_stall`), which asserts zero packets emitted during a 400-cycle stall. |
+| **SM-3** | `RC_ERR_ORPHAN_DATA` burst omitted after a late CPL | *(this prediction was wrong about where the burst lives)* | **NOT EXPRESSIBLE STANDALONE — moved to integration.** The burst is `rc_protocol_error_o`, a `pcie_rq_rc_top` **output** the primitive deliberately does not consume (it needs transparency, not counting), so it cannot cross the socket the standalone bench drives. Its kill lives in **I4**, which asserts the exact per-Dword orphan count V9-style through the real `pcie_rc_if`. **E10** is the standalone stand-in: the socket-visible half of a late completion is a stray packet bearing a stale tag. |
+| **SM-4** | tag forced to 0 on every request | Degenerate value space — a tag-match assertion over an all-zero tag proves nothing. | **KILLED — 8 tests**: E1, E3, E6, E7, E8, E9, E10, E11. The explicit non-zero/distinct guards fire before anything relies on the tag. |
+| **SM-5** | completion delivered with `request_completed` (bit 30) always 1, even on a non-final CPL | Bit 30, not `tlast`, releases the request (PG213 `:4049`). | **COVERED BY E14**, which drives the converse — bit 30 *clear* with `tlast` set — and is the test that killed RTL mutation M5. E14 already forces the two fields apart, which is the property. |
+
+SM-5 was added beyond the brief's four because bit 30 is the single most
+load-bearing field in the RC descriptor. That judgement paid: the corresponding
+**RTL** mutation was the one survivor of the seven-mutation RTL set, and closing
+it needed a new test rather than a strengthened assertion.
+
+**RTL mutation results (Commit 2b-1), for the record:**
+
+| mutation | standalone kill | integration |
+|---|---|---|
+| tag-match defeated (accept any completion) | E10, E11 | **survives — structurally.** The tracker never delivers a mismatched completion to the RC stream; it raises `rc_unexpected_completion_o` with no RC packet (`pcie_rq_rc_top.sv:266-267`). |
+| CRS cap removed | E8 | — |
+| timeout strobe ignored | E9, E10 | — |
+| reserved-status arm removed (bare `default`) | E6 | — |
+| **complete on `tlast` instead of bit 30** | **E14 — a NEW test; survived E1–E13** | **survives — structurally.** The tracker cannot produce a config completion with bit 30 clear. |
+| retry rebuilt from response data | E7, E8 | — |
+| `rsp_valid_o` pulsed instead of held | E13 | — |
+| *(bench)* credit drip re-pulses a constant instead of a cumulative total | n/a | **I5** — proving I5 measures the DUT, not the coroutine |
+
+The two integration survivors are the standalone/integration blind-spot
+asymmetry, measured in both directions rather than argued: neither is a missing
+test, and both properties are covered standalone. Same lesson as 2a-ii mutation
+A (survived all integration) and 2a-iii M4 (survived all standalone), and it is
+why both targets exist.
 
 ---
 
@@ -583,6 +632,19 @@ lands, and the expected FAIL set is recorded *first*.
 
 F3/F4 are the falsification run's real product: two tests that would have looked
 green for the wrong reason.
+
+### 8.1 MEASURED (Commit 2b-1, `3098c37`)
+
+| # | predicted | measured | verdict |
+|---|---|---|---|
+| **F1** | elaboration failure, `TESTS=0`, not `TESTS=n FAIL=n` | **Commit A:** exit 1, **zero `TESTS=` lines**. **Commit B:** same. | ✅ confirmed, both halves |
+| **F2** | signature `Cannot find file containing module: 'pcie_enum_fsm'` | **Commit A:** `%Error: ... Import package not found: 'pcie_enum_pkg'`. **Commit B:** `%Error-MODMISSING: ... Cannot find file containing module: 'pcie_cfg_txn'`. | ⚠️ **partially diverged, benignly.** The module is named `pcie_cfg_txn`, not `pcie_enum_fsm` (2b-1 brief's design decision). And in the standalone half Verilator resolves the shim's **package import** before the instance, so the package — not the module — is the first unresolved symbol. Same mechanism, different first-failing symbol. |
+| **F3** | a credit test written as a pure `tx_fc_blocked_o` observation would pass without the FSM | acted on rather than measured: **I5** asserts DUT progress (every transaction reaches `TXN_OK`) and `blocked_seen`, so it cannot pass without the primitive. **I6/I7** likewise assert outcomes, not just the blocked signal. | ✅ designed out |
+| **F4** | "zero TLPs" is vacuous without proof the FSM tried | acted on: **I8** asserts `mon.rq_tvalid_seen` **before** asserting silence, then brings FC up and shows the same command completes. | ✅ designed out |
+
+F2's divergence is worth keeping: the predicted *string* was wrong while the
+predicted *mechanism* was right, which is the normal outcome when a prediction
+names an artefact rather than a behaviour.
 
 Per-test predictions sharpen when the 2b-1 test list is drafted; the structure
 and the four firm entries are committed now.
