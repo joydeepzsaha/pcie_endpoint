@@ -1769,3 +1769,342 @@ Predicted candidates, chosen because they straddle the awkward boundaries:
 Commit-D kill map either way. Recording "it changed nothing" is a real result and
 must not be silently dropped — that is what makes the third occurrence a test of
 the *pattern* rather than another anecdote.
+
+---
+
+## E.10 Measured results (Commit 2b-3 Part 2)
+
+**Landed:** `8703a3e` (Commit 0, `--trace-fst`), `979b2de` (Commit D,
+`pcie_enum_bar` + the handoff mux), `064fdca` (Commit E, integration and the
+acceptance test).
+
+### E.10.0 Cold-build baseline, and the environment fault it was checking
+
+Two genuinely cold builds (`rm -rf build/`) back to back, before any new work:
+
+| | targets | tests | PASS | FAIL | sim end times | wall |
+|---|---:|---:|---:|---:|---|---:|
+| with `--trace-fst` | 34 | 219 | 219 | 0 | all match `RECON_commit2b3.md` §1 | 1131 s |
+| without | 34 | 219 | 219 | 0 | **byte-identical**, diffed mechanically | 834 s |
+
+The `activate.d` CPATH hook works: a cold `--trace-fst` build compiled
+`verilated_fst_c.o` with no manual export, which is what Part 1 proved could not
+happen before. Commit 0 then removed the flag from all 33 targets in
+`tb_rc.core` and `tb_tlp.core`, deleting the fragility at its root. −297 s, −26 %
+on a full sequential sweep.
+
+⚠️ **Brief §0.1 says 32 targets; the real count is 33** (`tb_rc` 10 + `tb_tlp`
+23). A 34th, `verilate_conformance`, also carries the flag but lives in
+`tb_ltssm_conformance.core`, outside this increment's file surface, and was left
+alone. Immaterial to the gate, recorded because the number is in the brief.
+
+### E.10.1 Falsification (EF1)
+
+⚠️ **The §E.9 EF1 row's PREMISE had expired.** It was written at `ffea7a4`, when
+*both* `pcie_enum_bar.sv` and `pcie_enum_top.sv` were absent from
+`rc_core.core`, and predicted the error would name `pcie_enum_top`. Commit B
+(`f3997f5`) added the top. Re-predicted for the actual state, in writing, before
+running:
+
+| # | predicted (re-derived) | measured | verdict |
+|---|---|---|---|
+| EF1a | elaboration failure, exit non-zero | `rc=1` | ✅ |
+| EF1b | **zero** `TESTS=` lines | 0 | ✅ |
+| EF1c | names **`pcie_enum_bar`**, not `pcie_enum_top` | `%Error-MODMISSING: pcie_enum_top.sv:299:3: Cannot find file containing module: 'pcie_enum_bar'` | ✅ |
+| EF1d | `verilate_enum_scan` fails identically via the shared `rtl` fileset | `rc=1`, same error | ✅ |
+
+EF1d is not in §E.9 and is worth keeping: every RC target compiles one
+`rc_core` fileset, so an unresolvable module in `pcie_enum_top` takes down all
+of them. That coupling is why "one behaviour change per commit" is load-bearing
+here rather than stylistic.
+
+The other §E.9 rows were all designed out ahead of the first run — EF3 by making
+the payload a field of the compared tuple, EF4 by `b5` asserting done/error/count
+together, EF5 by `b9` scanning the whole wire sequence, EF6 by `b7` using a
+memory BAR (and `b6` proving a 64-byte I/O BAR does *not* error), EF7 by `b2`,
+EF8 by `b8` asserting the code.
+
+### E.10.2 RTL mutations — standalone (`verilate_enum_bar`, 32 tests)
+
+| mutation | killed by | note |
+|---|---:|---|
+| size formula ×2 | 5 | |
+| size formula ÷2 | 5 | |
+| mask 2-bit instead of 4-bit | 10 | |
+| 64-bit pair advances N by 1 | 4 | |
+| 64-bit pair decoded as two 32-bit BARs | 7 | ⚠️ see §E.10.5 |
+| pair's upper assignment never written | 3 | |
+| unimplemented treated as implemented | 16 | |
+| I/O BAR not skipped | 4 | |
+| alignment ignored | 1 (`b4`) | only the mixed set has a BAR needing round-up |
+| all-ones write removed | 26 | |
+| Command write reordered before sizing | 13 | |
+| Command value bit 0 instead of bit 1 | 9 | |
+| **`enum_done_o` before the Command write completes** | **SURVIVED** → 2 | §E.10.4 |
+| mux merges instead of selecting | 19, incl. `b24` | the designated proof fired |
+
+### E.10.3 Bench mutations
+
+| mutation | killed by | note |
+|---|---:|---|
+| completer echoes BAR writes verbatim | 8 | ≥1 sizing test, as brief §3.6 required |
+| read-only bits 3:0 made writable | 7 | |
+| socket records nothing | 32 | ⚠️ but by **hanging**, never reaching the guard |
+| **empty-set guard defeated** | **SURVIVED** → 1 (`b0`) | §E.10.4 |
+| **`assert_mask_exercised` defeated** | **SURVIVED twice** → 1 (`b0`) | §E.10.4 |
+
+The silent-UR arm and the constant-re-pulse credit drip (brief §3.6) have no
+reachable condition in the standalone target — it has no flow control, and its
+completer answers every register the FSM addresses. Both belong to the
+integration target and are covered there (`e4` drives the finite-advertisement
+path; the drip's cumulative-total requirement is asserted live in `e2`).
+
+### E.10.4 ⭐ The three survivors, and what each one was actually about
+
+**`enum_done_o` before the Command write completes.** Survived all 29 tests.
+Reach-the-condition, applied: the mutated *condition* is the interval between
+the Command write being accepted by `pcie_cfg_txn` and its completion returning.
+Every test reached the mutated *line*; none reached the condition, because all
+of them wait for `done || error` and then snapshot — and the mutant's snapshot
+is identical, since `bar_count_o` and every slot were committed before
+`S_CMD_WR` was entered. **The gap was never a weak assertion. No test made the
+Command write's OUTCOME matter.** `b26` fails that write; `b27` withholds its
+completion and asserts `bar_busy_o`.
+
+⭐ **And the integration target kills it incidentally, by four tests.** The real
+stack takes hundreds of cycles for the write to reach the completer, so a
+premature `done` leaves the Command register unwritten and the seventeenth TLP
+unobserved. **A zero-latency socket model is not merely faster than the stack —
+it is BLIND to a class of ordering bug.** Worth remembering the next time a
+standalone target is proposed as a stand-in for an integration one.
+
+**The empty-set guard, defeated.** Survived, correctly and uselessly: a guard
+only fires on a broken run, and a green suite has none. Nor did "socket records
+nothing" prove otherwise — it killed all 29 by *hanging the DUT*, never once
+reaching the guard. **This is §D.8's "guards that are never exercised aren't
+guards", recurring on the very mechanism the brief added to prevent vacuous
+passes.** `b0` now calls every guard with the input it exists to reject.
+
+**`assert_mask_exercised`, defeated — survived TWICE, and the second time was my
+bug.** It carried two assertions, with a comment claiming the second caught
+something the first did not. The comment was wrong: `ro_low_hits` counts a
+subset of `mask_hits`, so the second strictly implies the first and defeating
+the first alone could not change any verdict. **A redundant assertion is not a
+stronger check; it is an untested one.** Collapsed to one gate, re-mutated,
+killed.
+
+### E.10.5 ⚠️ §E.4.1's predicted kill mechanism is WRONG, measured
+
+§E.4.1 predicted the 128-byte floor would kill the pair mis-decode, reasoning
+that the upper half's sizing readback `FFFFFFFF` decodes as
+`~FFFFFFF0 + 1 = 16` bytes — "precisely PCI 3.0's minimum, which is exactly what
+PCIe forbids".
+
+**The floor is never reached.** `FFFFFFFF` has **bit 0 set**, and bit 0 is the
+Memory Space Indicator (`[PCI3]` p.225 `:11187`). The I/O check *must* precede
+the size decode — an I/O BAR is sized against a different mask — so a
+mis-decoding FSM classifies the upper half as an **I/O BAR and skips it**. The
+derivation omitted that step.
+
+The mutation is still killed, by the emitted transaction sequence and by
+`bar_count_o` / `bar_is_64_o` — §E.4.1's own "secondary predicted kills", which
+turn out to be the primary ones. §E.4.1 asked for exactly this to be recorded as
+measured if the floor did not fire first; it is, and `b3` now pins the premise
+as an assertion rather than leaving it as prose.
+
+The floor becomes reachable only for a pair of 2^36 bytes or more, where the
+upper half's low nibble is not all ones. **The 128-byte floor is still
+load-bearing** — `b7` reaches it directly with a 16-byte memory BAR, and `b7b`
+proves 128 bytes exactly is accepted, so the constant is pinned from both sides.
+
+### E.10.6 The `settle()`-first blind spot — third occurrence, measured
+
+Two BAR-phase tests fire their event with **no preceding `settle()`**, at the
+boundaries §E.9.1 predicted:
+
+| test | event | boundary |
+|---|---|---|
+| `b15` | timeout on the **upper half** of a 64-bit pair (B4) | mid-pair: index N consumed, N+2 not committed |
+| `b16` | late CPL during the **assignment** write (B5) | the only phase holding a decoded size *and* an allocator cursor |
+
+**Did it change any kill? No — and that is the result.** Every mutation these
+two tests kill is also killed by at least one `settle()`-first test, and neither
+appears as a sole killer anywhere in §E.10.2. Recording "it changed nothing" was
+required either way; what makes it a test of the *pattern* rather than another
+anecdote is that the answer was not decided in advance.
+
+The honest reading is narrower than "the blind spot is closed": these two tests
+found nothing **because the BAR FSM has no timer and no event-driven path** —
+every transition waits on `cmd_ready_i` or `rsp_valid_i`, so a quiet window
+cannot change its state the way it could for the CRS backoff (2b-1 e9/e10) or
+the tag-strobe ordering (2b-2 socket invariant 2). The pattern is worth keeping
+for modules that *do* have timers; here it was cheap insurance that measured
+zero.
+
+### E.10.7 Integration mutations (`verilate_enum_bar_tlp`, 7 tests)
+
+| mutation | standalone | integration | note |
+|---|---:|---:|---|
+| mux merges instead of selecting | 19 | 5 | |
+| pair advances N by 1 | 4 | 5 | |
+| pair as two 32-bit BARs | 7 | 5 | |
+| pair's upper assignment never written | 3 | 2 | narrowest here |
+| `enum_done_o` early | 2 (new tests) | 4 | ⭐ §E.10.4 |
+| all-ones write removed | 26 | 7 (all) | |
+
+Different kill sets, as brief §4 predicted. The asymmetry is measured, not
+assumed, and the `enum_done_o` row is the one that carries a lesson.
+
+### E.10.8 Two bench-side predictions that measured wrong in Commit E
+
+**`e5`'s silence prediction.** Predicted exactly four per-Dword orphan reports
+from `pcie_rc_if` (`:403-405`) and silence everywhere else. The four were exact;
+the silence was not. The tracker **also** reports the packet once on
+`rc_unexpected_completion_o` with `TLP_ERR_UNEXPECTED_COMPLETION`
+(`tlp_request_tracker.sv:316`), because no allocated tag matches it. Two
+surfaces describing two different facts about one packet: *"a completion arrived
+for nobody"* and *"here is how much payload had nowhere to go"*. Now asserted
+explicitly with an exact count and an exact code, not waived.
+
+**`e6`'s UR injection.** Deleting a register from the model and letting the
+completer's default arm answer did not work: the all-ones **sizing write**
+arrives first and `ConfigDevice.write()` re-created the entry, so the later read
+found a value and the UR arm never fired. Identical in shape to the
+raw-readback injection bug Commit D hit — **an injection that the DUT's own
+traffic overwrites**. Both are now first-class model features (`raw=` for a
+fixed malformed readback, `ur_regs=` for explicit UR injection) rather than
+pokes at private state.
+
+### E.10.9 Baseline after 2b-3
+
+| | targets | tests |
+|---|---:|---:|
+| pre-existing (23 TLP + 6 RC + `verilate_conformance` + 4 enum) | 34 | 219 |
+| `verilate_enum_bar` | 1 | 32 |
+| `verilate_enum_bar_tlp` | 1 | 7 |
+| **total** | **36** | **258** |
+
+All PASS, 0 FAIL. The 34 pre-existing targets are identical in count, verdict
+**and sim end time** after every commit, diffed mechanically rather than
+eyeballed. Two `_trace` variants exist for debugging and are not part of the
+gate.
+
+**Stage C is closed.** `enum_done_o` asserts on a fully configured device.
+
+---
+
+## E.11 Tracker-9 drafts
+
+Lift verbatim; each is written to stand alone.
+
+**1. Stage C is closed.** Root Complex enumeration runs end to end: presence
+detection (device 0, Type 0), BAR sizing and assignment, and the Command-register
+enable, with `enum_done_o` asserting on a fully configured device. Proved by an
+acceptance test that enumerates an NVMe-like endpoint (64-bit prefetchable
+BAR0/1, one CRS'd probe) through the real stack from FC init, asserting all
+seventeen emitted TLPs on the wire against goldens pinned before the RTL existed,
+under both saturated credit and the Table 2-37 spec-minimum drip. 36 targets /
+258 tests.
+
+**2. The D.1 device-0-only derivation.** A conventional 0–31 device sweep is
+wrong here, not merely wasteful. Base 2.1 §7.3.1 p.479 says both that requests
+naming devices 1–31 must be terminated with UR by the Root Port, and that
+non-ARI devices must answer Type 0 reads *regardless of Device Number*. This
+design has no Root-Port termination logic, so such a request would actually be
+transmitted — and answered. A 0–31 sweep on a direct-attach link finds the same
+device 32 times. Probing device 0 only satisfies §7.3.1 **by construction**.
+Root-Port termination becomes required when a switch can sit below the port
+(Stage D/E).
+
+**3. Both inherited-stack findings, still standing.** (a) A tag strobe is not
+evidence of transmission — allocation precedes the credit gate, so a
+credit-starved request times out having never left the VC buffer. Now
+*structural* in the enumeration RTL: neither sequencer has a `pcie_rq_tag_i`
+port. (b) The completion timer runs from allocation
+(`tlp_request_tracker.sv:39`), so credit starvation is indistinguishable from a
+dead device; `err_credit_blocked_o` annotates it and is never control flow.
+Confirmed a third time in `e4`, now in a third phase. Fixing (b) means raising
+`CPL_TIMEOUT_CYCLES` toward the ~10 ms the spec recommends — Stage H.
+
+**4. The reach-the-condition rule, and its cost when skipped.** When a mutation
+survives, write down the mutated branch's *condition* first, then check the new
+test reaches it — not merely the mutated *line*. Third increment running. This
+time: "`enum_done_o` before the Command write completes" survived 29 tests that
+all reached the line and none the condition, because none made the write's
+*outcome* matter.
+
+**5. The vacuous-comparison rule, in both its forms.** A comparison proves
+nothing unless (a) it **had operands** — a green diff over an empty extraction, a
+passing assertion over an empty observation set, and an empty finding list are
+the same bug; and (b) its **scope was wide enough** — a descriptor-only assertion
+cannot distinguish two transactions with byte-identical descriptors. Both bit
+during 2b-3: (a) was designed against with explicit guards, which then had to be
+mutation-tested themselves (see 6); (b) was designed against by making the
+payload Dword a *field of the compared tuple* rather than an optional argument.
+
+**6. ⭐ Guards that are never exercised aren't guards — now on the guard
+mechanism itself.** The empty-set guards added specifically to prevent vacuous
+passes SURVIVED being defeated, because a guard only fires on a broken run. The
+mutation that *did* break things killed all 29 tests by hanging the DUT and never
+reached the guard at all. Bench guards need their own self-test that calls each
+one with the input it exists to reject. Related: an assertion whose sibling
+strictly implies it is not a stronger check, it is an untested one — found by
+mutation in `assert_mask_exercised` and collapsed.
+
+**7. The `settle()`-first blind spot: measured, and it changed nothing here.**
+Third occurrence, designed against in advance with two no-`settle()` tests at the
+boundaries §E.9.1 named. Neither is a sole killer of any mutation. The reason is
+specific and worth keeping: the BAR FSM has **no timer and no event-driven
+path** — every transition waits on a handshake — so a quiet window cannot change
+its state the way it could for a CRS backoff or a tag-strobe ordering. Keep the
+pattern for modules that have timers.
+
+**8. ⭐ A zero-latency model is blind to ordering, not just slow.** The socket
+model answers in a handful of cycles; the real stack takes hundreds. A
+premature-`enum_done_o` mutation was invisible to all 29 standalone tests and
+caught incidentally by four integration tests, purely because the real
+round-trip leaves an observable gap. Standalone targets are not a substitute for
+integration ones on anything ordering-shaped.
+
+**9. The PCI 3.0 shelf addition, and `[PCI3-REF]` discharged.**
+`/home/kourosh/openPCIE/0.doc/pci-local-bus-3.0.txt` (16433 lines, line anchors
+verified across two extractions). All eleven `[PCI3-REF]` constants now carry
+section + page + line. ⚠️ **Page markers in this extraction are FOOTERS** —
+content after marker *N* is on page *N+1*; a first pass read them as headers and
+came out one page low throughout. Unblocks Stage D: the Type 1 header layout is
+in the same chapter.
+
+**10. A spec prediction that measured wrong.** §E.4.1 predicted the 128-byte
+floor would catch a 64-bit pair mis-decoded as two 32-bit BARs, via the upper
+half decoding as 16 bytes. It does not: the upper half reads `FFFFFFFF`, whose
+**bit 0 is set**, so the I/O-BAR check — which necessarily precedes the size
+decode — claims it first. The mutation is still killed, by the transaction
+sequence and `bar_count_o`. Recorded because the prediction was specific,
+plausible, cited, and wrong; the floor itself is still load-bearing and pinned
+from both sides by `b7` / `b7b`.
+
+**11. ⭐ The environment fault, and why every prior sweep was misleading.**
+Verilator's FST tracer includes `<lz4.h>`; the conda env ships lz4 under
+`$CONDA_PREFIX/include` and nothing put it on the compiler's search path. Every
+sweep since the tracer object was first built had reused a cached
+`verilated_fst_c.o`, so **a genuinely cold build could not have succeeded** and
+no one would have known. Fixed twice over: a conda `activate.d` hook, and
+removing `--trace-fst` from all 33 functional targets, since nothing in the flow
+consumed a waveform. −26 % wall clock on a full sweep. *Generalisable: a build
+that is never done cold is not known to work.*
+
+**12. The §7 handoff reframing.** "Prove exactly one stage drives the shared
+port" turned out to rest on a single field. Six of the seven command signals
+cannot distinguish SELECTING one stage from MERGING both, because
+`pcie_enum_scan` drives 0 or a matching constant on all of them — an OR is a
+no-op. `cmd_first_be` is the exception: the scan drives a hard `1111` unqualified
+by state, and the Command write must be `0011`. **The proof of the mux is a
+byte-enable assertion**, and finding that out required enumerating which signals
+*could not* show the difference — a useful habit for any shared-resource handoff.
+
+**13. The BAR-phase enable is a design decision, not a test hook.**
+`bar_enable_i` is tied low in both scan shims because three scan tests assert the
+exact transaction count a presence scan emits, and those assertions are correct
+and are the scan's own subject. It also serves a real integrator need — "what is
+attached?" without configuring it. Recorded because the alternative (rewriting
+24 green tests to accommodate a stage they do not test) was the tempting one.
