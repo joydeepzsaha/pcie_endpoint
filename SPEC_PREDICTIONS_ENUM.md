@@ -689,3 +689,282 @@ in place so the debt is visible and mechanically greppable rather than buried.
 
 None of these blocks 2b-1. Items 1 and 3 change what the 2b-1/2b-2 tests must
 look like, which is precisely what Phase 1 is for.
+
+---
+---
+
+# D. Commit 2b-2 addendum — the presence scan
+
+**Date:** 2026-07-29 · **Branch:** `kourosh/dev` @ `2d8c216` · **written before
+`pcie_enum_scan` exists.** Same rule as the rest of this document: a later
+disagreement is a DUT bug or a prediction bug, never a golden fitted to
+observed behaviour.
+
+---
+
+## ⛔ D.1 THE DEVICE-NUMBER DERIVATION — the answer changes the FSM's shape
+
+**Question:** does an RC's presence scan on a directly-attached link legitimately
+cover device numbers **0–31**, or only **device 0**?
+
+**Answer: device 0 ONLY. `DEVICES_TO_SCAN = 1`. The 0–31 loop must not exist in
+this FSM.** Two independent sentences of Base 2.1 §7.3.1 p.479 settle it, and
+the second is the one that makes the loop actively harmful rather than merely
+wasteful.
+
+### D.1.1 Device 1–31 never reaches the link  **[BASE §7.3.1 p.479]**
+
+> *"Switches and Root Complexes Downstream Ports that do not have ARI Forwarding
+> enabled **must associate only Device 0** with the device attached to the
+> Logical Bus representing the Link from a Switch Downstream Port or a Root
+> Port. Configuration Requests targeting the Bus Number associated with a Link
+> specifying **Device Number 0 are delivered to the device attached to the
+> Link**; Configuration Requests specifying **all other Device Numbers (1-31)
+> must be terminated by the Switch Downstream Port or the Root Port with an
+> Unsupported Request Completion Status** (equivalent to Master Abort in PCI)."*
+
+In a conventional RC the enumerating software *does* sweep 0–31, and sees UR for
+1–31 — but that UR is **synthesized by the Root Port's own downstream-port
+logic**, and the request never goes on the wire.
+
+**This design has no such logic.** `pcie_enum_scan → pcie_cfg_txn →
+pcie_rq_rc_top` originates the Type 0 request straight onto the link; the CQ/CC
+completer surface is tied off (`pcie_rq_rc_top.sv:83-99`) and there is no
+Root-Port request-termination path anywhere in the tree. A request naming
+device 5 would therefore be *transmitted*, which §7.3.1 forbids.
+
+### D.1.2 …and if it did reach the link, the device would answer it  **[BASE §7.3.1 p.479]**
+
+> *"Non-ARI Devices must not assume that Device Number 0 is associated with their
+> Upstream Port, but must capture their assigned Device Number as discussed in
+> Section 2.2.6.2. **Non-ARI Devices must respond to all Type 0 Configuration
+> Read Requests, regardless of the Device Number specified in the Request.**"*
+
+This is the decisive one. A device is *required* to answer a Type 0 config read
+whatever device number it names. So a 0–31 sweep on a direct-attach link, in a
+design with no Root-Port filter, would not discover one device and 31 absences —
+**it would discover the same device 32 times**, each with identical Vendor/Device
+ID, and a sequencer that stopped at "first device found" would be right only by
+accident of iteration order.
+
+### D.1.3 Consequences, stated
+
+- **`DEVICES_TO_SCAN = 1`**, a documented constant, not a parameter. There is no
+  device loop and no `DEV_SCAN_MAX`.
+- §7.3.1's termination rule is satisfied **by construction**: no request naming
+  device 1–31 is ever formed, so there is nothing to terminate. This is a
+  structural equivalence, not a deviation — a compliant RC's *software* would see
+  UR for those device numbers; our *hardware* enumerator simply never asks.
+- Building the Root-Port termination path is out of scope for Commit 2b and is
+  not needed by anything 2b does. It becomes relevant only when a **switch** can
+  appear below the port, i.e. Commits 3/4, where Type 1 and bus-number assignment
+  arrive together. Recorded as a Stage-3 item.
+- ⚠️ **The §5.2 "flagged trap" is largely defused by this derivation.** The trap
+  was that a completer ignoring unmodelled BDFs would drive the FSM to a
+  timeout-induced sticky ERROR on the first empty device number. With no empty
+  device numbers to probe, that path is unreachable. The completer still needs a
+  **UR** arm — see D.5 — but for a different reason: an attached device whose
+  Function 0 is unimplemented.
+
+### D.1.4 What "absent" now means
+
+The link is point-to-point and `link_up_i` is a precondition, so a device *is*
+attached whenever the scan runs. Absence therefore cannot mean "no device on the
+link". It means **"nothing here to enumerate"**, and the spec gives exactly one
+signal for it:
+
+> **[BASE §7.3.1 p.479]** *"Any Type 0 Configuration Request targeting an
+> unimplemented Function in an ARI Device must be handled as an Unsupported
+> Request."*
+
+plus the general Endpoint rule **[BASE §7.3.3 p.480]**: a Type 0 request that
+does not address "a valid local Configuration Space of an implemented Function"
+→ *"follow rules for handling Unsupported Requests"*.
+
+So `TXN_UR` on the device-0 probe → **`device_present_o = 0`, terminal state
+`SCAN_DONE` with no device**, not ERROR. Every other non-OK outcome is a fault.
+
+---
+
+## D.2 Multi-function — capture only, do not scan
+
+**Decision: capture the multi-function bit and stop there.** Functions 1–7 are
+not probed in 2b-2.
+
+**[BASE §7.3.1 p.479]** permits *"up to eight independent Functions within that
+Device Number"*, and **[BASE §7.3.2 p.480]** says PCI Express *"supports
+multi-Function devices using the same discovery mechanism as PCI 3.0"*. So
+function scanning is legitimate — it is simply not needed by anything 2b-3 does:
+the direct-attach NVMe target is single-function, and BAR sizing operates on
+Function 0. Scanning 1–7 would multiply the sequencer's state space for no
+consumer.
+
+`multifunction_o` is reported so the deferral is visible to 2b-3 and to Stage E
+rather than silently assumed. **Deferred item: function scanning, gated on a
+consumer existing.**
+
+---
+
+## D.3 Header Type decode
+
+**Field position — [BASE]:** Figure 7-5 p.491 places Header Type in the Dword at
+byte offset `0Ch`, byte 2 — i.e. **register 3, bits [23:16]** of the returned
+Dword. The same layout appears in Figure 7-4 p.484 (common header) and
+Figure 7-6 p.492 (Type 1).
+
+**Bit fields — [PCI3-REF]:** Base 2.1 shows Header Type only in those figures and
+nowhere defines its bits. Bit 7 = Multi-Function, bits [6:0] = header layout, and
+the layout encodings `00h`/`01h`/`02h`, are PCI 3.0 §6.1. **Third instance of the
+same debt** (BAR bit layout §0.2, Command register bits 0/1 §0.2, now Header
+Type). Tagged, not hidden.
+
+**Partially corroborated by [BASE], which is worth stating:** Base 2.1
+independently establishes that the two layouts *exist* and *who uses which* —
+§7.5.2 p.491 titles the Type 0 header as the one for *"PCI Express device
+Functions"*, and §7.5.3 p.492 titles Type 1 as the one for *"Switch and Root
+Complex virtual PCI Bridges"*. So the **meaning** of the distinction is [BASE];
+only the numeric encoding is [PCI3-REF]. That is enough to justify the FSM's
+behaviour even before PCI 3.0 is on the shelf.
+
+**Prediction:** `header_layout != 00h` → terminal state
+**`SCAN_UNSUPPORTED_DEVICE`**, *not* `SCAN_ERROR`. A Type 1 response means a
+bridge or switch is attached — a valid device that answered correctly and that
+this commit simply cannot enumerate (Commits 3/4). Reporting it as an error
+would conflate "the link misbehaved" with "the topology is richer than I
+handle", and only the first is a fault.
+
+`header_type_o[7:0]` reports the raw byte, so a consumer can tell `01h` from
+`02h` without the FSM having to enumerate encodings it does not act on.
+
+---
+
+## D.4 Exact RQ descriptors for the scan
+
+The scan emits exactly two transactions, and both descriptors are **already
+pinned in §3.4** — deliberately, so 2b-2 introduces no new goldens:
+
+| # | transaction | type | reg | first_be | `s_axis_rq_tdata[127:0]` | on-wire DW2 |
+|---|---|---|---|---|---|---|
+| **D-P** | Vendor/Device ID probe | CfgRd0 `1000` | 0 | `0b1111` | `0x00010000000040010000000000000000` | `0x01000000` |
+| **D-H** | Header Type read | CfgRd0 `1000` | 3 | `0b1111` | `0x0001000000004001000000000000000C` | `0x0100000C` |
+
+Target BDF `0x0100` = bus 1, device 0, function 0. Bus number is an input
+(`scan_bus_i`), so the goldens above are for the default; the assertion helper
+rebuilds them from the driven bus number.
+
+Both are `dword_count=1`, `last_be=0000`, `tc=0`, `attr=0`, per **[BASE §2.2.7
+p.79]**, and the routing Dword is **[BASE Figure 2-18 p.80]**. Descriptor field
+positions **[PG213 Table 61 `:3711,:3720,:3728,:3735`]**.
+
+**BE choice for D-H: whole Dword (`1111`), not byte-granular `0x0E`.** Three
+reasons, in order of weight:
+
+1. It returns Cache Line Size, Master Latency Timer, Header Type **and** BIST in
+   one completion — strictly more information at identical transaction cost, and
+   §2.2.7 p.79 fixes the Length at 1 Dword either way, so the byte-granular form
+   saves nothing on the wire.
+2. The byte-granular config-read path already has three independent exercises
+   (V2 in `verilate_rq_rc_top`, E2/E3 standalone, I2 integration). A fourth here
+   would add no coverage.
+3. §3.6 already made this exact call for E3 over E2, for the same reason.
+   Consistency is worth more than variety.
+
+The FSM extracts Header Type from bits `[23:16]` of the returned Dword (D.3).
+
+---
+
+## D.5 Outcome → policy, phase-dependent
+
+This is the deliverable of the whole increment: `pcie_cfg_txn` reports what
+happened, and this table is the only place that decides what it *means*.
+
+| `txn_outcome_e` | during the probe (D-P) | after the probe (D-H) | citation |
+|---|---|---|---|
+| `TXN_OK` | device present; capture Vendor/Device ID | capture Header Type; advance | — |
+| `TXN_UR` | **absent** → `device_present_o=0`, `SCAN_DONE` | **ERROR** `ENUM_ERR_UR_POST_PROBE` | §7.3.1 p.479, §7.3.3 p.480, §2.3.2 IN p.122 |
+| `TXN_CA` | ERROR `ENUM_ERR_CA` | ERROR `ENUM_ERR_CA` | §2.3.2 p.120, p.122 |
+| `TXN_CRS_EXHAUSTED` | ERROR `ENUM_ERR_CRS_EXHAUSTED` | ERROR (same) | §2.3.2 p.121-122 |
+| `TXN_TIMEOUT` | **ERROR** `ENUM_ERR_TIMEOUT` | ERROR (same) | §2.8 p.152; §5.3 above |
+
+The `TXN_UR` row is the entire justification for the two-module split: the same
+wire event is *normal termination* in one phase and *fault* in the next, and
+`pcie_cfg_txn` has — deliberately — no idea which phase it is in.
+
+### D.5.1 The all-1s payload question: **unreachable as an absence signal, by construction**
+
+**[BASE §2.3.2 Implementation Note p.122]** *"Some system configuration software
+depends on reading a data value of all 1's when a Configuration Read Request is
+terminated as an Unsupported Request … **A Root Complex** intended for use with
+software that depends on a read-data value of all 1's **must synthesize this
+value** when UR Completion Status is returned for a Configuration Read Request."*
+
+Read carefully, that note describes a synthesis performed **by the Root Complex,
+for software above it**. `pcie_enum_scan` sits where the synthesis would be
+*performed*, not where it would be *consumed*: it observes the UR itself, as
+`TXN_UR`, because `pcie_cfg_txn` classifies completion status directly.
+
+Therefore:
+
+- **Absence is signalled by `TXN_UR` and by nothing else.** The FSM must **not**
+  treat `vendor_id == FFFFh` as absence. The all-1s convention exists precisely
+  because software *cannot* see the UR; we can, so re-deriving it from a sentinel
+  would discard information the spec took care to keep distinguishable.
+- A `TXN_OK` carrying `FFFFFFFF` is a device that answered successfully with that
+  data. It is reported as **present**, with `vendor_id_o = FFFFh`. Odd, and
+  almost certainly a broken completer — but it is not this module's job to
+  reinterpret a Successful Completion.
+- **Asserted, not just documented:** a standalone test drives an SC probe
+  returning `0xFFFFFFFF` and requires `device_present_o = 1`. Silent conversion
+  to absence would pass an unasserted design.
+- If a future MMIO host interface is added (deferred, master brief §13), the
+  all-1s synthesis belongs *there*, at the software boundary — not here.
+
+---
+
+## D.6 Credit-starvation annotation (Finding 2)
+
+`err_credit_blocked_o` is sampled from `tx_fc_blocked_o` **at the moment a
+`TXN_TIMEOUT` is reported** and presented alongside `scan_error_code_o`.
+
+**It is annotation, never control flow.** The state transition on `TXN_TIMEOUT`
+is `SCAN_ERROR` regardless of its value, and `tx_fc_blocked_o` does not appear in
+any next-state expression. Master brief §4.1 forbids a credit signal gating
+control flow, and that prohibition is what mutation `M-CREDIT-CTRL` (§5.5) exists
+to enforce: forcing `tx_fc_blocked_o` both ways must produce **identical state
+sequences**.
+
+**Predicted signature of the Finding-2 test:**
+
+```
+scan_error_o        = 1
+scan_error_code_o   = ENUM_ERR_TIMEOUT
+err_credit_blocked_o= 1
+scan_done_o         = 0
+completer.seen      = <unchanged>   -- the request never reached the wire
+rq_errors, command_errors, tx_errors, credit_errors = all empty / zero
+```
+
+i.e. the I9 signature, one layer up, plus the annotation bit.
+
+**Recorded plainly for the tracker owner:** no FSM above this stack can ride out
+continuous credit starvation beyond `CPL_TIMEOUT_CYCLES`. The limit is
+`tlp_request_tracker.sv:39` — per-tag age is measured from **allocation**, and
+allocation precedes the credit gate (`tlp_layer.sv:280` vs
+`tlp_requester.sv:138`). Only raising `CPL_TIMEOUT_CYCLES` toward the ~10 ms the
+spec recommends moves it, and that is Stage-H work tied to the Device Control 2
+register (§7.8.16). Annotating is the most any client can do; **fixing it is not
+a client-side problem.**
+
+---
+
+## D.7 Predicted FAIL sets for the falsification runs
+
+| # | run | prediction |
+|---|---|---|
+| **DF1** | Commit C: `verilate_enum_scan` with the bench wired and `pcie_enum_scan.sv` absent from `rc_core.core` | Elaboration failure, **zero `TESTS=` lines**, exit non-zero. Expected symbol `%Error-MODMISSING: … Cannot find file containing module: 'pcie_enum_scan'` — the F2 form rather than the F1 package form, because `pcie_enum_pkg` will already be present (extended in the same commit). |
+| **DF2** | Commit D: `verilate_enum_scan_tlp` likewise | Same, naming `pcie_enum_scan` from the integration shim. |
+| **DF3** | any scan test that asserts only "no TLP emitted" | Vacuous without proof the FSM *tried* — the F4 lesson. Every silence assertion in the scan suite must first establish that a command was accepted and `s_axis_rq_tvalid` was observed. |
+| **DF4** | the absence test (`TXN_UR` on the probe) | Must assert `scan_done_o=1` **and** `device_present_o=0` **and** `scan_error_o=0`. Asserting only `device_present_o=0` would pass against a design that never ran, since the port resets to 0. |
+
+DF4 is the one worth writing down: `device_present_o` is reset-low, so the
+obvious absence assertion is satisfied by a dead FSM.
