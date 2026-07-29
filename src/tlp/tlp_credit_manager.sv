@@ -77,6 +77,22 @@ module tlp_credit_manager
   // Set once the initial advertisement has been captured.
   logic fc_init_seen_r;
 
+  // An advertisement of 00h / 000h made AT FC INITIALIZATION means infinite
+  // credit for that type (SS2.6.1 p.138; footnote 33 p.137: "interpreted as
+  // infinite by the Transmitter, which will, therefore, never throttle").  The
+  // determination is latched at initialization and never re-evaluated: the
+  // gating rule states it twice as "specified as infinite during Flow Control
+  // initialization" (p.140).  Re-deriving it from the live remainder would let a
+  // pool consumed down to zero read as infinite, which is a different thing.
+  //
+  // Infinite is tracked per pool, not per class: SS2.6.1 p.138 contemplates
+  // "only the Data or header advertisement (but not both) for a given type
+  // (N, NP, or CPL)".  Table 2-37 p.137-138 makes infinite CPLH/CPLD mandatory
+  // for the Root Complex an Endpoint faces, so that pair is the normal case
+  // rather than an edge case.
+  logic ph_infinite_r, nph_infinite_r, cplh_infinite_r;
+  logic pd_infinite_r, npd_infinite_r, cpld_infinite_r;
+
   // Remaining credit = (CREDIT_LIMIT - CREDITS_CONSUMED) mod 2^[Field Size].
   // Native N-bit subtraction supplies the modulo; a wrapped limit -- including
   // one that has wrapped to exactly zero -- needs no special case.
@@ -98,16 +114,19 @@ module tlp_credit_manager
     selected_data_available = 1'b0;
     case (request_class_i)
       TLP_CREDIT_POSTED: begin
-        selected_header_available = ph_available != 0;
-        selected_data_available = pd_available >= request_data_credits_i;
+        selected_header_available = ph_infinite_r || (ph_available != 0);
+        selected_data_available =
+            pd_infinite_r || (pd_available >= request_data_credits_i);
       end
       TLP_CREDIT_COMPLETION: begin
-        selected_header_available = cplh_available != 0;
-        selected_data_available = cpld_available >= request_data_credits_i;
+        selected_header_available = cplh_infinite_r || (cplh_available != 0);
+        selected_data_available =
+            cpld_infinite_r || (cpld_available >= request_data_credits_i);
       end
       default: begin
-        selected_header_available = nph_available != 0;
-        selected_data_available = npd_available >= request_data_credits_i;
+        selected_header_available = nph_infinite_r || (nph_available != 0);
+        selected_data_available =
+            npd_infinite_r || (npd_available >= request_data_credits_i);
       end
     endcase
     request_ready_o = fc_initialized_i && selected_header_available &&
@@ -137,17 +156,44 @@ module tlp_credit_manager
       cplh_consumed_r <= '0;
       cpld_consumed_r <= '0;
       fc_init_seen_r <= 1'b0;
+      ph_infinite_r <= 1'b0;
+      pd_infinite_r <= 1'b0;
+      nph_infinite_r <= 1'b0;
+      npd_infinite_r <= 1'b0;
+      cplh_infinite_r <= 1'b0;
+      cpld_infinite_r <= 1'b0;
       error_o <= 1'b0;
     end else begin
       error_o <= 1'b0;
       if (fc_update_valid_i) begin
-        ph_limit_r <= fc_ph_i;
-        pd_limit_r <= fc_pd_i;
-        nph_limit_r <= fc_nph_i;
-        npd_limit_r <= fc_npd_i;
-        cplh_limit_r <= fc_cplh_i;
-        cpld_limit_r <= fc_cpld_i;
         fc_init_seen_r <= 1'b1;
+        if (!fc_init_seen_r) begin
+          // FC initialization: capture the advertisement and latch which pools
+          // were advertised infinite.
+          ph_limit_r <= fc_ph_i;
+          pd_limit_r <= fc_pd_i;
+          nph_limit_r <= fc_nph_i;
+          npd_limit_r <= fc_npd_i;
+          cplh_limit_r <= fc_cplh_i;
+          cpld_limit_r <= fc_cpld_i;
+          ph_infinite_r <= (fc_ph_i == '0);
+          pd_infinite_r <= (fc_pd_i == '0);
+          nph_infinite_r <= (fc_nph_i == '0);
+          npd_infinite_r <= (fc_npd_i == '0);
+          cplh_infinite_r <= (fc_cplh_i == '0);
+          cpld_infinite_r <= (fc_cpld_i == '0);
+        end else begin
+          // UpdateFC.  For a pool advertised infinite the credit field "must be
+          // set to zero and must be ignored" (SS2.6.1 p.138) -- our own DLL
+          // forwards those DLLPs (dllp_handler.sv:331-332), so taking the field
+          // would destroy the pool.  Everything else takes the new limit.
+          if (!ph_infinite_r)   ph_limit_r   <= fc_ph_i;
+          if (!pd_infinite_r)   pd_limit_r   <= fc_pd_i;
+          if (!nph_infinite_r)  nph_limit_r  <= fc_nph_i;
+          if (!npd_infinite_r)  npd_limit_r  <= fc_npd_i;
+          if (!cplh_infinite_r) cplh_limit_r <= fc_cplh_i;
+          if (!cpld_infinite_r) cpld_limit_r <= fc_cpld_i;
+        end
       end
       // CREDITS_CONSUMED is written by exactly one priority chain, so the load
       // and the accumulate can no longer collide on a shared register the way

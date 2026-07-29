@@ -340,3 +340,145 @@ async def blocked_requests_consume_no_credit(dut):
     assert got == 5, (
         f"expected limit 8 - consumed 3 = 5 available, got {got}: a blocked "
         "request consumed credit it was never granted")
+
+
+# ---------------------------------------------------------------------------
+# Commit B -- infinite credit.
+#
+# An advertisement of 00h/000h made AT FC INITIALIZATION means infinite credit
+# for that type (SS2.6.1 p.138, footnote 33 p.137).  The determination is latched
+# at initialisation and never re-evaluated (p.140), and the credit field of any
+# later UpdateFC for that pool must be ignored (p.138).
+# ---------------------------------------------------------------------------
+
+
+@cocotb.test()
+async def infinite_completion_credit_never_throttles(dut):
+    """*** The configuration an endpoint actually faces. ***
+
+    Table 2-37 p.137-138: a Root Complex not supporting peer-to-peer traffic
+    between all Root Ports -- and an Endpoint -- MUST advertise infinite
+    completion credits, an initial credit value of all 0s.  Footnote 33 p.137:
+    "This value is interpreted as infinite by the Transmitter, which will,
+    therefore, never throttle."
+
+    Before this commit an advertised 0 read as 'nothing available', so the
+    mandated configuration deadlocked the completion path outright.
+    """
+    await _reset_and_init(dut, 8, 100, 8, 100, 0, 0)
+    # Far more completion traffic than any finite 8-/12-bit pool could carry.
+    for i in range(300):
+        assert await _try_request(dut, COMPLETION, 100), (
+            f"infinite completion pool throttled at request {i}")
+
+
+@cocotb.test()
+async def infinite_credit_is_honoured_on_every_pool(dut):
+    """Infinite is representable independently on all six pools -- the spec
+    phrases it per type and per header/data: "only the Data or header
+    advertisement (but not both) for a given type (N, NP, or CPL)" (p.138)."""
+    await _reset_and_init(dut, 0, 0, 0, 0, 0, 0)
+    for cls in (POSTED, NON_POSTED, COMPLETION):
+        for i in range(200):
+            assert await _try_request(dut, cls, 200), (
+                f"class {cls} throttled at request {i} despite infinite credit")
+
+
+@cocotb.test()
+async def infinite_and_exhausted_stay_distinguishable(dut):
+    """The regression guard against implementing this as '0 always means
+    available'.  A pool advertised finite and then consumed to zero must still
+    block -- which is exactly why the flag has to be latched at initialisation
+    rather than derived from the live remainder."""
+    await _reset_and_init(dut, 3, 100, 3, 100, 0, 0)
+    for _ in range(3):
+        assert await _try_request(dut, POSTED, 1)
+    assert _avail(dut)["ph"] == 0
+
+    ready, blocked = await _probe_request(dut, POSTED, 1)
+    assert ready == 0 and blocked == 1, (
+        "a finite pool consumed to zero must block, even though its remainder "
+        "now reads 0 exactly as an infinite pool's advertisement did")
+
+    # ...while the genuinely infinite completion pool beside it does not block.
+    ready_cpl, _ = await _probe_request(dut, COMPLETION, 4000)
+    assert ready_cpl == 1, "infinite completion pool should never block"
+
+
+@cocotb.test()
+async def zero_valued_update_on_an_infinite_pool_is_ignored(dut):
+    """SS2.6.1 p.138: once infinite has been advertised, "If UpdateFC DLLPs are
+    sent, the credit value fields must be set to zero and must be ignored".  Our
+    DLL forwards those DLLPs (dllp_handler.sv:331-332), so the module must ignore
+    the field rather than read the zero as a fresh advertisement.
+
+    This is defect SS0.5.  Commit A could only downgrade it from 'wedged' to
+    'over-permissive'; here it is actually correct.
+    """
+    await _reset_and_init(dut, 8, 100, 8, 100, 0, 0)
+    for _ in range(5):
+        assert await _try_request(dut, COMPLETION, 50)
+
+    # The compliant zero-valued UpdateFC for an infinite type.
+    await _advertise(dut, 8, 100, 8, 100, 0, 0)
+    for i in range(200):
+        assert await _try_request(dut, COMPLETION, 50), (
+            f"infinite completion pool throttled at request {i} after a "
+            "zero-valued UpdateFC that should have been ignored entirely")
+
+
+@cocotb.test()
+async def a_non_zero_advertisement_is_still_finite(dut):
+    """Proves the fix did not simply turn every pool infinite."""
+    await _reset_and_init(dut, 4, 40, 4, 40, 4, 40)
+    for _ in range(4):
+        assert await _try_request(dut, POSTED, 1)
+    ready, blocked = await _probe_request(dut, POSTED, 1)
+    assert ready == 0 and blocked == 1, "a finite pool must still exhaust"
+
+
+@cocotb.test()
+async def infinite_and_finite_pools_coexist(dut):
+    """One pool infinite, another finite and small, all values forced apart: the
+    finite pool must still block at its own limit while the infinite one runs,
+    and a third pool must be untouched by either."""
+    await _reset_and_init(dut, 2, 20, 0, 0, 7, 70)
+
+    # NP is infinite -- run it far past any finite limit.
+    for i in range(200):
+        assert await _try_request(dut, NON_POSTED, 300), f"NP throttled at {i}"
+
+    # P is finite at 2 headers and must block on the third.
+    for _ in range(2):
+        assert await _try_request(dut, POSTED, 1)
+    ready, _ = await _probe_request(dut, POSTED, 1)
+    assert ready == 0, "finite posted pool did not block while NP was infinite"
+
+    # CPL is finite at 7/70 and was touched by neither.
+    got = _avail(dut)
+    assert (got["cplh"], got["cpld"]) == (7, 70), "CPL pool was disturbed"
+
+
+@cocotb.test()
+async def a_zero_valued_update_does_not_make_a_finite_pool_infinite(dut):
+    """The 'latched at initialisation' property, seen from the other side.
+
+    SS2.6.1.1 p.140 states the determination twice as made "during Flow Control
+    initialization", and p.138 makes a post-initialisation zero meaningless
+    rather than meaningful -- so it must not promote a finite pool to infinite.
+
+    Added because a mutation that re-latched the flag on every UpdateFC survived
+    every other test in this file.
+    """
+    await _reset_and_init(dut, 8, 4000, 8, 4000, 8, 4000)
+    for _ in range(3):
+        assert await _try_request(dut, POSTED, 1)
+
+    await _advertise(dut, 0, 4000, 8, 4000, 8, 4000)
+    for _ in range(400):
+        if not await _try_request(dut, POSTED, 1):
+            break
+    else:
+        raise AssertionError(
+            "posted pool never blocked after a zero-valued UpdateFC -- a finite "
+            "pool was promoted to infinite by a post-initialisation zero")

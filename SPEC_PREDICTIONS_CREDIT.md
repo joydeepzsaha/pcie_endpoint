@@ -400,3 +400,31 @@ large value — so the pool becomes **over-permissive** instead of wedged. Neith
 Only **Commit B** makes it correct, by latching the pool as infinite at init and thereafter
 **ignoring** the credit field of updates for that pool (p.138). Test 2.3.4 asserts the
 not-wedged property that A does deliver, and Commit B's tests close the rest.
+
+## L. Commit B — infinite credit, as implemented
+
+Six flags, one per pool, latched at the FC-initialisation strobe from
+`fc_*_i == 0` and never re-evaluated (§C). Each gates its own comparison; the
+credit field of a later `UpdateFC` is **ignored** for a pool latched infinite,
+which is what finally makes defect §0.5 correct rather than merely non-wedging.
+
+`*_available_o` continues to report `limit − consumed` for infinite pools too —
+an infinite pool reads as `0` available. That keeps the bundled bench's
+`npd_av == 0` assertion (which advertises `npd = 0` at init) intact, and nothing
+in `tlp_layer` consumes these outputs (§I.3). They are debug observability only;
+the gate does not use them.
+
+### L.1 Two mutations survived the first test set — both gaps are now closed
+
+Recorded because both were *predicted-catchable* and were not, which is the
+whole point of running mutations rather than reasoning about them:
+
+| Mutation | Survived | Test added to catch it |
+|---|---|---|
+| Charge `CREDITS_CONSUMED` on **blocked** requests as well as granted ones (Commit A, M-d) | every test in the file | `blocked_requests_consume_no_credit` |
+| Re-latch the infinite flag on **every** `UpdateFC` rather than only at init (Commit B, M-B-b) | every test in the file | `a_zero_valued_update_does_not_make_a_finite_pool_infinite` |
+
+Both gaps have the same shape: the property is about what happens on a path the
+positive tests never drive — a request that is *not* granted, and an
+advertisement that arrives *after* initialisation. Neither was reachable by
+strengthening an existing assertion; each needed its own test.
