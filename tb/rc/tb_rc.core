@@ -114,6 +114,19 @@ filesets:
       - enum_tb_common.py        : {file_type : user, copyto : .}
       - test_pcie_enum_txn_tlp.py : {file_type : user, copyto : .}
 
+  # 2b-2 integration: pcie_enum_scan in front of a REAL pcie_rq_rc_top. The
+  # completer models a tiny configuration space whose DEFAULT ARM IS UR, not
+  # silence -- see test_pcie_enum_scan_tlp.py, SS THE COMPLETER.
+  bench_enum_scan_tlp:
+    files:
+      - tb_pcie_enum_scan_tlp.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_scan_tlp:
+    files:
+      - enum_tb_common.py          : {file_type : user, copyto : .}
+      - test_pcie_enum_scan_tlp.py : {file_type : user, copyto : .}
+
   # 2a-iii: pcie_rq_rc_top -- the assembled Root Complex requester surface.
   # The bench plays the Data Link Layer on both DLL streams and answers config
   # requests with a small, swappable Python completer; see test_pcie_rq_rc_top.py.
@@ -260,3 +273,19 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_enum_scan, cocotb_enum_scan]
     toplevel : [tb_pcie_enum_scan]
+
+  # 2b-2 integration: K1..K6. On-wire goldens for both scan descriptors, a
+  # CRS-first device, the Table 2-37 minimum credit with a cumulative drip, and
+  # the fabricated-timeout signature from SPEC_PREDICTIONS_ENUM.md SSD.6.
+  verilate_enum_scan_tlp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_scan_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_scan_tlp, cocotb_enum_scan_tlp]
+    toplevel : [tb_pcie_enum_scan_tlp]
