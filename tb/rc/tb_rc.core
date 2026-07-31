@@ -163,6 +163,21 @@ filesets:
       - enum_tb_common.py         : {file_type : user, copyto : .}
       - test_pcie_enum_bar_tlp.py : {file_type : user, copyto : .}
 
+  # Stage D-3: the bridge bus-number sequencer standalone. DUT is
+  # pcie_enum_bus plus one real pcie_cfg_txn wired directly (the mux and the
+  # per-level instances are the integration target's subject). The bench plays
+  # the shared socket via enum_tb_common.Socket and drives the scan-verdict
+  # inputs itself, so every eligibility branch is reachable without a scan.
+  bench_enum_bus:
+    files:
+      - tb_pcie_enum_bus.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_bus:
+    files:
+      - enum_tb_common.py     : {file_type : user, copyto : .}
+      - test_pcie_enum_bus.py : {file_type : user, copyto : .}
+
   # 2a-iii: pcie_rq_rc_top -- the assembled Root Complex requester surface.
   # The bench plays the Data Link Layer on both DLL streams and answers config
   # requests with a small, swappable Python completer; see test_pcie_rq_rc_top.py.
@@ -330,6 +345,21 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_enum_bar, cocotb_enum_bar]
     toplevel : [tb_pcie_enum_bar]
+
+  # Stage D-3: pcie_enum_bus standalone, N1..N10. The one 18h write's goldens,
+  # every fault path, the handoff ordering, the mandatory no-settle variants
+  # (F3.5) and the bypass/single-shot structure.
+  verilate_enum_bus:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bus
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bus, cocotb_enum_bus]
+    toplevel : [tb_pcie_enum_bus]
 
   # Waveform variant of the above. --trace-fst was removed from every functional
   # target (nothing in the flow consumes a waveform, and the flag was the only
