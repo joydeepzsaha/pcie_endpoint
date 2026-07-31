@@ -389,6 +389,10 @@ module pcie_enum_top
       .cmd_valid_i   (cmd_valid),
       .cmd_ready_o   (cmd_ready),
       .cmd_write_i   (cmd_write),
+      // Stage D increment 1: tied 0 -- both current stages (scan, bar) talk
+      // Type 0 to the directly-attached bus. Increment 4 moves this into the
+      // widened handoff mux, where the second-level stages drive it high.
+      .cmd_type1_i   (1'b0),
       // Not muxed -- see SS THE BDF IS NOT PART OF THE MUXED PORT.
       .cmd_bdf_i     (device_bdf_o),
       .cmd_reg_num_i (cmd_reg_num),

@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
-// pcie_cfg_txn -- ONE Type 0 Configuration transaction, issue to outcome.
-// Commit 2b-1.
+// pcie_cfg_txn -- ONE Configuration transaction, issue to outcome.
+// Commit 2b-1; Stage D added the per-transaction Type 0/1 select (cmd_type1_i).
 //
 //   cmd_* -> RQ descriptor -> pcie_rq_rc_top socket -> ... -> completion
 //         -> classify -> rsp_*
@@ -136,6 +136,14 @@ module pcie_cfg_txn
     input  logic                        cmd_valid_i,
     output logic                        cmd_ready_o,
     input  logic                        cmd_write_i,
+    // Stage D: Type 1 select, sampled with the command like every other cmd_*
+    // field. This is a PER-TRANSACTION property, not phase knowledge -- the
+    // primitive still does not know who is asking or why, exactly as it does
+    // not know why cmd_reg_num_i is 0x06. Because it is latched once at accept
+    // and the descriptor is a pure function of the latch, a CRS reissue
+    // repeats the type by construction (SPEC_PREDICTIONS_STAGE_D.md P6.3 --
+    // the retry must not decay to Type 0).
+    input  logic                        cmd_type1_i,
     // The target BDF. This becomes the descriptor's Completer ID, which is what
     // forms the routing Dword -- NOT the address (pcie_rq_if.sv:249-262,
     // tlp_generator.sv:81-82, PG213 Table 61 :3740).
@@ -212,6 +220,7 @@ module pcie_cfg_txn
   // rather than by care: the descriptor below is a pure function of these.
   // -------------------------------------------------------------------------
   logic        write_r;
+  logic        type1_r;
   logic [15:0] bdf_r;
   logic [5:0]  reg_num_r;
   logic [3:0]  ext_reg_r;
@@ -261,7 +270,11 @@ module pcie_cfg_txn
   always_comb begin
     desc              = '0;
     desc.completer_id = bdf_r;                                 // the target BDF
-    desc.req_type     = write_r ? RQ_CFG_WRITE0 : RQ_CFG_READ0;
+    // Direction selects read/write; the latched Type 1 flag selects the pair.
+    // These four encodings differ from their Type 0 partners in bit 0 only
+    // (pcie_rq_rc_pkg.sv:63-79), mirroring Base 2.1 Table 2-3 p.58 on the wire.
+    desc.req_type     = write_r ? (type1_r ? RQ_CFG_WRITE1 : RQ_CFG_WRITE0)
+                                : (type1_r ? RQ_CFG_READ1  : RQ_CFG_READ0);
     desc.dword_count  = CFG_DWORD_COUNT;                       // always 1
     desc.address      = 64'd0;
     desc.address[11:8] = ext_reg_r;                            // Ext Reg Number
@@ -354,6 +367,7 @@ module pcie_cfg_txn
     if (rst_i) begin
       state_r        <= S_IDLE;
       write_r        <= 1'b0;
+      type1_r        <= 1'b0;
       bdf_r          <= '0;
       reg_num_r      <= '0;
       ext_reg_r      <= '0;
@@ -373,6 +387,7 @@ module pcie_cfg_txn
         S_IDLE: begin
           if (cmd_valid_i) begin
             write_r      <= cmd_write_i;
+            type1_r      <= cmd_type1_i;
             bdf_r        <= cmd_bdf_i;
             reg_num_r    <= cmd_reg_num_i;
             ext_reg_r    <= cmd_ext_reg_i;

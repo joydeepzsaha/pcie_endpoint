@@ -89,6 +89,7 @@ module tb_pcie_enum_txn_tlp
   logic        cmd_valid_i;
   logic        cmd_ready_o;
   logic        cmd_write_i;
+  logic        cmd_type1_i;
   logic [15:0] cmd_bdf_i;
   logic [5:0]  cmd_reg_num_i;
   logic [3:0]  cmd_ext_reg_i;
@@ -198,6 +199,7 @@ module tb_pcie_enum_txn_tlp
       .cmd_valid_i   (cmd_valid_i),
       .cmd_ready_o   (cmd_ready_o),
       .cmd_write_i   (cmd_write_i),
+      .cmd_type1_i   (cmd_type1_i),
       .cmd_bdf_i     (cmd_bdf_i),
       .cmd_reg_num_i (cmd_reg_num_i),
       .cmd_ext_reg_i (cmd_ext_reg_i),
