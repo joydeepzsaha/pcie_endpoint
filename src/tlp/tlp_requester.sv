@@ -72,9 +72,37 @@ module tlp_requester
   logic request_last;
   integer lane;
 
+  // Command-class predicates.  Every site below that needs "is this config", "is
+  // this config or IO", or the read/write direction calls one of these instead of
+  // re-enumerating the members inline.  The RX side already works this way --
+  // tlp_validator.sv:17-19 mints config_or_io once from the header -- and the TX
+  // side used to spell the same memberships out by hand in five places, one of
+  // which (the tlp_type select) failed open: a command missing from its list was
+  // emitted as a well-formed Memory Read.
+  function automatic logic command_is_config(input tlp_cmd_e command);
+    return command == TLP_CMD_CFG_READ0 || command == TLP_CMD_CFG_WRITE0;
+  endfunction
+
+  function automatic logic command_is_io(input tlp_cmd_e command);
+    return command == TLP_CMD_IO_READ || command == TLP_CMD_IO_WRITE;
+  endfunction
+
+  function automatic logic command_is_config_or_io(input tlp_cmd_e command);
+    return command_is_config(command) || command_is_io(command);
+  endfunction
+
+  function automatic logic command_is_read(input tlp_cmd_e command);
+    return command == TLP_CMD_MEM_READ || command == TLP_CMD_CFG_READ0 ||
+           command == TLP_CMD_IO_READ;
+  endfunction
+
+  function automatic logic command_is_write(input tlp_cmd_e command);
+    return command == TLP_CMD_MEM_WRITE || command == TLP_CMD_CFG_WRITE0 ||
+           command == TLP_CMD_IO_WRITE;
+  endfunction
+
   function automatic logic [12:0] command_limit(input tlp_cmd_e command);
-    if (command == TLP_CMD_CFG_READ0 || command == TLP_CMD_CFG_WRITE0 ||
-        command == TLP_CMD_IO_READ || command == TLP_CMD_IO_WRITE)
+    if (command_is_config_or_io(command))
       return 13'd4;
     if (command == TLP_CMD_MEM_READ)
       return max_read_bytes_i == 0 ? 13'd128 : max_read_bytes_i;
@@ -101,8 +129,7 @@ module tlp_requester
   endfunction
 
   always_comb begin
-    command_has_data   = command_r == TLP_CMD_MEM_WRITE ||
-                         command_r == TLP_CMD_CFG_WRITE0 || command_r == TLP_CMD_IO_WRITE;
+    command_has_data   = command_is_write(command_r);
     command_non_posted = command_r != TLP_CMD_MEM_WRITE;
     accepted_bytes = '0;
     for (lane = 0; lane < KEEP_WIDTH; lane = lane + 1)
@@ -113,10 +140,10 @@ module tlp_requester
         (address_r[63:32] == 0 ? TLP_FMT_3DW_DATA : TLP_FMT_4DW_DATA) :
         (address_r[63:32] == 0 ? TLP_FMT_3DW_NO_DATA : TLP_FMT_4DW_NO_DATA);
     header_c.tlp_type = TLP_TYPE_MEM;
-    if (command_r == TLP_CMD_CFG_READ0 || command_r == TLP_CMD_CFG_WRITE0) begin
+    if (command_is_config(command_r)) begin
       header_c.tlp_type = TLP_TYPE_CFG0;
       header_c.fmt = command_has_data ? TLP_FMT_3DW_DATA : TLP_FMT_3DW_NO_DATA;
-    end else if (command_r == TLP_CMD_IO_READ || command_r == TLP_CMD_IO_WRITE) begin
+    end else if (command_is_io(command_r)) begin
       header_c.tlp_type = TLP_TYPE_IO;
       header_c.fmt = command_has_data ? TLP_FMT_3DW_DATA : TLP_FMT_3DW_NO_DATA;
     end
@@ -139,8 +166,7 @@ module tlp_requester
   assign tag_requester_id_o = requester_id_i;
   assign tag_byte_count_o = segment_bytes_r == 0 ? 13'd4 : segment_bytes_r;
   assign tag_context_o = context_r;
-  assign tag_expects_data_o = command_r == TLP_CMD_MEM_READ ||
-                              command_r == TLP_CMD_CFG_READ0 || command_r == TLP_CMD_IO_READ;
+  assign tag_expects_data_o = command_is_read(command_r);
   assign packet_header_o = header_c;
   assign packet_header_valid_o = state_r == REQ_HEADER;
   assign packet_data_o = command_data_i;
@@ -190,8 +216,7 @@ module tlp_requester
           // construction, and calculate_segment's clamp to 4 - address[1:0]
           // (:93-94) can no longer split the request across two config TLPs.
           if ((command_byte_count_i == 0 && command_i != TLP_CMD_MEM_READ) ||
-              ((command_i == TLP_CMD_CFG_READ0 || command_i == TLP_CMD_CFG_WRITE0 ||
-                command_i == TLP_CMD_IO_READ || command_i == TLP_CMD_IO_WRITE) &&
+              (command_is_config_or_io(command_i) &&
                command_byte_count_i > (13'd4 - {11'd0, command_address_i[1:0]}))) begin
             command_error_valid_o <= 1'b1;
             command_error_code_o <= TLP_ERR_BAD_LENGTH;
