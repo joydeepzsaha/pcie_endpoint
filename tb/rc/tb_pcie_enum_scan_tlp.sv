@@ -192,6 +192,18 @@ module tb_pcie_enum_scan_tlp
       // correctly, because they are the SCAN's property, not enumeration's.
       // pcie_enum_bar is exercised by verilate_enum_bar / _tlp instead.
       .bar_enable_i(1'b0),
+      // Stage D: the bridge path is OFF in this shim -- the same measured
+      // reasoning as bar_enable_i (SS WHY THE BAR PHASE NEEDS AN ENABLE):
+      // with it low the new stages never leave IDLE, so every pre-Stage-D
+      // assertion, count and sim end time in this bench is untouched.
+      .bridge_enable_i(1'b0),
+      .bus_done_o(), .bus_bypassed_o(),
+      .sec_scan_done_o(), .sec_device_present_o(), .sec_unsupported_device_o(),
+      .sec_device_bdf_o(), .sec_vendor_id_o(), .sec_device_id_o(),
+      .sec_header_type_o(), .sec_multifunction_o(),
+      .sec_enum_done_o(), .sec_bar_count_o(), .sec_bar_valid_o(),
+      .sec_bar_is_64_o(), .sec_bar_prefetch_o(), .sec_bar_size_o(),
+      .sec_bar_addr_o(), .sec_io_bar_mask_o(),
 
       .scan_busy_o         (scan_busy_o),
       .scan_done_o         (scan_done_o),
