@@ -302,6 +302,44 @@ package pcie_enum_pkg;
       (32'd1 << CMD_BIT_MEM_ENABLE) | (32'd1 << CMD_BIT_BUS_MASTER);   // 0x0006
 
   // -------------------------------------------------------------------------
+  // SS BRIDGE BUS-NUMBER ASSIGNMENT (Stage D)
+  //
+  // The Type 1 Configuration Space Header -- [BASE] SS7.5.3 Figure 7-6 p.492,
+  // the map of record for Switch and Root Complex virtual PCI Bridges (its
+  // SS7.5.3 p.493 scope note).  NOT PCI 3.0: SS6.1 p.214 defers Header Type
+  // 01h to the PCI-to-PCI Bridge Architecture Specification, which is not on
+  // the shelf.  Settled in SPEC_PREDICTIONS_STAGE_D.md SS0.2 -- do not
+  // re-derive.
+  // -------------------------------------------------------------------------
+
+  // Register 6 == byte offset 18h in a TYPE 1 header:
+  //   {Secondary Latency Timer[31:24], Subordinate[23:16], Secondary[15:8],
+  //    Primary[7:0]}
+  //
+  // !! P4.7: THIS IS WHERE A TYPE 0 HEADER'S BAR2 SITS.  A Type 1 header has
+  // TWO BARs (10h/14h, SS7.5.3.1 p.493), not six -- a six-BAR sizing sweep
+  // pointed at a bridge would write all-ones HERE and destroy the bus-number
+  // assignment, silently, after every preceding probe passed.  A BAR stage
+  // must never be pointed at a Type 1 Function in Stage D.
+  localparam logic [5:0] CFG_REG_BUS_NUMBER = 6'h06;
+
+  // The values, forced pairwise-apart per SPEC_PREDICTIONS_STAGE_D.md P5.2:
+  // Secondary is non-zero, != primary, and NOT primary+1 (so off-by-one from
+  // the parent is distinguishable from correct); Subordinate != Secondary (so
+  // writing the same value into both fields is caught by the whole-Dword
+  // golden).  All [DESIGN]: Stage D fixes them a priori -- a general
+  // enumerator discovers Subordinate by descending and needs TWO writes per
+  // bridge (P5.7); this single-write shape is Stage-D-specific.
+  localparam logic [7:0] SEC_BUS_NUMBER = 8'h05;
+  localparam logic [7:0] SUB_BUS_NUMBER = 8'h09;
+
+  // Secondary Latency Timer: [BASE] SS7.5.3.3 p.493 -- "does not apply to PCI
+  // Express.  It must be read-only and hardwired to 00h."  The whole-Dword
+  // write necessarily drives the byte; 00h is the only defensible value, and
+  // a read-back golden must expect 00h REGARDLESS of what was written (P4.2).
+  localparam logic [7:0] SEC_LATENCY_TIMER_WDATA = 8'h00;
+
+  // -------------------------------------------------------------------------
   // Why the scan stopped badly.
   //
   // There is deliberately NO code for "device absent": absence is not an error.

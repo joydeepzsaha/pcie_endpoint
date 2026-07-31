@@ -43,6 +43,7 @@ filesets:
       - pcie_cfg_txn.sv
       - pcie_enum_scan.sv
       - pcie_enum_bar.sv
+      - pcie_enum_bus.sv
       - pcie_enum_top.sv
     file_type: systemVerilogSource
 
