@@ -163,6 +163,19 @@ filesets:
       - enum_tb_common.py         : {file_type : user, copyto : .}
       - test_pcie_enum_bar_tlp.py : {file_type : user, copyto : .}
 
+  # Stage D acceptance: the whole enumeration, one bridge level, in front of
+  # a REAL pcie_rq_rc_top, answered by the BDF-routing bridge + device pair
+  # from enum_tb_common. bar_enable_i AND bridge_enable_i are high.
+  bench_enum_bridge_tlp:
+    files:
+      - tb_pcie_enum_bridge_tlp.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_bridge_tlp:
+    files:
+      - enum_tb_common.py            : {file_type : user, copyto : .}
+      - test_pcie_enum_bridge_tlp.py : {file_type : user, copyto : .}
+
   # Stage D-3: the bridge bus-number sequencer standalone. DUT is
   # pcie_enum_bus plus one real pcie_cfg_txn wired directly (the mux and the
   # per-level instances are the integration target's subject). The bench plays
@@ -345,6 +358,22 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_enum_bar, cocotb_enum_bar]
     toplevel : [tb_pcie_enum_bar]
+
+  # Stage D acceptance: B1..B5. The SS5.4 sequence in order (probe -> 18h ->
+  # CFG1 probe -> BAR phase -> Command last), saturated AND under the Table
+  # 2-37 drip, CRS at both points, the stalled-write ordering discriminator,
+  # and the direct-attach regression with the bridge path enabled.
+  verilate_enum_bridge_tlp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bridge_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bridge_tlp, cocotb_enum_bridge_tlp]
+    toplevel : [tb_pcie_enum_bridge_tlp]
 
   # Stage D-3: pcie_enum_bus standalone, N1..N10. The one 18h write's goldens,
   # every fault path, the handoff ordering, the mandatory no-settle variants
