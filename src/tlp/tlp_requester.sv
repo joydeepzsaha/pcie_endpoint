@@ -80,7 +80,17 @@ module tlp_requester
   // which (the tlp_type select) failed open: a command missing from its list was
   // emitted as a well-formed Memory Read.
   function automatic logic command_is_config(input tlp_cmd_e command);
-    return command == TLP_CMD_CFG_READ0 || command == TLP_CMD_CFG_WRITE0;
+    return command == TLP_CMD_CFG_READ0 || command == TLP_CMD_CFG_WRITE0 ||
+           command == TLP_CMD_CFG_READ1 || command == TLP_CMD_CFG_WRITE1;
+  endfunction
+
+  // Type 1 sub-class, used only by the tlp_type select: the config class rules
+  // (one-DW guard, 4-byte limit, 3DW fmt) apply to CFG0 and CFG1 alike, but
+  // dw0[4:0] must carry 00101 for CFG1 (PCIe Base 2.1 Table 2-3 p.58).  Kept
+  // as its own explicit member list -- deriving it from command_r[0] would tie
+  // correctness to the enum's positional encoding.
+  function automatic logic command_is_config1(input tlp_cmd_e command);
+    return command == TLP_CMD_CFG_READ1 || command == TLP_CMD_CFG_WRITE1;
   endfunction
 
   function automatic logic command_is_io(input tlp_cmd_e command);
@@ -93,12 +103,12 @@ module tlp_requester
 
   function automatic logic command_is_read(input tlp_cmd_e command);
     return command == TLP_CMD_MEM_READ || command == TLP_CMD_CFG_READ0 ||
-           command == TLP_CMD_IO_READ;
+           command == TLP_CMD_IO_READ  || command == TLP_CMD_CFG_READ1;
   endfunction
 
   function automatic logic command_is_write(input tlp_cmd_e command);
     return command == TLP_CMD_MEM_WRITE || command == TLP_CMD_CFG_WRITE0 ||
-           command == TLP_CMD_IO_WRITE;
+           command == TLP_CMD_IO_WRITE  || command == TLP_CMD_CFG_WRITE1;
   endfunction
 
   function automatic logic [12:0] command_limit(input tlp_cmd_e command);
@@ -141,7 +151,8 @@ module tlp_requester
         (address_r[63:32] == 0 ? TLP_FMT_3DW_NO_DATA : TLP_FMT_4DW_NO_DATA);
     header_c.tlp_type = TLP_TYPE_MEM;
     if (command_is_config(command_r)) begin
-      header_c.tlp_type = TLP_TYPE_CFG0;
+      header_c.tlp_type = command_is_config1(command_r) ? TLP_TYPE_CFG1
+                                                        : TLP_TYPE_CFG0;
       header_c.fmt = command_has_data ? TLP_FMT_3DW_DATA : TLP_FMT_3DW_NO_DATA;
     end else if (command_is_io(command_r)) begin
       header_c.tlp_type = TLP_TYPE_IO;

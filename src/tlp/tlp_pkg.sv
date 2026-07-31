@@ -46,7 +46,9 @@ package tlp_pkg;
     TLP_CMD_CFG_READ0,
     TLP_CMD_CFG_WRITE0,
     TLP_CMD_IO_READ,
-    TLP_CMD_IO_WRITE
+    TLP_CMD_IO_WRITE,
+    TLP_CMD_CFG_READ1,
+    TLP_CMD_CFG_WRITE1
   } tlp_cmd_e;
 
   typedef enum logic [1:0] {
