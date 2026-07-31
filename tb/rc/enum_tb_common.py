@@ -771,7 +771,10 @@ class TlpRequest:
 
     def __repr__(self):
         kind = "Rd" if self.is_read else "Wr"
-        return (f"Cfg{kind}0(tag={self.tag:#04x}, "
+        # Stage D: name the type honestly -- a CfgRd1 rendered as "CfgRd0"
+        # in a failure message is Trap A leaking into the diagnostics.
+        t = "1" if self.tlp_type == TYPE_CFG1 else "0"
+        return (f"Cfg{kind}{t}(tag={self.tag:#04x}, "
                 f"bdf={self.bus:02x}:{self.dev:02x}.{self.fn}, "
                 f"reg={self.reg_num:#04x}, fbe={self.first_be:#06b}, "
                 f"payload={[hex(w) for w in self.payload]})")
@@ -1265,3 +1268,452 @@ def assert_sequence(observed, golden, what="", render=repr):
         f"{len(golden)}.\n  observed:\n    "
         + "\n    ".join(render(o) for o in observed)
         + "\n  golden:\n    " + "\n    ".join(render(g) for g in golden))
+
+
+# ===========================================================================
+# SS ⭐ THE BRIDGED TOPOLOGY (Stage D increment 2)
+#
+# One virtual PCI bridge (Type 1 header) at 01:00.0 with one endpoint behind
+# it at 05:00.0.  Three pieces, per RECON_stageD.md SS7: the Type 1 bridge
+# config space, the routing/transform core, and a BDF-routing completer that
+# dispatches on the wire instead of answering everything.
+#
+# !! THE MODEL IMPLEMENTS BASE 2.1 SS7.3.3 p.481 LITERALLY, NOT THE EXPECTED
+# TRACE.  In particular the "bus outside [Secondary, Subordinate] -> UR" arm
+# exists from the first line of this model, because at reset Secondary and
+# Subordinate are 00h and that arm is what makes Trap C self-detecting: a
+# wrongly-typed CfgWr1 for the bus-number write is answered UR automatically,
+# with no test having to anticipate the mistake (SPEC_PREDICTIONS_STAGE_D.md
+# SS8.3).
+#
+# !! LATENCIES ARE NON-ZERO AND UNEQUAL (Trap D, SS8.4).  Stage D's headline
+# claim is an ORDERING claim, and a zero-latency completer makes a wrong-order
+# implementation unobservable.  BRIDGE_LATENCY != DEVICE_LATENCY, neither 0.
+#
+# !! COMPLETER ID IS CAPTURED, NOT CONFIGURED (P5.6, Base 2.1 SS2.2.9 p.99).
+# Every completion carries 0000h until the addressed Function completes its
+# first Type 0 Configuration Write; the capture happens AFTER that write's own
+# completion is built.  The pre-D completers hardcode cpl_dw1(BDF, ...) --
+# recorded bench infidelity that this model must not inherit.
+# ===========================================================================
+
+# The Stage D value table -- P5.2, five pairwise-distinct values, none equal
+# to the 2b goldens (VENDOR/DEVICE above), none 0xFFFF, bus numbers 1/5/9
+# non-consecutive so off-by-one is distinguishable from correct.
+BRIDGE_BDF = 0x0100             # forced: the bus the existing scan probes
+SEC_BUS = 0x05                  # Secondary: non-zero, != primary, != primary+1
+SUB_BUS = 0x09                  # Subordinate: != Secondary
+SEC_DEV_BDF = (SEC_BUS << 8)    # 05:00.0 -- bus differs, dev/fn 0 by P5.3
+BRIDGE_VENDOR = 0x1AF4
+BRIDGE_DEVICE = 0x1100
+SEC_DEV_VENDOR = 0x15B3
+SEC_DEV_DEVICE = 0x1017
+
+# Register 6 == byte offset 18h, the Type 1 bus-number Dword ([BASE] SS7.5.3
+# Figure 7-6 p.492): {Sec Latency Timer, Subordinate, Secondary, Primary}.
+CFG_REG_BUS_NUMBER = 0x06
+# The written value: latency byte 00h is the only defensible choice (P4.2 --
+# the register is read-only 00h), and every other byte is distinct (P5.2).
+BUS_NUM_WDATA = 0x00090501      # {00, SUB_BUS, SEC_BUS, 0x01}
+
+# Trap D: response latencies in cycles, non-zero and unequal.  The device's
+# total includes the bridge's forwarding hop, so the two completers are
+# separated on the wire even when driven back to back.
+BRIDGE_LATENCY = 5
+DEVICE_LATENCY = 9
+
+
+class BridgeConfigSpace:
+    """A Type 1 configuration space -- [BASE] SS7.5.3 Figure 7-6 p.492.
+
+    TWO BARs only, registers 4-5 (P4.7: SS7.5.3.1 names offsets 10h/14h and
+    no others; register 6 IS the bus-number Dword, exactly where a Type 0
+    header's BAR2 would sit).  Both are unimplemented-hardwired-zero here --
+    the bridge requests no memory aperture in this topology, and Stage D
+    never points a BAR stage at it (predictions SS10 item 7).
+
+    Register 6 semantics:
+      [31:24] Secondary Latency Timer -- READ-ONLY 00h (SS7.5.3.3 p.493:
+              "must be read-only and hardwired to 00h").  Writes to the byte
+              are ignored and COUNTED, so a test can prove the arm fired.
+      [23:0]  Subordinate/Secondary/Primary -- byte-writable.  Primary is
+              read-write but functionally inert (SS7.5.3.2 p.493); no routing
+              decision below reads it.
+    """
+
+    def __init__(self, vendor=BRIDGE_VENDOR, device=BRIDGE_DEVICE):
+        self.vendor = vendor
+        self.device = device
+        self.bus_reg = 0x0000_0000          # reset: Pri = Sec = Sub = 00h
+        self.writes = []                    # (reg, value, first_be), in order
+        self.latency_byte_writes_ignored = 0
+        self._bars = (4, 5)                 # P4.7: the ONLY BAR registers
+        self._plain = {
+            CFG_REG_VENDOR_DEVICE: (device << 16) | vendor,
+            CFG_REG_COMMAND_STATUS: 0x0000_0000,
+            CFG_REG_CACHE_HEADER: reg3(HDR_TYPE1),
+        }
+
+    @property
+    def primary(self):
+        return self.bus_reg & 0xFF
+
+    @property
+    def secondary(self):
+        return (self.bus_reg >> 8) & 0xFF
+
+    @property
+    def subordinate(self):
+        return (self.bus_reg >> 16) & 0xFF
+
+    def read(self, reg):
+        if reg == CFG_REG_BUS_NUMBER:
+            # [31:24] reads 00h REGARDLESS of what was written (P4.2).  The
+            # mask is on the read path too, so even a model bug that stored
+            # the byte could not present it.
+            return self.bus_reg & 0x00FF_FFFF
+        if reg in self._bars:
+            return 0                        # unimplemented: hardwired zero
+        return self._plain.get(reg)         # None -> the completer answers UR
+
+    def write(self, reg, value, first_be=CFG_BE_DWORD):
+        self.writes.append((reg, value & 0xFFFF_FFFF, first_be))
+        byte_mask = 0
+        for byte in range(4):
+            if (first_be >> byte) & 1:
+                byte_mask |= 0xFF << (8 * byte)
+        if reg == CFG_REG_BUS_NUMBER:
+            if byte_mask & 0xFF00_0000:
+                self.latency_byte_writes_ignored += 1
+            effective = byte_mask & 0x00FF_FFFF   # SS7.5.3.3: byte 3 read-only
+            self.bus_reg = ((self.bus_reg & ~effective)
+                            | (value & effective)) & 0x00FF_FFFF
+        elif reg in self._bars:
+            pass                            # unimplemented: writes discarded
+        elif reg in self._plain:
+            self._plain[reg] = ((self._plain[reg] & ~byte_mask)
+                                | (value & byte_mask)) & 0xFFFF_FFFF
+        # registers this model does not implement (1Ch..3Ch live in a real
+        # Type 1 header) absorb writes; their READS return None -> UR, which
+        # is the SS7.3.3 p.480 default this bench family always uses.
+
+    @property
+    def command(self):
+        return self._plain[CFG_REG_COMMAND_STATUS] & 0xFFFF
+
+
+class BridgedTopology:
+    """The routing/transform core -- PURE, no cocotb, so it can be self-tested
+    at import time exactly like _selftest_type1_one_bit.
+
+    handle(dwords) takes one request in wire-Dword form and returns
+      (who, status, rdata, completer_id)
+    where who is "bridge" or "device", status a CPL_* value, rdata the read
+    data (None unless SC read), and completer_id what the completion's DW1
+    must carry (the P5.6 captured value, 0000h through the probe phase).
+
+    Base 2.1 SS7.3.3 p.481, applied in sequence to a Type 1 request:
+      1. bus == Secondary            -> transform Type[0] 1->0, NOTHING else,
+                                        deliver to the device.  The model
+                                        asserts received-vs-forwarded itself:
+                                        DW0 differs in bit 0 only, DW1/DW2
+                                        byte-identical.
+      2. Secondary < bus <= Subord.  -> forward WITHOUT modification.
+                                        Implemented, NOT claimed as covered
+                                        (P3.2: unreachable at one level with
+                                        Secondary == the only populated bus).
+      3. else                        -> Unsupported Request.
+    A Type 0 request is claimed locally by the bridge (it IS the link
+    partner); device numbers 1-31 answer UR (SS7.3.1 p.479), the same rule on
+    the secondary link (P5.3 -- point-to-point, Device 0 only).
+    The bridge NEVER synthesises CRS for the device (P6.2): the CRS hooks are
+    per-Function, and a forwarded request can only be CRS'd by the device.
+    """
+
+    def __init__(self, bridge=None, device=None,
+                 bridge_crs_once=(), device_crs_once=()):
+        self.bridge = bridge if bridge is not None else BridgeConfigSpace()
+        self.device = device if device is not None else ConfigDevice(
+            vendor=SEC_DEV_VENDOR, device=SEC_DEV_DEVICE)
+        self.bridge_captured_id = 0x0000    # P5.6: 0000h until first CfgWr0
+        self.device_captured_id = 0x0000
+        self.bridge_crs_once = set(bridge_crs_once)
+        self.device_crs_once = set(device_crs_once)
+        # Guard counters -- a guard never seen firing is not known to work.
+        self.transforms = []                # (received dwords, forwarded dwords)
+        self.route_ur_hits = 0              # SS7.3.3 case 3 (Trap C's teeth)
+        self.forward_unmodified_hits = 0    # case 2 -- implemented, uncovered
+        self.bridge_dev_ur_hits = 0         # Type 0 naming device != 0
+        self.device_dev_ur_hits = 0         # same rule, secondary link
+        self.device_type1_ur_hits = 0       # P3.3: an endpoint URs any CFG1
+        self.bridge_crs_hits = 0
+        self.device_crs_hits = 0
+
+    # ---- the SS7.3.3 dispatch ---------------------------------------------
+    def handle(self, dwords):
+        req = TlpRequest(list(dwords))
+        if req.tlp_type == TYPE_CFG0:
+            return self._bridge_local(req)
+        if req.tlp_type == TYPE_CFG1:
+            sec, sub = self.bridge.secondary, self.bridge.subordinate
+            if req.bus == sec:
+                forwarded = self._transform(list(dwords))
+                return self._device_claim(TlpRequest(forwarded))
+            if sec < req.bus <= sub:
+                self.forward_unmodified_hits += 1
+                return self._device_claim(req)      # arrives as raw Type 1
+            self.route_ur_hits += 1                 # case 3: reset state UR
+            return ("bridge", CPL_UR, None, self.bridge_captured_id)
+        raise AssertionError(
+            f"the bridged topology received a non-config TLP "
+            f"(tlp_type {req.tlp_type:#07b}): {req!r}")
+
+    def _transform(self, dwords):
+        """SS7.3.3 case 1: 'changing the value in the Type[4:0] field ... all
+        other fields of the Request remain unchanged'.  Asserted, not trusted:
+        this is bench code that behaves like hardware."""
+        forwarded = list(dwords)
+        forwarded[0] = dwords[0] ^ 0b1              # Type[0]: 1 -> 0, Table 2-3
+        assert forwarded[0] ^ dwords[0] == 1, "transform touched more than bit 0"
+        assert forwarded[0] & 0x1F == TYPE_CFG0
+        assert forwarded[1:] == list(dwords)[1:], (
+            "the transform modified DW1/DW2/payload -- SS7.3.3 p.481 requires "
+            "all fields except Type[4:0] unchanged")
+        self.transforms.append((list(dwords), forwarded))
+        return forwarded
+
+    # ---- the bridge as a Completer in its own right ------------------------
+    def _bridge_local(self, req):
+        if req.dev != 0 or req.fn != 0:
+            self.bridge_dev_ur_hits += 1            # SS7.3.1 p.479
+            return ("bridge", CPL_UR, None, self.bridge_captured_id)
+        if req.reg_num in self.bridge_crs_once:
+            self.bridge_crs_once.discard(req.reg_num)
+            self.bridge_crs_hits += 1               # its OWN access only (P6.2)
+            return ("bridge", CPL_CRS, None, self.bridge_captured_id)
+        if not req.is_read:
+            self.bridge.write(req.reg_num,
+                              req.payload[0] if req.payload else 0,
+                              req.first_be)
+            cid = self.bridge_captured_id           # THIS completion: pre-capture
+            self.bridge_captured_id = (req.bus << 8) | (req.dev << 3) | req.fn
+            return ("bridge", CPL_SC, None, cid)
+        value = self.bridge.read(req.reg_num)
+        if value is None:
+            return ("bridge", CPL_UR, None, self.bridge_captured_id)
+        return ("bridge", CPL_SC, value, self.bridge_captured_id)
+
+    # ---- the device behind the bridge --------------------------------------
+    def _device_claim(self, req):
+        if req.tlp_type == TYPE_CFG1:
+            self.device_type1_ur_hits += 1          # P3.3: SS7.3.3 p.480,
+            return ("device", CPL_UR, None, self.device_captured_id)  # Endpoints
+        if req.dev != 0 or req.fn != 0:
+            self.device_dev_ur_hits += 1
+            return ("device", CPL_UR, None, self.device_captured_id)
+        if req.reg_num in self.device_crs_once:
+            self.device_crs_once.discard(req.reg_num)
+            self.device_crs_hits += 1
+            return ("device", CPL_CRS, None, self.device_captured_id)
+        if not req.is_read:
+            self.device.write(req.reg_num,
+                              req.payload[0] if req.payload else 0,
+                              req.first_be)
+            cid = self.device_captured_id
+            self.device_captured_id = (req.bus << 8) | (req.dev << 3) | req.fn
+            return ("device", CPL_SC, None, cid)
+        value = self.device.read(req.reg_num)
+        if value is None:
+            return ("device", CPL_UR, None, self.device_captured_id)
+        return ("device", CPL_SC, value, self.device_captured_id)
+
+    def latency_for(self, who):
+        """Trap D: non-zero, unequal.  The bridge's own answers take
+        BRIDGE_LATENCY; anything the device answers crossed the bridge twice
+        and takes BRIDGE_LATENCY + DEVICE_LATENCY."""
+        return BRIDGE_LATENCY if who == "bridge" \
+            else BRIDGE_LATENCY + DEVICE_LATENCY
+
+
+class BridgedCompleter:
+    """The BDF-routing socket: the four-name interface (.start / .seen /
+    .wait_for / .complete) over a BridgedTopology, dispatching each request on
+    the wire instead of answering everything.  Same DLL-stream mechanics as
+    every _tlp completer; the routing decision and all policy live in the pure
+    core so they stay self-testable without a simulator."""
+
+    def __init__(self, dut, topo=None):
+        self.dut = dut
+        self.topo = topo if topo is not None else BridgedTopology()
+        self.seen = []                      # every request TLP, in wire order
+        self.answers = []                   # (req, who, status), in order
+        self._partial = []
+        self._answered = 0
+
+    def start(self):
+        cocotb.start_soon(self._watch_tx())
+
+    async def wait_for(self, count, cycles=40000):
+        for _ in range(cycles):
+            await RisingEdge(self.dut.clk_i)
+            if len(self.seen) >= count:
+                return
+        raise AssertionError(
+            f"expected {count} request TLPs on the wire, saw {len(self.seen)} "
+            f"({self.seen}) -- FC credits, or the sequence never issued?")
+
+    async def complete(self, req, status=CPL_SC, data=None, completer_id=0):
+        has_data = req.is_read and status == CPL_SC and data is not None
+        words = [
+            cpl_dw0(has_data=has_data, length_dw=1 if has_data else 0),
+            cpl_dw1(completer_id, status, byte_count=4),
+            cpl_dw2(RID, req.tag, lower_address=0),
+        ]
+        if has_data:
+            words.append(data)
+        await self.inject(words)
+
+    def serve(self):
+        cocotb.start_soon(self._serve())
+
+    async def _watch_tx(self):
+        d = self.dut
+        while True:
+            await RisingEdge(d.clk_i)
+            await ReadOnly()
+            if int(d.rst_i.value):
+                continue
+            if int(d.m_dllp_axis_tvalid.value) and int(d.m_dllp_axis_tready.value):
+                self._partial.append(int(d.m_dllp_axis_tdata.value))
+                if int(d.m_dllp_axis_tlast.value):
+                    self.seen.append(TlpRequest(self._partial))
+                    self._partial = []
+
+    async def _serve(self):
+        while True:
+            await RisingEdge(self.dut.clk_i)
+            while self._answered < len(self.seen):
+                req = self.seen[self._answered]
+                self._answered += 1
+                who, status, rdata, cid = self.topo.handle(req.dwords)
+                # Trap D: the observable response window.  Serialized -- the
+                # primitive is single-outstanding, so responses never overlap.
+                for _ in range(self.topo.latency_for(who)):
+                    await RisingEdge(self.dut.clk_i)
+                self.answers.append((req, who, status))
+                await self.complete(req, status=status, data=rdata,
+                                    completer_id=cid)
+
+    async def inject(self, words):
+        d = self.dut
+        for index, word in enumerate(words):
+            d.s_dllp_axis_tdata.value = word
+            d.s_dllp_axis_tkeep.value = 0xF
+            d.s_dllp_axis_tlast.value = 1 if index == len(words) - 1 else 0
+            d.s_dllp_axis_tvalid.value = 1
+            for _ in range(20000):
+                await ReadOnly()
+                fired = int(d.s_dllp_axis_tready.value) == 1
+                await RisingEdge(d.clk_i)
+                if fired:
+                    break
+            else:
+                raise AssertionError("s_dllp_axis_tready never asserted -- RX wedged")
+        d.s_dllp_axis_tvalid.value = 0
+        d.s_dllp_axis_tlast.value = 0
+
+
+def _selftest_bridged_topology():
+    """⭐ The model's own guards, seen firing BEFORE any DUT exists.
+
+    Brief: 'a guard never seen firing is not known to work.'  The three
+    mandated drives, on the PURE core at import time in every bench:
+      1. a wrongly-typed CfgWr1 to 18h at reset  -> UR, register untouched
+         (Trap C: the reset-state route arm is self-detecting);
+      2. a raw Type 1 reaching the device        -> UR (P3.3);
+      3. post-assignment, bus == Secondary       -> the one-bit transform.
+    Plus the P4.2 latency-byte ignore and the P5.6 capture sequence, because
+    both are model arms a later test will lean on.
+    """
+    rd = cfg_wire_dw0(False)
+    rd1 = cfg_wire_dw0(False, type1=True)
+    wr = cfg_wire_dw0(True)
+    wr1 = cfg_wire_dw0(True, type1=True)
+    dw1 = cfg_wire_dw1(RID, 0x21, CFG_BE_DWORD)
+
+    # 1 -- Trap C's teeth.  Secondary == Subordinate == 00h, bus 1 is outside
+    # [0, 0] ... and outside every post-reset aperture too.
+    topo = BridgedTopology()
+    who, status, data, cid = topo.handle(
+        [wr1, dw1, cfg_wire_dw2(0x01, 0, 0, CFG_REG_BUS_NUMBER), BUS_NUM_WDATA])
+    assert (who, status) == ("bridge", CPL_UR), (who, status)
+    assert topo.route_ur_hits == 1, "the SS7.3.3 case-3 arm did not fire"
+    assert topo.bridge.bus_reg == 0, "a UR'd write reached the register"
+    assert cid == 0x0000, "completer ID nonzero before any CfgWr0 (P5.6)"
+
+    # The correctly-typed write: claimed locally, register takes [23:0].
+    who, status, data, cid = topo.handle(
+        [wr, dw1, cfg_wire_dw2(0x01, 0, 0, CFG_REG_BUS_NUMBER), BUS_NUM_WDATA])
+    assert (who, status) == ("bridge", CPL_SC)
+    assert cid == 0x0000, "the capturing write's OWN completion must carry 0000h"
+    assert topo.bridge.secondary == SEC_BUS and topo.bridge.subordinate == SUB_BUS
+    assert topo.bridge_captured_id == BRIDGE_BDF, "P5.6 capture did not happen"
+
+    # 3 -- the transform, now that bus 5 == Secondary.
+    who, status, data, cid = topo.handle(
+        [rd1, dw1, cfg_wire_dw2(SEC_BUS, 0, 0, CFG_REG_VENDOR_DEVICE)])
+    assert (who, status) == ("device", CPL_SC)
+    assert data == (SEC_DEV_DEVICE << 16) | SEC_DEV_VENDOR
+    assert len(topo.transforms) == 1, "the transform arm did not run"
+    received, forwarded = topo.transforms[0]
+    assert received[0] ^ forwarded[0] == 1 and received[1:] == forwarded[1:]
+    assert cid == 0x0000, \
+        "probe-phase completer ID must be 0000h at the device too (Trap B)"
+
+    # 2 -- a raw Type 1 reaching the device: the forward-unmodified arm
+    # (implemented, NOT claimed covered -- P3.2) delivers it untransformed and
+    # the device URs it, which is the free cross-check that transforms happen.
+    who, status, data, cid = topo.handle(
+        [rd1, dw1, cfg_wire_dw2(0x07, 0, 0, CFG_REG_VENDOR_DEVICE)])
+    assert (who, status) == ("device", CPL_UR), (who, status)
+    assert topo.forward_unmodified_hits == 1 and topo.device_type1_ur_hits == 1
+
+    # Out-of-aperture stays UR post-assignment (bus 2 < Secondary).
+    who, status, _, _ = topo.handle(
+        [rd1, dw1, cfg_wire_dw2(0x02, 0, 0, CFG_REG_VENDOR_DEVICE)])
+    assert (who, status) == ("bridge", CPL_UR) and topo.route_ur_hits == 2
+
+    # P4.2 -- the latency byte is ignored on write and 00h on read, even when
+    # the writer drives it non-zero.
+    topo.handle([wr, dw1, cfg_wire_dw2(0x01, 0, 0, CFG_REG_BUS_NUMBER),
+                 0xAA00_0000 | BUS_NUM_WDATA])
+    assert topo.bridge.latency_byte_writes_ignored >= 1
+    _, _, readback, _ = topo.handle(
+        [rd, dw1, cfg_wire_dw2(0x01, 0, 0, CFG_REG_BUS_NUMBER)])
+    assert readback == BUS_NUM_WDATA, (
+        f"18h readback {readback:#010x}: [31:24] must be 00h regardless of "
+        "what was written (SS7.5.3.3 p.493)")
+
+    # SS7.3.1 device-number rule, both links.
+    _, status, _, _ = topo.handle(
+        [rd, dw1, cfg_wire_dw2(0x01, 3, 0, CFG_REG_VENDOR_DEVICE)])
+    assert status == CPL_UR and topo.bridge_dev_ur_hits == 1
+    _, status, _, _ = topo.handle(
+        [rd1, dw1, cfg_wire_dw2(SEC_BUS, 3, 0, CFG_REG_VENDOR_DEVICE)])
+    assert status == CPL_UR and topo.device_dev_ur_hits == 1
+
+    # P5.6 completes: the device captures on its first CfgWr0 (post-transform).
+    topo.handle([wr1, dw1, cfg_wire_dw2(SEC_BUS, 0, 0, CFG_REG_BAR0), 0xFFFFFFFF])
+    assert topo.device_captured_id == SEC_DEV_BDF
+    _, _, _, cid = topo.handle(
+        [rd1, dw1, cfg_wire_dw2(SEC_BUS, 0, 0, CFG_REG_BAR0)])
+    assert cid == SEC_DEV_BDF, "post-capture completions must carry the BDF"
+
+    # The value table really is pairwise-distinct (Trap B's precondition).
+    ids = {VENDOR, DEVICE, BRIDGE_VENDOR, BRIDGE_DEVICE,
+           SEC_DEV_VENDOR, SEC_DEV_DEVICE}
+    assert len(ids) == 6 and 0xFFFF not in ids
+    assert len({0x01, SEC_BUS, SUB_BUS}) == 3
+
+
+_selftest_bridged_topology()
