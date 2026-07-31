@@ -590,12 +590,32 @@ Per-target lines recorded in the dated addendum of `RECON_stageD_baseline.txt`.
 
 | id | new test | prediction | measured |
 |---|---|---|---|
-| **F3.1** | Full acceptance: bridge + device pair, all emitted TLPs asserted **in order** against goldens pinned before the RTL | no pre-change run is meaningful (the module does not exist); the falsifiable content is the **ordering**, per F3.2–F3.4 | |
-| **F3.2** | The 18h write **precedes** the first CFG1 | falsifiable by construction: reorder the sequencer's two states and this must fail | |
-| **F3.3** | Transaction #3 is Type **0**, not Type 1 (§5.4) | mutation: emit CfgWr1 for the bus-number write → bridge model answers **UR** → sequencer errors | |
-| **F3.4** | Command-register enable is structurally last for the device | Stage C's assertion, re-run with the device addressed via CFG1 | |
-| **F3.5** | **No-settle variants — mandatory.** Timeout and late-completion events are live under this FSM; brief §2.11's 2b-3 "no timer, null result" exemption does **not** carry over | | |
-| **F3.6** | Acceptance run **twice**: credit-saturated, and under a Table 2-37 credit drip (`nph=1, npd=1`) | same TLP sequence, same order, both runs | |
+| **F3.1** | Full acceptance: bridge + device pair, all emitted TLPs asserted **in order** against goldens pinned before the RTL | no pre-change run is meaningful (the module does not exist); the falsifiable content is the **ordering**, per F3.2–F3.4 | **PASS** (2026-07-31): B1 — all **twenty** emitted TLPs identical to the §5.4-derived golden sequence in order (type and bus columns included), each header re-derived per Base 2.1 with the right `type1`/bus; model guards live in-run: 16 transforms, 0 route-URs, 0 raw-Type-1-at-device, forward-unmodified never fired (P3.2 honoured). P4.7 negatives held on the wire; P5.6 capture observed at both Functions. |
+| **F3.2** | The 18h write **precedes** the first CFG1 | falsifiable by construction: reorder the sequencer's two states and this must fail | **Three independent kills** (2026-07-31): (a) reordered-FSM stash (handoff asserted in S_WR_RSP): `verilate_enum_bus` 8/10, N1+N2 FAIL on the pre-completion handoff checks — the ordering test reaches its condition; (b) B4, the Trap-D discriminator: 18h completion withheld 800 cycles (~25× the happy path), wire and handoff surface stayed silent, then completed; (c) M4.4 (write skipped): the probe met a reset-state bridge → UR → visible failure. |
+| **F3.3** | Transaction #3 is Type **0**, not Type 1 (§5.4) | mutation: emit CfgWr1 for the bus-number write → bridge model answers **UR** → sequencer errors | **Killed at both levels** (2026-07-31), mechanism exactly as predicted. Standalone (`cmd_type1_o` forced 1): 7/10, first failure the whole-descriptor compare (req_type `1011 != 1010`). Integration, same mutant: 1/5 — the bench bridge's §7.3.3 **case-3 arm UR'd the CfgWr1** (Secondary still 00h) and the sequencer errored `ENUM_ERR_UR_POST_PROBE`, no handoff. Trap C's self-detection observed live (§8.3). |
+| **F3.4** | Command-register enable is structurally last for the device | Stage C's assertion, re-run with the device addressed via CFG1 | **PASS** (2026-07-31): asserted on the wire in B1–B4 — exactly one Type 1 write to register 1, at the final index (20 of 20); the whole-sequence compare pins it independently. The merged-mux mutant M4.1 fails at precisely this transaction (first_be 1111 ≠ 0011). |
+| **F3.5** | **No-settle variants — mandatory.** Timeout and late-completion events are live under this FSM; brief §2.11's 2b-3 "no timer, null result" exemption does **not** carry over | | **PASS** (2026-07-31): N6 (timeout, `tx_fc_blocked_i` low → annotation must NOT fire), N7 (timeout with the annotation, then the late completion for the dead tag leaves the terminal status **byte-identical** — transparency proven, not assumed). |
+| **F3.6** | Acceptance run **twice**: credit-saturated, and under a Table 2-37 credit drip (`nph=1, npd=1`) | same TLP sequence, same order, both runs | **PASS** (2026-07-31): B2 — same twenty TLPs, same order, under `nph=1/npd=1` with the cumulative drip; `tx_fc_blocked_o` seen (the credit really bound) and ≥19 UpdateFCs consumed. |
+
+**Stage D mutation kill-set, integration level (2026-07-31, each restore
+diff-verified; B5 — the direct-attach regression — passes on every mutant, as
+it must):** M4.1 merged mux → killed by the device Command write's on-wire
+`first_be` (the 2b-3 observable, unchanged by the widening) · M4.2 `cmd_type1`
+scan2-arm wrong → the mistyped probe was claimed **locally** by the bridge,
+which answered its own IDs and Type 1 header; killed by the forced-apart
+identity assertions (Trap B working as designed) · M4.3 BDF mux stuck on
+scan1's → CfgRd1 carried bus 1, the bridge's range arm UR'd it; killed **only
+because buses 1/5/9 are forced apart — recorded as Trap B's validation** ·
+M4.4 18h write skipped → reset-state UR, §8.3's arm.
+
+**Regression (2026-07-31, cold build, sequential): 40 targets / 294 tests,
+all PASS**, mechanically identical to the addendum-adjusted base in verdict
+and sim end time; growth only by named targets — `verilate_enum_txn` 14→17
+(E15..E17), `verilate_enum_txn_tlp` 9→11 (I10/I11), new `verilate_enum_bus`
+(N1..N10, 2480.01) and `verilate_enum_bridge_tlp` (B1..B5, 17800.01).
+Decomposed: tb_tlp 25/124, RC surface 6/63, enum 8/106, conformance 1/1.
+580.00 ns invariant holds. Per-target lines in `RECON_stageD_baseline.txt`'s
+D-3 addendum.
 
 ---
 

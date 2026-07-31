@@ -48,3 +48,14 @@ verilate_tlp_cfg1_spine|rc=0|TESTS=3 PASS=3 FAIL=0 SKIP=0|simend=820.00
 verilate_rq_if|rc=0|TESTS=16 PASS=16 FAIL=0 SKIP=0|simend=12876.02
 verilate_rq_if_tlp|rc=0|TESTS=11 PASS=11 FAIL=0 SKIP=0|simend=9396.01
 verilate_rq_rc_top|rc=0|TESTS=10 PASS=10 FAIL=0 SKIP=0|simend=54208.01
+# --- Stage D-3 addendum, 2026-07-31: cold build at c6fa47c (rm -rf build/ first), 40 targets sequential ---
+# New totals: 40 targets / 294 tests / 294 PASS / 0 FAIL / 0 SKIP.  580.00 ns invariant holds.
+# Diff rule for later sessions: the four lines below override where they name a target; then the D-2
+# addendum's lines; then the original block.  Growth this stage: enum_txn +3 (E15..E17, the cmd_type1_i
+# goldens), enum_txn_tlp +2 (I10/I11), and two NEW targets -- enum_bus (N1..N10, the bridge sequencer
+# standalone) and enum_bridge_tlp (B1..B5, the Stage D acceptance).
+# Decomposed: tb_tlp 25/124, RC surface 6/63, enum 8/106, conformance 1/1.
+verilate_enum_txn|rc=0|TESTS=17 PASS=17 FAIL=0 SKIP=0|simend=3940.02
+verilate_enum_txn_tlp|rc=0|TESTS=11 PASS=11 FAIL=0 SKIP=0|simend=39696.01
+verilate_enum_bus|rc=0|TESTS=10 PASS=10 FAIL=0 SKIP=0|simend=2480.01
+verilate_enum_bridge_tlp|rc=0|TESTS=5 PASS=5 FAIL=0 SKIP=0|simend=17800.01
