@@ -85,7 +85,7 @@
 // REJECTS (all: rq_protocol_error_o + rq_error_code_o + $warning, no TLP, the
 // rest of the AXIS packet drained, FSM back to idle)
 //
-//   Request Type not one of the six mapped .... rq_error_e RQ_ERR_REQ_TYPE
+//   Request Type not one of the eight mapped .. rq_error_e RQ_ERR_REQ_TYPE
 //   Dword Count 0 or > 1024 ................... RQ_ERR_DWORD_COUNT
 //   Configuration with Dword Count != 1 ....... RQ_ERR_CFG_DWORD_COUNT
 //   config/IO not inside one Dword ............ RQ_ERR_CFG_IO_FIT
@@ -105,7 +105,6 @@
 // would break Commit 2b's Secondary Bus Number write.
 //
 // OUT OF SCOPE (documented, not implemented -- KNOWN_GAPS)
-//  * Type 1 configuration requests (Commit 3): rejected, no tlp_cmd_e exists.
 //  * Non-contiguous byte enables. PG213 permits them on <=2-Dword writes; the
 //    TL's tlp_first_be/tlp_last_be build contiguous range masks only
 //    (tlp_pkg.sv:165-193), so they are not expressible. Rejected.
@@ -244,12 +243,24 @@ module pcie_rq_if
       RQ_IO_WRITE: begin desc_cmd = TLP_CMD_IO_WRITE;   desc_is_io     = 1'b1; end
       RQ_CFG_READ0:  begin desc_cmd = TLP_CMD_CFG_READ0;  desc_is_config = 1'b1; end
       RQ_CFG_WRITE0: begin desc_cmd = TLP_CMD_CFG_WRITE0; desc_is_config = 1'b1; end
+      // Stage D-2: the Type 1 pair, mapped to the D-1b commands.  Setting
+      // desc_is_config is the WHOLE integration with the legality checks --
+      // bad_cfg_n, bad_cfg_fit, bad_at and the config address packing below
+      // are class-shaped and bind to CFG1 with no edit (RECON_stageD.md SS5).
+      RQ_CFG_READ1:  begin desc_cmd = TLP_CMD_CFG_READ1;  desc_is_config = 1'b1; end
+      RQ_CFG_WRITE1: begin desc_cmd = TLP_CMD_CFG_WRITE1; desc_is_config = 1'b1; end
       default:       type_ok = 1'b0;
     endcase
   end
 
+  // Per-command like bad_poison below, NOT class-shaped: this is the second
+  // of the two decode sites RECON_stageD.md SS5's "two arms" survey missed
+  // (the RQ-level analogue of tlp_requester's command_has_data, D-1b site 2).
+  // Leaving CFG_WRITE1 out here silently reclassifies a CfgWr1 as payload-
+  // less and rejects its packet with RQ_ERR_MISSING_LAST.
   assign desc_has_data = type_ok && (desc_cmd == TLP_CMD_MEM_WRITE ||
                                      desc_cmd == TLP_CMD_CFG_WRITE0 ||
+                                     desc_cmd == TLP_CMD_CFG_WRITE1 ||
                                      desc_cmd == TLP_CMD_IO_WRITE);
 
   // Address assembly. Config lays the target BDF into address[31:16] because
@@ -283,7 +294,11 @@ module pcie_rq_if
                        (desc_bc > (13'd4 - {11'd0, desc_off}));
   wire bad_4kb       = ({1'b0, desc_address[11:0]} + {1'b0, desc_bc}) > 14'd4096;
   wire bad_at        = !desc_is_config && (desc.address[1:0] != 2'b00);
-  wire bad_poison    = (desc_cmd == TLP_CMD_CFG_WRITE0) && desc.poisoned;
+  // Membership is EXACTLY the two config writes.  IO_WRITE stays out on
+  // purpose: poisoned IO/memory writes are forwarded unpoisoned (KNOWN_GAPS
+  // above), and widening this check would be a second behaviour change.
+  wire bad_poison    = (desc_cmd == TLP_CMD_CFG_WRITE0 ||
+                        desc_cmd == TLP_CMD_CFG_WRITE1) && desc.poisoned;
   // command_byte_count_i is 13 bits; rq_byte_count() is too, so this can only
   // fire if desc_n slipped past bad_n. Kept as an explicit guard rather than
   // relying on truncation.

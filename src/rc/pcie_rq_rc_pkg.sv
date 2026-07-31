@@ -56,8 +56,8 @@ package pcie_rq_rc_pkg;
 
   // -------------------------------------------------------------------------
   // Request Type, PG213 v1.3 Table 57. All sixteen encodings are named so the
-  // field is total and no value can fall outside the enum -- the six mapped
-  // ones become tlp_cmd_e, the other ten are rejected by pcie_rq_if.
+  // field is total and no value can fall outside the enum -- the eight mapped
+  // ones become tlp_cmd_e, the other eight are rejected by pcie_rq_if.
   // -------------------------------------------------------------------------
   typedef enum logic [3:0] {
     RQ_MEM_READ        = 4'b0000,  // -> TLP_CMD_MEM_READ
@@ -69,9 +69,9 @@ package pcie_rq_rc_pkg;
     RQ_MEM_CAS         = 4'b0110,  // reject
     RQ_MEM_RD_LOCKED   = 4'b0111,  // reject -- locked reads out of scope
     RQ_CFG_READ0       = 4'b1000,  // -> TLP_CMD_CFG_READ0
-    RQ_CFG_READ1       = 4'b1001,  // reject -- Type 1 config is Commit 3
+    RQ_CFG_READ1       = 4'b1001,  // -> TLP_CMD_CFG_READ1  (Stage D-2)
     RQ_CFG_WRITE0      = 4'b1010,  // -> TLP_CMD_CFG_WRITE0
-    RQ_CFG_WRITE1      = 4'b1011,  // reject -- Type 1 config is Commit 3
+    RQ_CFG_WRITE1      = 4'b1011,  // -> TLP_CMD_CFG_WRITE1 (Stage D-2)
     RQ_MSG_ROUTED      = 4'b1100,  // reject -- messages out of scope
     RQ_MSG_ID          = 4'b1101,  // reject
     RQ_MSG_VENDOR      = 4'b1110,  // reject
