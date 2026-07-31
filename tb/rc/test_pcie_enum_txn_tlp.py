@@ -155,6 +155,7 @@ async def init(dut, credits=None, fc_init=True):
     dut.transmit_enable_i.value = 0
     dut.cmd_valid_i.value = 0
     dut.cmd_write_i.value = 0
+    dut.cmd_type1_i.value = 0
     dut.cmd_bdf_i.value = 0
     dut.cmd_reg_num_i.value = 0
     dut.cmd_ext_reg_i.value = 0
@@ -211,8 +212,9 @@ async def init(dut, credits=None, fc_init=True):
 # Command / response helpers
 # ==========================================================================
 async def send_cmd(dut, write, reg_num, first_be=CFG_BE_DWORD, wdata=0,
-                   bdf=BDF, ext_reg=0, limit=2000):
+                   bdf=BDF, ext_reg=0, limit=2000, type1=False):
     dut.cmd_write_i.value = 1 if write else 0
+    dut.cmd_type1_i.value = 1 if type1 else 0
     dut.cmd_bdf_i.value = bdf
     dut.cmd_reg_num_i.value = reg_num
     dut.cmd_ext_reg_i.value = ext_reg
@@ -256,17 +258,17 @@ async def settle(dut, cycles=40):
 
 
 
-def assert_on_wire(req, *, write, reg_num, first_be, tag, what=""):
+def assert_on_wire(req, *, write, reg_num, first_be, tag, what="", type1=False):
     """2b-1 binding of enum_tb_common.assert_cfg_tlp_on_wire.
 
     The goldens and the five assertions are shared; only the choice of which
     optional properties this bench owns is local.  require_device0 stays OFF
     here: device-0-only is SS7.3.1's property and the presence scan's subject,
     not pcie_cfg_txn's, and turning it on would silently widen what these
-    tests assert.
+    tests assert.  type1 (Stage D) passes through to the CFG1 DW0 golden.
     """
     assert_cfg_tlp_on_wire(req, write=write, reg_num=reg_num,
-                           first_be=first_be, tag=tag, what=what)
+                           first_be=first_be, tag=tag, what=what, type1=type1)
 
 
 # ==========================================================================
@@ -764,3 +766,86 @@ async def i9_credit_stall_longer_than_the_timeout(dut):
     # fires, which is precisely what makes this hard to diagnose in the field.
     assert mon.rq_errors == [] and mon.command_errors == [] and mon.tx_errors == []
     assert mon.credit_errors == 0
+
+
+# ==========================================================================
+# I10 / I11 -- Stage D increment 1: Type 1 through the REAL stack
+#
+# The standalone half (E15..E17) proves the primitive's descriptor; these two
+# prove the descriptor becomes the CFG1 TLP the spec says -- dw0[4:0] = 00101,
+# nothing else moved (Base 2.1 Table 2-3 p.58, SS2.2.7 p.79).  Post-D-2 the
+# RQ surface admits req_type 1001/1011, so a clean error surface is part of
+# the assertion.  Structurally non-falsifiable pre-change (no port); the
+# mutation kills are recorded in the commit message.
+# ==========================================================================
+@cocotb.test()
+async def i10_cfg1_end_to_end_on_wire(dut):
+    """CfgRd1 and CfgWr1 to the link and back, whole-DW0 goldens (Trap A)."""
+    mon, completer = await init(dut)
+
+    await send_cmd(dut, write=False, reg_num=CFG_REG_VENDOR_DEVICE,
+                   first_be=CFG_BE_DWORD, type1=True)
+    await completer.wait_for(1)
+    rd = completer.seen[0]
+    assert_on_wire(rd, write=False, reg_num=CFG_REG_VENDOR_DEVICE,
+                   first_be=CFG_BE_DWORD, tag=rd.tag, type1=True,
+                   what="I10 CfgRd1 ")
+    assert rd.tlp_type == 0b00101, \
+        f"tlp_type {rd.tlp_type:#07b} != 00101 (CfgRd1, Table 2-3 p.58)"
+    assert rd.payload == [], "a CfgRd1 carries no payload"
+    await completer.complete(rd, status=CPL_SC, data=0x1017_15B3)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK
+    assert rsp["rdata"] == 0x1017_15B3
+
+    await send_cmd(dut, write=True, reg_num=CFG_REG_COMMAND_STATUS,
+                   first_be=CFG_BE_LOWER_HALF, wdata=0x00000006, type1=True)
+    await completer.wait_for(2)
+    wr = completer.seen[1]
+    assert_on_wire(wr, write=True, reg_num=CFG_REG_COMMAND_STATUS,
+                   first_be=CFG_BE_LOWER_HALF, tag=wr.tag, type1=True,
+                   what="I10 CfgWr1 ")
+    assert wr.payload == [0x00000006], \
+        f"payload {[hex(w) for w in wr.payload]}, expected [0x6]"
+    await completer.complete(wr, status=CPL_SC)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK
+    mon.clean()
+
+
+@cocotb.test()
+async def i11_crs_retry_preserves_type1_on_wire(dut):
+    """A CRS'd CfgRd1's reissue is still a CfgRd1 on the wire (P6.3).
+
+    The whole-DW0 compare between the two emitted TLPs is the discriminating
+    check: a retry path that decayed to Type 0 emits a well-formed CfgRd0 that
+    every field-subset assertion accepts (Trap A) -- only dw0 bit 0 tells.
+    """
+    mon, completer = await init(dut)
+
+    await send_cmd(dut, write=False, reg_num=CFG_REG_VENDOR_DEVICE, type1=True)
+    dut.cmd_type1_i.value = 0        # the retry must come from the latch
+    await completer.wait_for(1)
+    first = completer.seen[0]
+    assert first.tlp_type == 0b00101
+    await completer.complete(first, status=CPL_CRS)
+
+    await completer.wait_for(2)
+    retry = completer.seen[1]
+    assert retry.dw0 == first.dw0, (
+        f"retry DW0 {retry.dw0:#010x} != original {first.dw0:#010x} -- the "
+        "CRS reissue changed the header, and if bit 0 is the difference it "
+        "decayed to Type 0")
+    assert retry.tlp_type == 0b00101, \
+        f"retry tlp_type {retry.tlp_type:#07b} -- the reissue decayed to Type 0"
+    assert retry.dw2 == first.dw2, "the reissued routing Dword differs"
+    assert_on_wire(retry, write=False, reg_num=CFG_REG_VENDOR_DEVICE,
+                   first_be=CFG_BE_DWORD, tag=retry.tag, type1=True,
+                   what="I11 retry ")
+
+    await completer.complete(retry, status=CPL_SC, data=0x1AF4_1100)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK
+    assert rsp["rdata"] == 0x1AF4_1100
+    assert rsp["crs_retries"] == 1
+    mon.clean()

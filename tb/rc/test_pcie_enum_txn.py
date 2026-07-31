@@ -257,6 +257,7 @@ async def init(dut, tag_delay=2, first_tag=FIRST_TAG):
     dut.rst_i.value = 1
     dut.cmd_valid_i.value = 0
     dut.cmd_write_i.value = 0
+    dut.cmd_type1_i.value = 0
     dut.cmd_bdf_i.value = 0
     dut.cmd_reg_num_i.value = 0
     dut.cmd_ext_reg_i.value = 0
@@ -283,8 +284,9 @@ async def init(dut, tag_delay=2, first_tag=FIRST_TAG):
 
 
 async def send_cmd(dut, write, reg_num, first_be=CFG_BE_DWORD, wdata=0,
-                   bdf=BDF, ext_reg=0, limit=500):
+                   bdf=BDF, ext_reg=0, limit=500, type1=False):
     dut.cmd_write_i.value = 1 if write else 0
+    dut.cmd_type1_i.value = 1 if type1 else 0
     dut.cmd_bdf_i.value = bdf
     dut.cmd_reg_num_i.value = reg_num
     dut.cmd_ext_reg_i.value = ext_reg
@@ -847,3 +849,133 @@ async def e14_completion_without_bit30_does_not_end_the_request(dut):
         f"read data {rsp['rdata']:#010x} -- the response carried the non-final "
         "completion's payload")
     assert len(sock.requests) == 1, "no reissue was expected"
+
+
+# ==========================================================================
+# E15 / E16 / E17 -- Stage D increment 1: the per-transaction Type select
+#
+# Structurally non-falsifiable pre-change: a type1=1 test cannot RUN against
+# the pre-change RTL because the port does not exist, so the compile fails
+# before any assertion can.  Recorded per SPEC_PREDICTIONS_STAGE_D.md SS7.4;
+# the mutation set (type1 ignored / type1 inverted) carries the proof weight
+# instead, and the kill map lives in the commit message.
+# ==========================================================================
+@cocotb.test()
+async def e15_cfg1_whole_descriptor_goldens(dut):
+    """type1=1 selects the CFG1 descriptor pair -- whole 128-bit compare.
+
+    req_type 1001 (read) / 1011 (write), one bit from the Type 0 encodings
+    (Base 2.1 Table 2-3 p.58 on the wire; pcie_rq_rc_pkg.sv:63-79 at the
+    descriptor level).  assert_rq_descriptor compares the WHOLE word: a
+    field-subset check would pass identically for a DUT that ignored the
+    input (Trap A, SPEC_PREDICTIONS_STAGE_D.md SS8.1).
+    """
+    sock = await init(dut)
+
+    await send_cmd(dut, write=False, reg_num=CFG_REG_VENDOR_DEVICE,
+                   first_be=CFG_BE_DWORD, type1=True)
+    await sock.wait_for(1)
+    read = sock.requests[0]
+    assert not read.write, "a CfgRd1 is a single-beat packet with no payload"
+    assert_rq_descriptor(read.desc, read.tuser, write=False, bdf=BDF,
+                         reg_num=CFG_REG_VENDOR_DEVICE, first_be=CFG_BE_DWORD,
+                         type1=True, what="E15 read ")
+    await sock.complete(read, status=CPL_SC, data=0x1017_15B3)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK
+    assert rsp["rdata"] == 0x1017_15B3, \
+        "a CfgRd1 completion must deliver data exactly as a CfgRd0's does"
+
+    # The write: payload beat present, one Dword, and the whole-word golden.
+    await send_cmd(dut, write=True, reg_num=CFG_REG_COMMAND_STATUS,
+                   first_be=CFG_BE_LOWER_HALF, wdata=0x00000006, type1=True)
+    await sock.wait_for(2)
+    write = sock.requests[1]
+    assert write.write, "a CfgWr1 must carry a payload beat"
+    assert write.payload == [0x00000006], \
+        f"payload {[hex(w) for w in write.payload]}, expected [0x6]"
+    assert_rq_descriptor(write.desc, write.tuser, write=True, bdf=BDF,
+                         reg_num=CFG_REG_COMMAND_STATUS,
+                         first_be=CFG_BE_LOWER_HALF, type1=True,
+                         what="E15 write ")
+    await sock.complete(write, status=CPL_SC)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK
+
+
+@cocotb.test()
+async def e16_type0_pin_one_bit_from_cfg1(dut):
+    """type1=0 still emits the Type 0 descriptor -- pinned, not inherited.
+
+    E1/E2 assert this through send_cmd's default; this test drives type1=0
+    EXPLICITLY back to back with a type1=1 twin of the same command and pins
+    the distance between the two observed descriptors at exactly bit 75 (the
+    req_type LSB).  This is the test that kills the inverted-input mutation:
+    an inversion turns the explicit 0 into req_type 1001 and the whole-word
+    golden below fails.
+    """
+    sock = await init(dut)
+
+    await send_cmd(dut, write=False, reg_num=CFG_REG_CACHE_HEADER,
+                   first_be=CFG_BE_DWORD, type1=False)
+    await sock.wait_for(1)
+    t0 = sock.requests[0]
+    assert_rq_descriptor(t0.desc, t0.tuser, write=False, bdf=BDF,
+                         reg_num=CFG_REG_CACHE_HEADER, first_be=CFG_BE_DWORD,
+                         type1=False, what="E16 type1=0 ")
+    await sock.complete(t0, status=CPL_SC, data=0x0001_0000)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK
+
+    await send_cmd(dut, write=False, reg_num=CFG_REG_CACHE_HEADER,
+                   first_be=CFG_BE_DWORD, type1=True)
+    await sock.wait_for(2)
+    t1 = sock.requests[1]
+    assert_rq_descriptor(t1.desc, t1.tuser, write=False, bdf=BDF,
+                         reg_num=CFG_REG_CACHE_HEADER, first_be=CFG_BE_DWORD,
+                         type1=True, what="E16 type1=1 ")
+    assert t0.desc ^ t1.desc == 1 << 75, (
+        f"the type1=0 and type1=1 descriptors differ by "
+        f"{t0.desc ^ t1.desc:#x}, expected exactly bit 75 (the req_type LSB) "
+        "-- something besides the Type moved with the select")
+    await sock.complete(t1, status=CPL_SC, data=0x0001_0000)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK
+
+
+@cocotb.test()
+async def e17_crs_retry_preserves_type1(dut):
+    """A CRS'd CfgRd1 is reissued as a CfgRd1 -- the retry must not decay.
+
+    P6.3: the retry loop is phase-blind and reissues whatever it latched.  The
+    type1 flag is part of the latched command, so the reissued descriptor must
+    be byte-identical -- INCLUDING req_type 1001.  A retry path that rebuilt
+    the descriptor from anything but the latch (or re-sampled cmd_type1_i,
+    which this test holds at 0 during the retry window) would emit the CFG0
+    twin and pass every assertion except the whole-word compare.
+    """
+    sock = await init(dut)
+    await send_cmd(dut, write=False, reg_num=CFG_REG_VENDOR_DEVICE,
+                   first_be=CFG_BE_DWORD, type1=True)
+    # De-assert the input immediately: the retry must come from the latch.
+    dut.cmd_type1_i.value = 0
+    await sock.wait_for(1)
+
+    await sock.complete(sock.requests[0], status=CPL_CRS)
+    await sock.wait_for(2)
+    first, retry = sock.requests[0], sock.requests[1]
+
+    assert retry.desc == first.desc, (
+        f"the reissued descriptor 0x{retry.desc:032X} differs from the "
+        f"original 0x{first.desc:032X} -- a CRS retry must repeat the request "
+        "exactly, Type included (P6.3)")
+    assert (retry.desc >> 75) & 0xF == 0b1001, (
+        f"the retry's req_type is {(retry.desc >> 75) & 0xF:#06b} -- the CRS "
+        "reissue decayed to Type 0")
+    assert (retry.tuser & 0xFF) == (first.tuser & 0xFF)
+
+    await sock.complete(retry, status=CPL_SC, data=0x1AF4_1100)
+    rsp = await recv_rsp(dut)
+    assert rsp["outcome"] == TXN_OK
+    assert rsp["rdata"] == 0x1AF4_1100
+    assert rsp["crs_retries"] == 1

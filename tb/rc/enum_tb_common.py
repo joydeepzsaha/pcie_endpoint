@@ -938,7 +938,7 @@ class Mon:
 
 
 def assert_cfg_tlp_on_wire(req, *, write, reg_num, first_be, tag, what="",
-                           require_device0=False):
+                           require_device0=False, type1=False, bus=None):
     """Assert one emitted Configuration TLP against hand-derived goldens.
 
     Base 2.1 SS2.2.7 p.79 fixes Length to 1 Dword, Last DW BE to 0000b and
@@ -949,10 +949,16 @@ def assert_cfg_tlp_on_wire(req, *, write, reg_num, first_be, tag, what="",
     require_device0 is opt-IN, not the default.  It is the SS7.3.1 p.479
     device-0-only property, which is the presence scan's subject; a bench that
     does not own that property should not silently start asserting it.
+
+    type1 (Stage D) selects the CFG1 DW0 golden -- dw0[4:0] = 00101, one bit
+    from Type 0, which is exactly why the DW0 compare here is the WHOLE Dword
+    (Trap A, SPEC_PREDICTIONS_STAGE_D.md SS8.1).  bus overrides the routing
+    Dword's bus field (default: the direct-attach BUS); Device/Function stay 0
+    on every bus level by construction (P5.3).
     """
-    exp0 = cfg_wire_dw0(write=write, length_dw=1)
+    exp0 = cfg_wire_dw0(write=write, length_dw=1, type1=type1)
     exp1 = cfg_wire_dw1(RID, tag, first_be)
-    exp2 = cfg_wire_dw2(BUS, DEV, FN, reg_num)
+    exp2 = cfg_wire_dw2(BUS if bus is None else bus, DEV, FN, reg_num)
     assert req.dw0 == exp0, \
         f"{what}DW0 {req.dw0:#010x} != golden {exp0:#010x}"
     assert req.dw1 == exp1, \
