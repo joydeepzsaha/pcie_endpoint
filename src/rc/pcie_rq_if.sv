@@ -121,6 +121,18 @@
 // Guards use $warning, never $error: a procedural $error maps to $stop under
 // the simulator, which would abort the shared multi-test process -- and several
 // tests here deliberately trip these guards.
+//
+// DEFERRED (Stage D master brief SS8.1) -- Type 0 config to device != 0.
+// PCIe Base 2.1 SS7.3.1 p.479 associates Downstream Ports with Device 0; a
+// Root Port must terminate a Type 0 Configuration Request naming any other
+// device number as an Unsupported Request.  This surface has no sweep-capable
+// requester yet (the enumerator probes device 0 only), so that termination is
+// NOT implemented: an admitted Type 0 config request naming device != 0 is
+// forwarded UNCHANGED, and a $warning tripwire below marks each one.  The
+// deferral becomes untenable the moment a requester that sweeps device
+// numbers exists -- the tripwire (and the D2-S5 pin test, which asserts the
+// forwarded-unchanged consequence) is there so that landing the real UR
+// termination shows up as a visible test change, not a silent one.
 // ---------------------------------------------------------------------------
 `timescale 1ns/1ps
 module pcie_rq_if
@@ -537,6 +549,14 @@ module pcie_rq_if
             drain_owes_tl_r <= 1'b0;
             state_r         <= s_axis_rq_tlast ? S_DESC : S_DRAIN;
           end else begin
+            // Stage D-2 tripwire, NO behaviour change: see the DEFERRED note
+            // in the header.  Type 0 only -- a Type 1 request legitimately
+            // names any device on its remote bus.
+            if ((desc_cmd == TLP_CMD_CFG_READ0 ||
+                 desc_cmd == TLP_CMD_CFG_WRITE0) &&
+                desc.completer_id[7:3] != 5'd0)
+              $warning("pcie_rq_if: Type 0 config request to device %0d (BDF 0x%04h) admitted and forwarded unchanged -- Base 2.1 SS7.3.1 p.479 wants UR termination once a sweep-capable requester exists (deferred, Stage D brief SS8.1)",
+                       desc.completer_id[7:3], desc.completer_id);
             cmd_r         <= desc_cmd;
             addr_r        <= desc_address;
             bc_r          <= desc_bc;
