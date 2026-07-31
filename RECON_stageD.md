@@ -374,16 +374,17 @@ The `Socket` is explicitly documented as invariant-carrying and not to be forked
 correct about `pci-local-bus-3.0.txt`; the stop condition does not fire because the
 layout is normative elsewhere on the shelf.**
 
-**The brief's named source defers.** `pci-local-bus-3.0.txt:10546-10549` (§6.1, PDF
-p.213 — page markers are footers, so content after marker 213 is on p.214):
+**The brief's named source defers.** `pci-local-bus-3.0.txt:10546-10549`, §6.1,
+**p.214** (page markers are footers: marker `213` sits at `:10542` and marker `214` at
+`:10584`, so this text is on p.214):
 
 > "Currently three Header Types are defined, 00h which has the layout shown in
 > Figure 6-1, **01h which is defined for PCI-to-PCI bridges and is documented in the
 > PCI to PCI Bridge Architecture Specification**, and 02h which is defined for CardBus
 > bridges…"
 
-Figure 6-1 (`:10600-10620`) is the Type **00h** header — at offset 18h it shows *Base
-Address Registers*, not bus numbers. The PCI-to-PCI Bridge Architecture Specification
+Figure 6-1 (`:10600-10620`, **p.215**) is the Type **00h** header — at offset 18h it
+shows *Base Address Registers*, not bus numbers. The PCI-to-PCI Bridge Architecture Specification
 is **not on the shelf** (full recursive listing of `/home/kourosh/openPCIE/0.doc`
 checked; no bridge spec, and the four other PCI/PCIe PDFs are Base 2.1, Base 4.0
 Rev 0.3 *draft*, CEM 3.0, and the PCI 3.0 PDF that matches the .txt).
@@ -402,18 +403,22 @@ topology. Offset **18h**, most-significant byte first:
 
 Two qualifications that matter for D-P, both from the same section:
 
-- §7.5.3 p.492 scopes itself: *"Register interpretations described in this section
+- §7.5.3 **p.493** scopes itself: *"Register interpretations described in this section
   apply to PCI-PCI Bridge structures representing Switch and Root Ports; other device
   Functions such as PCI Express to PCI/PCI-X Bridges … are not covered."* Our bench
   bridge is a virtual PCI bridge — in scope.
-- §7.5.3.3 p.492: **Secondary Latency Timer "does not apply to PCI Express. It must be
-  read-only and hardwired to 00h."** So the whole-Dword write at 18h (Stage C
+- §7.5.3.3 **p.493**: **Secondary Latency Timer "does not apply to PCI Express. It must
+  be read-only and hardwired to 00h."** So the whole-Dword write at 18h (Stage C
   precedent, no read-modify-write) writes `[31:24]` to a byte the device must ignore.
   That is legal and expected — but it means the golden for a *read-back* of 18h must
   expect `[31:24] == 0x00` regardless of what was written. A test that writes
   `0xAA` there and asserts it reads back would be asserting a spec violation.
-- §7.5.3.2 p.492: Primary Bus Number "is not used by PCI Express Functions but must be
-  implemented as read-write for compatibility with legacy software."
+- §7.5.3.2 **p.493**: Primary Bus Number "is not used by PCI Express Functions but must
+  be implemented as read-write for compatibility with legacy software."
+
+(Figure 7-6 and the §7.5.3 heading are on **p.492**; the numbered subsections that
+follow it are on **p.493** — marker `492` sits at `base21.txt:23968` and `493` at
+`:24007`.)
 
 **Base 2.1 gives layout but not the bus-number *semantics*** — there is no §7.5.3.x for
 Secondary or Subordinate Bus Number. Those are established operationally elsewhere,
