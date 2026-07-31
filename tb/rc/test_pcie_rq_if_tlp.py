@@ -33,13 +33,16 @@ CLK_NS = 4
 
 RQ_MEM_WRITE = 0b0001
 RQ_CFG_READ0 = 0b1000
+RQ_CFG_READ1 = 0b1001
 RQ_CFG_WRITE0 = 0b1010
+RQ_CFG_WRITE1 = 0b1011
 
 # tlp_fmt_e / tlp_type_e (tlp_pkg.sv:8-27)
 FMT_3DW_NO_DATA = 0b000
 FMT_3DW_DATA = 0b010
 TYPE_MEM = 0b00000
 TYPE_CFG0 = 0b00100
+TYPE_CFG1 = 0b00101
 
 RID = 0x1234
 
@@ -596,3 +599,82 @@ async def test_t20_tag_exhaustion_strobe(dut):
         f"the tracker hands out 0..{tag_count - 1}; presented {tx.presented_tags}"
     assert tx.presented_tags == [dw1_fields(p[1])["tag"] for p in tx.packets], \
         "presented tags diverged from the wire under tag pressure"
+
+
+# ==========================================================================
+# Stage D-2 -- CFG1 on the wire (SPEC_PREDICTIONS_STAGE_D.md SS7.3 / SS8.1)
+# ==========================================================================
+@cocotb.test()
+async def test_d2i1_cfgrd1_on_wire(dut):
+    """D2-I1 (F2.1 at the wire): a CfgRd1 descriptor emits DW0 = 0x01000005.
+
+    The WHOLE first Dword is asserted, not a field subset -- Trap A: every
+    other DW of a CfgRd1 is bit-identical to a CfgRd0's, so an assertion that
+    skips dw0[4:0] passes against a DUT that emitted Type 0.  This is the
+    check that kills mutation M2.1 (1001 arm mapped to TLP_CMD_CFG_READ0);
+    the standalone descriptor test CANNOT kill it, by design.
+    """
+    tx = await init(dut)
+    bus, dev, fn, reg, ext = 0x2A, 0x03, 0x5, 0x11, 0x2
+    bdf = (bus << 8) | (dev << 3) | fn
+    await send(dut, [(rq_desc(RQ_CFG_READ1, 1, address=cfg_desc_address(reg, ext),
+                              completer_id=bdf, tag=0x5A),
+                      0xF, True, tuser(0xF, 0x0))])
+    await settle(dut)
+
+    assert tx.rq_errors == [], \
+        f"F2.1: wrapper rejected CfgRd1 with error code(s) {tx.rq_errors}"
+    assert len(tx.packets) == 1, f"expected 1 TLP, got {len(tx.packets)}"
+    p = tx.packets[0]
+    want = golden_dw0(FMT_3DW_NO_DATA, TYPE_CFG1, 1)
+    assert want == 0x01000005, "hand-derived CfgRd1 golden must be 0x01000005"
+    assert p[0] == want, \
+        f"DW0 {p[0]:#010x} != {want:#010x} (dw0[4:0]={p[0] & 0x1F:#07b})"
+
+    f = dw1_fields(p[1])
+    assert f["rid"] == RID and f["first_be"] == 0xF and f["last_be"] == 0x0
+    assert p[2] == cfg_wire_dw2(bus, dev, fn, reg, ext), \
+        f"DW2 {p[2]:#010x} != {cfg_wire_dw2(bus, dev, fn, reg, ext):#010x}"
+    assert len(p) == 3, f"a config read is 3 Dwords, got {len(p)}"
+    assert tx.command_errors == []
+    # Tag correlation surface unchanged: the presented tag is the wire tag.
+    assert tx.presented_tags == [f["tag"]], \
+        f"presented {tx.presented_tags} != wire tag {f['tag']:#04x}"
+
+
+@cocotb.test()
+async def test_d2i2_cfgwr1_on_wire(dut):
+    """D2-I2 (F2.2 at the wire): a CfgWr1 emits DW0 = 0x01000045 + payload.
+
+    fmt=010 (3DW with data) -- the D-1b spine proved the requester takes the
+    data path for CFG_WRITE1; this proves the RQ descriptor path reaches it
+    and that the emitted packet is 4 Dwords with the byte realigned.
+    """
+    tx = await init(dut)
+    bus, dev, fn, reg, ext = 0x37, 0x01, 0x6, 0x2C, 0x1
+    bdf = (bus << 8) | (dev << 3) | fn
+    value = 0xC0FFEE11
+
+    tx.clear()
+    await send(dut, [(rq_desc(RQ_CFG_WRITE1, 1, address=cfg_desc_address(reg, ext),
+                              completer_id=bdf),
+                      0xF, False, tuser(0xF, 0x0)),
+                     (value, 0x1, True, tuser(0xF, 0x0))])
+    await settle(dut)
+
+    assert tx.rq_errors == [], \
+        f"F2.2: wrapper rejected CfgWr1 with error code(s) {tx.rq_errors}"
+    assert len(tx.packets) == 1, f"expected 1 TLP, got {len(tx.packets)}"
+    p = tx.packets[0]
+    want = golden_dw0(FMT_3DW_DATA, TYPE_CFG1, 1)
+    assert want == 0x01000045, "hand-derived CfgWr1 golden must be 0x01000045"
+    assert p[0] == want, \
+        f"DW0 {p[0]:#010x} != {want:#010x} (dw0[4:0]={p[0] & 0x1F:#07b})"
+    assert dw0_length(p[0]) == 1, "config Length must be exactly 1 Dword"
+
+    f = dw1_fields(p[1])
+    assert f["first_be"] == 0xF and f["last_be"] == 0x0
+    assert p[2] == cfg_wire_dw2(bus, dev, fn, reg, ext)
+    assert len(p) == 4, f"a config write is 4 Dwords, got {len(p)}"
+    assert p[3] == value, f"payload {p[3]:#010x} != {value:#010x}"
+    assert tx.command_errors == []

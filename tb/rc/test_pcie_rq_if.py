@@ -33,7 +33,9 @@ RQ_MEM_READ = 0b0000
 RQ_MEM_WRITE = 0b0001
 RQ_IO_READ = 0b0010
 RQ_IO_WRITE = 0b0011
+RQ_MEM_FETCH_ADD = 0b0100
 RQ_MEM_SWAP = 0b0101
+RQ_MEM_CAS = 0b0110
 RQ_MEM_RD_LOCKED = 0b0111
 RQ_CFG_READ0 = 0b1000
 RQ_CFG_READ1 = 0b1001
@@ -41,13 +43,21 @@ RQ_CFG_WRITE0 = 0b1010
 RQ_CFG_WRITE1 = 0b1011
 RQ_MSG_ATS = 0b1111
 
-# tlp_pkg::tlp_cmd_e (tlp_pkg.sv:43-50)
+# The eight encodings with NO command mapping after Stage D-2.  Everything the
+# reject matrix (D2-S3) claims about "the rest" is defined by this list, so it
+# is written out rather than computed.
+RQ_NEVER_MAPPED = (0b0100, 0b0101, 0b0110, 0b0111,
+                   0b1100, 0b1101, 0b1110, 0b1111)
+
+# tlp_pkg::tlp_cmd_e (tlp_pkg.sv:43-52)
 CMD_MEM_READ = 0
 CMD_MEM_WRITE = 1
 CMD_CFG_READ0 = 2
 CMD_CFG_WRITE0 = 3
 CMD_IO_READ = 4
 CMD_IO_WRITE = 5
+CMD_CFG_READ1 = 6
+CMD_CFG_WRITE1 = 7
 
 # pcie_rq_rc_pkg::rq_error_e
 ERR_NONE = 0
@@ -399,9 +409,14 @@ async def test_t4_cfg_io_fit_reject(dut):
 # ==========================================================================
 @cocotb.test()
 async def test_t5_request_type_reject(dut):
-    """T5: unmapped Request Types are refused, no command, back to idle."""
+    """T5: unmapped Request Types are refused, no command, back to idle.
+
+    Stage D-2 moved RQ_CFG_READ1/RQ_CFG_WRITE1 out of this list and into the
+    mapped set (D2-S1); two never-mapped atomics keep the sample at five.
+    The full 16-encoding matrix is D2-S3.
+    """
     rq = await init(dut)
-    for req_type in (RQ_CFG_READ1, RQ_CFG_WRITE1, RQ_MEM_SWAP, RQ_MSG_ATS,
+    for req_type in (RQ_MEM_FETCH_ADD, RQ_MEM_CAS, RQ_MEM_SWAP, RQ_MSG_ATS,
                      RQ_MEM_RD_LOCKED):
         desc = rq_desc(req_type, 1, address=0x2000)
         await one_shot(rq, desc, first_be=0xF, last_be=0x0)
@@ -713,3 +728,223 @@ async def test_t11_core_managed_tag(dut):
     await one_shot(rq, rq_desc(RQ_MEM_WRITE, 1, address=0x2000, tag=0xA5),
                    first_be=0xF, last_be=0x0, payload=[0x12345678])
     assert rq.tags == [], "a posted MemWr must not present a tag"
+
+
+# ==========================================================================
+# Stage D-2 -- CFG1 through the RQ surface (SPEC_PREDICTIONS_STAGE_D.md SS7.3)
+# ==========================================================================
+@cocotb.test()
+async def test_d2s1_cfg1_admission(dut):
+    """D2-S1 (F2.1/F2.2): req_type 1001/1011 admitted and mapped to the D-1b
+    commands, with the WHOLE command tuple compared against a golden.
+
+    Every descriptor field is a distinct nonzero value, and the compare is the
+    full (cmd, address, byte_count, tc, attr, context) tuple, not a field
+    subset -- a 1001 arm that reads the 1000 decode, or drops any field, fails
+    here (mutation M2.3).
+    """
+    rq = await init(dut)
+
+    # ---- CfgRd1: bus 0x2A, dev 3, fn 5, reg 0x11, ext 0x2, tc 2, attr 3 ----
+    bdf, reg, ext = (0x2A << 8) | (0x03 << 3) | 0x5, 0x11, 0x2
+    desc = rq_desc(RQ_CFG_READ1, 1, address=cfg_desc_address(reg, ext),
+                   completer_id=bdf, tag=0x5A, tc=2, attr=3)
+    await one_shot(rq, desc, first_be=0xF, last_be=0x0)
+    assert rq.errors == [], \
+        f"F2.1: CfgRd1 rejected with error code(s) {rq.errors} -- must be admitted"
+    assert len(rq.commands) == 1, f"expected 1 command, got {len(rq.commands)}"
+    golden = (CMD_CFG_READ1, cfg_address(bdf, ext, reg, 0), 4, 2, 3,
+              (ext << 8) | (reg << 2))          # context: mem_read=0, addr[11:0]
+    assert rq.commands[0] == golden, \
+        f"CfgRd1 command tuple {rq.commands[0]} != golden {golden}"
+    assert len(rq.payload) == 0, "a config read must not drive payload"
+
+    # ---- CfgWr1: bus 0x37, dev 1, fn 6, reg 0x2C, ext 0x1, tc 4, attr 1 ----
+    bdf, reg, ext = (0x37 << 8) | (0x01 << 3) | 0x6, 0x2C, 0x1
+    value = 0xC0FFEE11
+    desc = rq_desc(RQ_CFG_WRITE1, 1, address=cfg_desc_address(reg, ext),
+                   completer_id=bdf, tc=4, attr=1)
+    await one_shot(rq, desc, first_be=0xF, last_be=0x0, payload=[value])
+    assert rq.errors == [], \
+        f"F2.2: CfgWr1 rejected with error code(s) {rq.errors} -- must be admitted"
+    assert len(rq.commands) == 1
+    golden = (CMD_CFG_WRITE1, cfg_address(bdf, ext, reg, 0), 4, 4, 1,
+              (ext << 8) | (reg << 2))
+    assert rq.commands[0] == golden, \
+        f"CfgWr1 command tuple {rq.commands[0]} != golden {golden}"
+    assert rq.payload == [(value, 0xF, 1)], \
+        f"CfgWr1 payload {rq.payload} != one whole-Dword last beat"
+
+    # The Type 0 pair still maps to ITS commands -- the pairs must not alias.
+    desc = rq_desc(RQ_CFG_READ0, 1, address=cfg_desc_address(reg, ext),
+                   completer_id=bdf, tc=4, attr=1)
+    await one_shot(rq, desc, first_be=0xF, last_be=0x0)
+    assert rq.errors == [] and rq.commands[0][0] == CMD_CFG_READ0, \
+        "CfgRd0 must still map to TLP_CMD_CFG_READ0"
+
+
+@cocotb.test()
+async def test_d2s2_cfg1_class_checks_live(dut):
+    """D2-S2 (M2.2): the class-shaped config checks bind to CFG1 by
+    construction -- prove them LIVE, not merely present.
+
+    bad_cfg_n: Dword Count != 1 refused for both new types.  The byte-granular
+    admission (d5a4253) also extends: a single-byte CfgWr1 is admitted with the
+    right offset.  bad_cfg_fit stays unreachable through the config class --
+    for N=1 every contiguous first_be satisfies popcount+offset <= 4, and for
+    N!=1 bad_cfg_n fires first; that is the same recorded fact as T4's CFG0
+    note, now inherited by CFG1 through the shared desc_is_config gate.
+    """
+    rq = await init(dut)
+    bdf = (0x2A << 8) | (0x03 << 3) | 0x5
+
+    # bad_cfg_n live for CfgRd1 and CfgWr1.
+    await one_shot(rq, rq_desc(RQ_CFG_READ1, 2, address=cfg_desc_address(0x11),
+                               completer_id=bdf), first_be=0xF, last_be=0xF)
+    assert rq.errors == [ERR_CFG_DWORD_COUNT], \
+        f"CfgRd1 N=2: errors {rq.errors} -- bad_cfg_n must gate CFG1"
+    assert not rq.commands, "a rejected CfgRd1 must launch no command"
+
+    await one_shot(rq, rq_desc(RQ_CFG_WRITE1, 2, address=cfg_desc_address(0x11),
+                               completer_id=bdf), first_be=0xF, last_be=0xF,
+                   payload=[1, 2])
+    assert rq.errors == [ERR_CFG_DWORD_COUNT], \
+        f"CfgWr1 N=2: errors {rq.errors} -- bad_cfg_n must gate CFG1"
+    assert not rq.commands and not rq.payload
+
+    # Byte-granular CfgWr1 (the d5a4253 admission, through the class gate):
+    # first_be=0100 selects byte 2 -> offset 2, byte_count 1, and 1 <= 4-2.
+    await one_shot(rq, rq_desc(RQ_CFG_WRITE1, 1, address=cfg_desc_address(0x2C),
+                               completer_id=bdf), first_be=0x4, last_be=0x0,
+                   payload=[0x00AB0000])
+    assert rq.errors == [], f"byte-granular CfgWr1 rejected: {rq.errors}"
+    assert len(rq.commands) == 1
+    _cmd, addr, bc, _tc, _attr, _ctx = rq.commands[0]
+    assert addr & 0x3 == 2, f"offset {addr & 3} != 2 for first_be=0100"
+    assert bc == 1, f"byte_count {bc} != 1 for a single-byte write"
+    assert sum(popcount(k) for _d, k, _l in rq.payload) == 1
+
+
+@cocotb.test()
+async def test_d2s3_reject_matrix(dut):
+    """D2-S3 (F2.3, the control): every never-mapped encoding is rejected with
+    RQ_ERR_REQ_TYPE exactly, and every pre-D-2 mapped type is still admitted.
+
+    This is the test that catches a mis-typed case arm silently widening the
+    accept set.  It must pass IDENTICALLY against pre-change and post-change
+    RTL, which is why the CFG1 admissions live in D2-S1, not here.
+    """
+    rq = await init(dut)
+
+    for req_type in RQ_NEVER_MAPPED:
+        desc = rq_desc(req_type, 1, address=0x4000)
+        await one_shot(rq, desc, first_be=0xF, last_be=0x0)
+        assert rq.errors == [ERR_REQ_TYPE], \
+            f"req_type={req_type:#06b}: errors {rq.errors} != [RQ_ERR_REQ_TYPE]"
+        assert not rq.commands, f"req_type={req_type:#06b} launched a command"
+        assert not rq.payload
+
+    # The six pre-D-2 mappings are untouched: admitted, right command.
+    for req_type, cmd, payload in (
+            (RQ_MEM_READ, CMD_MEM_READ, None),
+            (RQ_MEM_WRITE, CMD_MEM_WRITE, [0x11112222]),
+            (RQ_IO_READ, CMD_IO_READ, None),
+            (RQ_IO_WRITE, CMD_IO_WRITE, [0x33334444]),
+    ):
+        await one_shot(rq, rq_desc(req_type, 1, address=0x4000),
+                       first_be=0xF, last_be=0x0, payload=payload)
+        assert rq.errors == [], f"req_type={req_type:#06b}: {rq.errors}"
+        assert len(rq.commands) == 1 and rq.commands[0][0] == cmd
+    for req_type, cmd, payload in (
+            (RQ_CFG_READ0, CMD_CFG_READ0, None),
+            (RQ_CFG_WRITE0, CMD_CFG_WRITE0, [0x55556666]),
+    ):
+        await one_shot(rq, rq_desc(req_type, 1, address=cfg_desc_address(0x06),
+                                   completer_id=0x0100),
+                       first_be=0xF, last_be=0x0, payload=payload)
+        assert rq.errors == [], f"req_type={req_type:#06b}: {rq.errors}"
+        assert len(rq.commands) == 1 and rq.commands[0][0] == cmd
+
+
+@cocotb.test()
+async def test_d2s4_poison_membership(dut):
+    """D2-S4 (F2.4 + the IO non-widening pin): bad_poison covers EXACTLY the
+    two config writes.
+
+    Rejected: poisoned CfgWr0 (pre-D-2 behaviour) and poisoned CfgWr1 (F2.4).
+    Admitted: poisoned CfgRd1 (reads carry no data to poison), poisoned
+    IO_WRITE and poisoned MEM_WRITE (poison origination is out of scope and
+    they are forwarded unpoisoned, per KNOWN_GAPS) -- widening the check to IO
+    would be a second behaviour change, and this test pins it out.
+    """
+    rq = await init(dut)
+    bdf = (0x37 << 8) | (0x01 << 3) | 0x6
+
+    await one_shot(rq, rq_desc(RQ_CFG_WRITE0, 1, address=cfg_desc_address(0x06),
+                               completer_id=0x0100, poisoned=1),
+                   first_be=0xF, last_be=0x0, payload=[0])
+    assert rq.errors == [ERR_POISON_CFG_WR], \
+        f"poisoned CfgWr0: errors {rq.errors} != [RQ_ERR_POISON_CFG_WR]"
+    assert not rq.commands
+
+    await one_shot(rq, rq_desc(RQ_CFG_WRITE1, 1, address=cfg_desc_address(0x2C),
+                               completer_id=bdf, poisoned=1),
+                   first_be=0xF, last_be=0x0, payload=[0])
+    assert rq.errors == [ERR_POISON_CFG_WR], \
+        f"F2.4: poisoned CfgWr1 errors {rq.errors} != [RQ_ERR_POISON_CFG_WR]"
+    assert not rq.commands, "a poisoned CfgWr1 must launch no command"
+
+    # Poisoned CfgRd1: admitted -- only config WRITES are poison-gated.
+    await one_shot(rq, rq_desc(RQ_CFG_READ1, 1, address=cfg_desc_address(0x11),
+                               completer_id=bdf, poisoned=1),
+                   first_be=0xF, last_be=0x0)
+    assert rq.errors == [], f"poisoned CfgRd1 rejected: {rq.errors}"
+    assert len(rq.commands) == 1 and rq.commands[0][0] == CMD_CFG_READ1
+
+    # Poisoned IO and Memory writes: admitted unchanged (forwarded unpoisoned).
+    await one_shot(rq, rq_desc(RQ_IO_WRITE, 1, address=0x1000, poisoned=1),
+                   first_be=0xF, last_be=0x0, payload=[0x77778888])
+    assert rq.errors == [], f"poisoned IO_WRITE rejected: {rq.errors}"
+    assert len(rq.commands) == 1 and rq.commands[0][0] == CMD_IO_WRITE
+
+    await one_shot(rq, rq_desc(RQ_MEM_WRITE, 1, address=0x2000, poisoned=1),
+                   first_be=0xF, last_be=0x0, payload=[0x9999AAAA])
+    assert rq.errors == [], f"poisoned MEM_WRITE rejected: {rq.errors}"
+    assert len(rq.commands) == 1 and rq.commands[0][0] == CMD_MEM_WRITE
+
+
+@cocotb.test()
+async def test_d2s5_tripwire_pin(dut):
+    """D2-S5: a Type 0 config request naming device != 0 is ADMITTED and
+    forwarded UNCHANGED.
+
+    This pins the DEFERRED consequence documented in pcie_rq_if's header
+    (Stage D brief SS8.1): Base 2.1 SS7.3.1 p.479 wants such a request
+    UR-terminated by a Root Port, but no sweep-capable requester exists yet,
+    so the wrapper only fires a $warning tripwire (observable in the log, not
+    a reject).  When real UR termination lands, THIS test must break -- the
+    behaviour change is then a visible test change, not a silent one.
+    """
+    rq = await init(dut)
+
+    # Bus 0x1C, DEVICE 5, fn 0 -- the device field is the point.
+    bdf = (0x1C << 8) | (0x05 << 3) | 0x0
+    desc = rq_desc(RQ_CFG_READ0, 1, address=cfg_desc_address(0x00),
+                   completer_id=bdf)
+    await one_shot(rq, desc, first_be=0xF, last_be=0x0)
+    assert rq.errors == [], \
+        f"deferred consequence violated: device!=0 CfgRd0 rejected {rq.errors}"
+    assert len(rq.commands) == 1, "the request must be admitted"
+    _cmd, addr, bc, _tc, _attr, _ctx = rq.commands[0]
+    assert (addr >> 16) & 0xFFFF == bdf, \
+        f"BDF {addr >> 16 & 0xFFFF:#06x} altered -- the device field must " \
+        f"pass through unchanged ({bdf:#06x})"
+    assert (addr >> 19) & 0x1F == 5, "the device number itself must survive"
+    assert bc == 4
+
+    # Same deferral for a Type 0 config WRITE to device != 0.
+    desc = rq_desc(RQ_CFG_WRITE0, 1, address=cfg_desc_address(0x01),
+                   completer_id=bdf)
+    await one_shot(rq, desc, first_be=0xF, last_be=0x0, payload=[0x0B0B0B0B])
+    assert rq.errors == [] and len(rq.commands) == 1
+    assert (rq.commands[0][1] >> 16) & 0xFFFF == bdf

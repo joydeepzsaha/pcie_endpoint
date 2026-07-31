@@ -38,3 +38,13 @@ verilate_enum_scan_tlp|rc=0|TESTS=8 PASS=8 FAIL=0 SKIP=0|simend=67840.01
 verilate_enum_bar|rc=0|TESTS=32 PASS=32 FAIL=0 SKIP=0|simend=14244.03
 verilate_enum_bar_tlp|rc=0|TESTS=7 PASS=7 FAIL=0 SKIP=0|simend=30476.01
 verilate_conformance|rc=0|TESTS=1 PASS=1 FAIL=0 SKIP=0|simend=6010.00
+# --- Stage D-2 addendum, 2026-07-31: cold build after RTL 5de74df + tripwire 9bdcd15 + the D-2 tb commit ---
+# New totals: 38 targets / 274 tests / 274 PASS / 0 FAIL / 0 SKIP.  580.00 ns invariant holds.
+# Diff rule for later sessions: use the five lines below where they name a target, the original block otherwise.
+# (conf_cfg1 / cfg1_spine are the D-1b targets, unchanged from their Session-3 record -- restated here so this
+# file is a complete 38-target diff base on its own.)
+verilate_tlp_conf_cfg1|rc=0|TESTS=5 PASS=5 FAIL=0 SKIP=0|simend=9250.00
+verilate_tlp_cfg1_spine|rc=0|TESTS=3 PASS=3 FAIL=0 SKIP=0|simend=820.00
+verilate_rq_if|rc=0|TESTS=16 PASS=16 FAIL=0 SKIP=0|simend=12876.02
+verilate_rq_if_tlp|rc=0|TESTS=11 PASS=11 FAIL=0 SKIP=0|simend=9396.01
+verilate_rq_rc_top|rc=0|TESTS=10 PASS=10 FAIL=0 SKIP=0|simend=54208.01

@@ -58,6 +58,12 @@ below is what ties the two together.
 # pcie_rq_rc_pkg::rq_req_type_e  (PG213 Table 57)
 RQ_CFG_READ0 = 0b1000
 RQ_CFG_WRITE0 = 0b1010
+# Stage D-2: the Type 1 pair.  Exactly one bit (bit 0) away from the Type 0
+# encodings -- _selftest_type1_one_bit() below pins that distance, because it
+# is what makes a mistyped golden actively wrong rather than merely different
+# (SPEC_PREDICTIONS_STAGE_D.md SS8.1, Trap A).
+RQ_CFG_READ1 = 0b1001
+RQ_CFG_WRITE1 = 0b1011
 
 # pcie_rq_rc_pkg::rc_cpl_status_e == PG213 [45:43] == PCIe CPL Completion Status
 CPL_SC = 0b000
@@ -128,6 +134,7 @@ CFG_LAST_BE = 0b0000
 FMT_3DW_NO_DATA = 0b000
 FMT_3DW_DATA = 0b010
 TYPE_CFG0 = 0b00100
+TYPE_CFG1 = 0b00101            # Stage D-2: Base 2.1 SS2.2.7 Table 2-3, one bit up
 TYPE_CPL = 0b01010
 
 
@@ -193,16 +200,23 @@ def decode_tuser(v):
 
 
 def assert_rq_descriptor(observed_desc, observed_tuser, *, write, bdf, reg_num,
-                         first_be, ext_reg=0, what=""):
+                         first_be, ext_reg=0, type1=False, what=""):
     """Assert one emitted RQ descriptor against a freshly built golden.
 
     Compares the WHOLE 128-bit word, not a field subset: a field the DUT sets
     that the golden leaves zero is exactly the kind of thing a per-field check
     misses.  Reports the field-level diff on failure so the whole-word compare
     stays debuggable.
+
+    type1 selects the Stage D-2 CFG1 golden (req_type 1001/1011 instead of
+    1000/1010); default False keeps every pre-D-2 caller byte-identical.
     """
+    if type1:
+        req_type = RQ_CFG_WRITE1 if write else RQ_CFG_READ1
+    else:
+        req_type = RQ_CFG_WRITE0 if write else RQ_CFG_READ0
     golden = rq_desc(
-        RQ_CFG_WRITE0 if write else RQ_CFG_READ0,
+        req_type,
         dword_count=1,
         address=cfg_desc_address(reg_num, ext_reg),
         completer_id=bdf,
@@ -339,21 +353,51 @@ def cfg_wire_dw2(bus, dev, fn, reg_num, ext_reg=0):
             | ((ext_reg & 0xF) << 8) | ((reg_num & 0x3F) << 2))
 
 
-def cfg_wire_dw0(write, length_dw=1, tc=0, attr=0):
+def cfg_wire_dw0(write, length_dw=1, tc=0, attr=0, type1=False):
     """Configuration Request DW0 as tlp_generator assembles it (:60-73).
 
     Base 2.1 SS2.2.7 p.79 fixes Length to 1 and TC/Attr/AT to zero for every
     Configuration Request; the fmt bit is the only thing read vs write changes.
+
+    type1 selects the Stage D-2 Type 1 golden (dw0[4:0] = 00101 instead of
+    00100); default False keeps every pre-D-2 caller byte-identical.
     """
     fmt = FMT_3DW_DATA if write else FMT_3DW_NO_DATA
     enc = length_dw & 0x3FF
-    v = (fmt << 5) | TYPE_CFG0
+    v = (fmt << 5) | (TYPE_CFG1 if type1 else TYPE_CFG0)
     v |= (attr & 0x1) << 10
     v |= (tc & 0x7) << 12
     v |= ((attr >> 1) & 0x3) << 20
     v |= ((enc >> 8) & 0x3) << 16
     v |= (enc & 0xFF) << 24
     return v & 0xFFFFFFFF
+
+
+def _selftest_type1_one_bit():
+    """Stage D-2 builder self-assert (SPEC_PREDICTIONS_STAGE_D.md SS8.1, Trap A).
+
+    The Type 0 and Type 1 goldens must sit EXACTLY one bit apart, at both
+    levels -- descriptor req_type 1000/1010 vs 1001/1011, wire dw0[4:0] 00100
+    vs 00101.  That one-bit distance is what makes a mistyped golden actively
+    wrong (it matches the OTHER type perfectly), so it is pinned here at import
+    time in every bench that uses these builders, not assumed.
+    """
+    assert RQ_CFG_READ1 ^ RQ_CFG_READ0 == 1, "req_type read pair not one bit apart"
+    assert RQ_CFG_WRITE1 ^ RQ_CFG_WRITE0 == 1, "req_type write pair not one bit apart"
+    assert TYPE_CFG1 ^ TYPE_CFG0 == 1, "tlp_type_e CFG pair not one bit apart"
+    # Whole-golden distance: exactly the req_type field's low bit ([75]) at the
+    # descriptor level, exactly dw0 bit 0 on the wire -- nothing else moves.
+    kw = dict(dword_count=1, address=cfg_desc_address(0x06), completer_id=0x0100)
+    assert rq_desc(RQ_CFG_READ1, **kw) ^ rq_desc(RQ_CFG_READ0, **kw) == 1 << 75
+    assert rq_desc(RQ_CFG_WRITE1, **kw) ^ rq_desc(RQ_CFG_WRITE0, **kw) == 1 << 75
+    for write in (False, True):
+        t0 = cfg_wire_dw0(write, type1=False)
+        t1 = cfg_wire_dw0(write, type1=True)
+        assert t1 ^ t0 == 1, f"wire DW0 goldens differ by {t1 ^ t0:#x}, not bit 0"
+        assert t0 & 0x1F == TYPE_CFG0 and t1 & 0x1F == TYPE_CFG1
+
+
+_selftest_type1_one_bit()
 
 
 def cfg_wire_dw1(requester_id, tag, first_be, last_be=0):

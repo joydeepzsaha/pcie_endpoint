@@ -535,25 +535,56 @@ members present. That isolates the behaviour from the compile.
 
 | id | new test | prediction against pre-change RTL | measured |
 |---|---|---|---|
-| **F2.1** | `req_type = 1001` admitted, maps to `TLP_CMD_CFG_READ1` | **FAIL.** Falls to `pcie_rq_if.sv:247` `default: type_ok = 1'b0` → `RQ_ERR_REQ_TYPE` (`:309`). | |
-| **F2.2** | `req_type = 1011` admitted, maps to `TLP_CMD_CFG_WRITE1` | **FAIL**, same path. | |
-| **F2.3** | Reject-set unchanged: all 12 other encodings still rejected, **and** rejected with `RQ_ERR_REQ_TYPE` specifically | **PASS** against pre-change RTL (nothing rejected today becomes accepted). Kept as a **control** — it is the test that catches a mis-typed case arm silently widening the accept set. | |
-| **F2.4** | Poisoned CfgWr1 rejected | **FAIL** — see mutation M2.4 below; `:286` names `TLP_CMD_CFG_WRITE0` only. | |
-| **F2.5** | CFG1 completion returns like any config completion; tag correlation and status decode unchanged | **PASS** against pre-change RTL is impossible (nothing emits CFG1 yet), so this runs only post-change and is a **non-falsifiable row** — recorded as such rather than dressed up as a prediction. | |
+| **F2.1** | `req_type = 1001` admitted, maps to `TLP_CMD_CFG_READ1` | **FAIL.** Falls to `pcie_rq_if.sv:247` `default: type_ok = 1'b0` → `RQ_ERR_REQ_TYPE` (`:309`). | **FAIL as predicted** (2026-07-31, at `1c4056d`): standalone D2-S1 `errors [1]` = `RQ_ERR_REQ_TYPE`; integration D2-I1 `rq_errors [1]`, **zero TLPs emitted**; reject `$warning` printed `code 1, type 9`. |
+| **F2.2** | `req_type = 1011` admitted, maps to `TLP_CMD_CFG_WRITE1` | **FAIL**, same path. | **FAIL as predicted** (2026-07-31): integration D2-I2 `rq_errors [1]`, zero TLPs; `$warning` `code 1, type 11`. |
+| **F2.3** | Reject-set unchanged: all 12 other encodings still rejected, **and** rejected with `RQ_ERR_REQ_TYPE` specifically | **PASS** against pre-change RTL (nothing rejected today becomes accepted). Kept as a **control** — it is the test that catches a mis-typed case arm silently widening the accept set. | **PASS pre- AND post-change** (2026-07-31): D2-S3's matrix — each of the eight never-mapped encodings (`0100..0111`, `1100..1111`) rejected with exactly `[RQ_ERR_REQ_TYPE]`, no command, no payload; the six pre-D-2 mappings admitted — identical verdict at `1c4056d` and `5de74df`. (The brief's "12 other encodings" over-counts: post-change the complement of the mapped set is 8; the CFG1 admissions are asserted in D2-S1, so this row stays pre/post-invariant.) |
+| **F2.4** | Poisoned CfgWr1 rejected | **FAIL** — see mutation M2.4 below; `:286` names `TLP_CMD_CFG_WRITE0` only. | **Measured in two stages** (2026-07-31), per the nuance that pre-change the request dies at `bad_type` before poison is consulted: at `1c4056d`, `errors [1]` (`RQ_ERR_REQ_TYPE` — poison never reached). On the **M2.4 tree** (arms + `desc_has_data` added, `:286` unextended): poisoned CfgWr1 **ADMITTED**, `errors []` — the meaningful falsification, doubling as the M2.4 kill record. Post-change: `errors [7]` = `RQ_ERR_POISON_CFG_WR`. |
+| **F2.5** | CFG1 completion returns like any config completion; tag correlation and status decode unchanged | **PASS** against pre-change RTL is impossible (nothing emits CFG1 yet), so this runs only post-change and is a **non-falsifiable row** — recorded as such rather than dressed up as a prediction. | **Non-falsifiable, as recorded** (2026-07-31): pre-change the round-trip test sees 0 TLPs (nothing to complete). Post-change V10 passes: CfgRd1 CplD and CfgWr1 Cpl correlate by tag, RC-descriptor decode bit-identical to V1's CFG0 pins, both tags retire. **Deviation:** V10 lives in `verilate_rq_rc_top`, not `verilate_rq_if_tlp` as the brief assumed — that bench's RX stream is tied off by design (`tb_pcie_rq_if_tlp.sv:169-174`) and `pcie_rc_if` does not exist in it. |
 
 **Required mutations, standalone and integration kill-sets recorded separately:**
 
-| id | mutation | must be killed by |
-|---|---|---|
-| **M2.1** | `RQ_CFG_READ1 → TLP_CMD_CFG_READ0` (mis-decode) | F2.1 + an on-wire type check; a descriptor-only assertion will **not** catch it |
-| **M2.2** | `desc_is_config` not set for the new arms (guard bypassed) | F1b.3's analogue at the RQ layer |
-| **M2.3** | descriptor field aliased between the two type pairs | whole-word descriptor compare |
-| **M2.4** | **`bad_poison` left as `desc_cmd == TLP_CMD_CFG_WRITE0`** | **F2.4** |
+| id | mutation | must be killed by | measured kill (2026-07-31, each restore diff-verified) |
+|---|---|---|---|
+| **M2.1** | `RQ_CFG_READ1 → TLP_CMD_CFG_READ0` (mis-decode) | F2.1 + an on-wire type check; a descriptor-only assertion will **not** catch it | Integration: **D2-I1 whole-DW0** `0x01000004 != 0x01000005 (dw0[4:0]=0b00100)` — the mutant emitted a *well-formed Type 0 TLP*, distinguishable only in that bit. Standalone: D2-S1/D2-S4 ALSO kill (divergence from the predicted blindness — see note below). |
+| **M2.2** | `desc_is_config` not set for the new arms (guard bypassed) | F1b.3's analogue at the RQ layer | Standalone: D2-S1 (BDF packing lost) + D2-S2 (`bad_cfg_n` dead, N=2 admitted). Integration: D2-I1/D2-I2 (DW2 `0x00000244 != 0x2a1d0244`). |
+| **M2.3** | descriptor field aliased between the two type pairs | whole-word descriptor compare | Standalone: **D2-S1 whole-tuple compare only** (aliased `requester_id` → address wrong). Integration: D2-I1/D2-I2 via DW2. |
+| **M2.4** | **`bad_poison` left as `desc_cmd == TLP_CMD_CFG_WRITE0`** | **F2.4** | Standalone: **D2-S4 only** (poisoned CfgWr1 admitted, `errors []`); every admission test passes on the mutant — 14/15. Integration: **blind** (no poisoned stimulus at wire level), expected: poison legality is a descriptor-layer check. |
+| **M2.5** | `desc_has_data` without `CFG_WRITE1` (see note below) | *added this session* | Standalone: D2-S1/D2-S2, CfgWr1 rejected `[12]` = `RQ_ERR_MISSING_LAST`. Integration: D2-I2 `[12]`, zero TLPs. |
 
 > **M2.4 is not contrived — it is the current state of the code.** `pcie_rq_if.sv:286`
 > is written per-command while every other config check on that path is class-shaped
 > (`RECON_stageD.md` §5). Adding `RQ_CFG_WRITE1` without touching `:286` is the natural
 > mistake. Added to the brief's D-2 mutation list, which did not name it.
+
+> **M2.5 — a THIRD per-command site, found 2026-07-31.** `RECON_stageD.md` §5's "two
+> arms" survey (and the D-2 brief's "two arms + `bad_poison`, nothing else") missed
+> `desc_has_data` (`pcie_rq_if.sv:251-253`): per-command membership, the RQ-level
+> analogue of `tlp_requester`'s `command_has_data` (D-1b site F1b.2). Without
+> `CFG_WRITE1` there, a CfgWr1 is reclassified as payload-less and its packet is
+> rejected `RQ_ERR_MISSING_LAST` — F2.2 could never pass. Not one of the four
+> class-shaped checks, so not an R5 stop trigger; extended in `5de74df` and proven
+> load-bearing by the M2.5 kill. The running count of per-command CFG1 membership
+> sites on this surface is therefore **three** (arms, `desc_has_data`, `bad_poison`),
+> not two.
+
+> **M2.1 standalone-blindness note.** The predicted blindness holds for
+> *descriptor-level* assertions (an emitted RQ descriptor is upstream of the mutated
+> decode, so `assert_rq_descriptor` cannot see a mis-map). The standalone rq_if bench,
+> however, observes `command_o` — *downstream* of the decode — so D2-S1's whole-tuple
+> compare does kill M2.1. The on-wire whole-DW0 check remains the only guard against a
+> type error introduced *below* the command port (the D-1b F1b.1 site class), which is
+> why it stays mandatory.
+
+**Regression (2026-07-31, cold build, sequential):** **38 targets / 274 tests, all
+PASS.** The 33 untouched baseline targets bit-identical to
+`RECON_stageD_baseline.txt` in verdict and sim end time; the two D-1b targets
+identical to their Session-3 record (`verilate_tlp_conf_cfg1` 5/9250.00,
+`verilate_tlp_cfg1_spine` 3/820.00); growth only by the extended targets —
+`verilate_rq_if` 11→16 (D2-S1..S5), `verilate_rq_if_tlp` 9→11 (D2-I1/I2),
+`verilate_rq_rc_top` 9→10 (V10). Decomposed: tb_tlp 25/124, RC surface 6/63,
+enum 6/86, conformance 1/1. 580.00 ns invariant holds
+(`verilate_tlp_cpl_timeout_off` == `verilate_tlp_request_tracker` == 580.00).
+Per-target lines recorded in the dated addendum of `RECON_stageD_baseline.txt`.
 
 ### §7.4 D-3 — the bridge sequencer
 
@@ -596,6 +627,17 @@ field subset.
 **Self-test for the trap itself:** point a CFG1 test at a CFG0 golden and confirm it
 **fails**. A guard that has never been seen to fire is not known to work
 (`RECON_stageD.md` §11 / brief §2.11).
+
+> **Performed 2026-07-31, before any D-2 test was written.** A CFG1-built descriptor
+> asserted against the `type1=False` golden failed with field diff exactly
+> `{'req_type': ('0x9', '0x8')}` and nothing else; the same case against the
+> `type1=True` golden passed (control). Wire level: `0x01000005 != 0x01000004`
+> (read) and `0x01000045 != 0x01000044` (write), differing in dw0 bit 0 only.
+> `enum_tb_common.py` now also pins the one-bit distance at import time in every
+> bench (`_selftest_type1_one_bit()`): descriptor pairs differ by exactly `1 << 75`,
+> wire pairs by exactly bit 0. The trap firing against a real DUT was then observed
+> live in the M2.1 kill (§7.3): the mutant emitted a well-formed Type 0 TLP and only
+> the whole-DW0 compare caught it.
 
 ### §8.2 Trap B — look-alike IDs and bus numbers collapse routing assertions into `0 == 0`
 

@@ -43,11 +43,15 @@ TAG_COUNT = 8
 # pcie_rq_rc_pkg::rq_req_type_e
 RQ_CFG_READ0 = 0b1000
 RQ_CFG_WRITE0 = 0b1010
+# Stage D-2 Type 1 pair
+RQ_CFG_READ1 = 0b1001
+RQ_CFG_WRITE1 = 0b1011
 
 # tlp_pkg::tlp_fmt_e / tlp_type_e (tlp_pkg.sv:8-27)
 FMT_3DW_NO_DATA = 0b000
 FMT_3DW_DATA = 0b010
 TYPE_CFG0 = 0b00100
+TYPE_CFG1 = 0b00101
 TYPE_CPL = 0b01010
 
 # tlp_pkg::tlp_cpl_status_e == PG213 Completion Status == RC descriptor [45:43]
@@ -1034,3 +1038,74 @@ async def v9_multibeat_late_completion_drains(dut):
     assert len(rc.lates) == 1, "only one late drain"
     assert len(rc.timeouts) == 1, "the second request was answered in time"
     rc.clean(allow_timeouts=True)
+
+
+# ==========================================================================
+# V10 -- Stage D-2, F2.5: CFG1 completions return like any config completion
+# ==========================================================================
+@cocotb.test()
+async def v10_cfg1_round_trip(dut):
+    """F2.5: a CfgRd1's CplD and a CfgWr1's Cpl correlate by tag and decode
+    identically to the Type 0 path.
+
+    Recorded in SPEC_PREDICTIONS_STAGE_D.md SS7.3 as a NON-FALSIFIABLE row:
+    nothing emitted CFG1 through this surface before D-2, so there is no
+    meaningful pre-change run -- this test exists post-change only.  The
+    request side asserts the whole DW0 (Trap A: dw0[4:0] = 00101 is the only
+    bit that distinguishes this from the long-green Type 0 round trip); the
+    completion side asserts the same RC-descriptor decode V1 pins for CFG0.
+    """
+    rc, completer = await init(dut)
+    bus, dev, fn, reg, ext = 0x2A, 0x03, 0x5, 0x11, 0x2
+    bdf = (bus << 8) | (dev << 3) | fn
+
+    # ---- CfgRd1 with a CplD ----
+    await send_rq(dut, [(rq_desc(RQ_CFG_READ1, 1,
+                                 address=cfg_desc_address(reg, ext),
+                                 completer_id=bdf),
+                         0xF, True, tuser(0xF, 0x0))])
+    await completer.wait_for(1)
+    req = completer.seen[0]
+    assert req.dwords[0] == 0x01000005, \
+        f"CfgRd1 DW0 {req.dwords[0]:#010x} != 0x01000005 " \
+        f"(dw0[4:0]={req.dwords[0] & 0x1F:#07b})"
+    assert req.tlp_type == TYPE_CFG1 and req.length_dw == 1
+    assert req.cfg_address == cfg_wire_dw2(bus, dev, fn, reg, ext), \
+        f"CFG1 DW2 {req.cfg_address:#010x} lost the distinct BDF"
+    assert rc.tags_presented == [req.tag], "tag correlation surface changed"
+
+    read_data = 0xD1D2_0001
+    await completer.complete(req, status=CPL_SC, data=read_data)
+    await rc.wait_packets(1)
+    desc, payload = split_packet(rc.packets[0])
+    f = decode_rc_desc(desc)
+    assert f["tag"] == req.tag, f"RC Tag {f['tag']:#04x} != {req.tag:#04x}"
+    assert f["status"] == CPL_SC and f["error_code"] == EC_NORMAL
+    assert f["request_completed"] == 1 and f["dword_count"] == 1
+    assert f["byte_count"] == 4 and f["lower_address"] == 0
+    assert payload == [read_data], \
+        f"read data {[hex(w) for w in payload]} != [{read_data:#010x}]"
+
+    # ---- CfgWr1 with a data-less Cpl ----
+    value = 0xC0FFEE22
+    await send_rq(dut, [(rq_desc(RQ_CFG_WRITE1, 1,
+                                 address=cfg_desc_address(reg, ext),
+                                 completer_id=bdf),
+                         0xF, False, tuser(0xF, 0x0)),
+                        (value, 0x1, True, 0)])
+    await completer.wait_for(2)
+    wr = completer.seen[1]
+    assert wr.dwords[0] == 0x01000045, \
+        f"CfgWr1 DW0 {wr.dwords[0]:#010x} != 0x01000045"
+    assert wr.payload == [value]
+    await completer.complete(wr, status=CPL_SC)
+    await rc.wait_packets(2)
+    desc, payload = split_packet(rc.packets[1])
+    f = decode_rc_desc(desc)
+    assert f["tag"] == wr.tag and f["status"] == CPL_SC
+    assert f["dword_count"] == 0 and payload == [], \
+        "a write completion carries no data"
+
+    await settle(dut)
+    assert int(dut.outstanding_o.value) == 0, "both CFG1 tags must retire"
+    rc.clean()
