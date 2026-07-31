@@ -96,6 +96,17 @@ filesets:
     files:
       - test_tlp_cfg0_spine.py : {file_type : user, copyto : .}
 
+  # D-1b: CFG1 -> CPL spine, driven at the tlp_layer level (cfg0 precedent).
+  cocotb_cfg1_spine:
+    files:
+      - test_tlp_cfg1_spine.py : {file_type : user, copyto : .}
+
+  # D-1b: CFG1 origination -- on-wire goldens + (offset x byte_count)
+  # admission matrix re-proven for the Type 1 commands.
+  cocotb_conf_cfg1:
+    files:
+      - test_tlp_conf_cfg1.py : {file_type : user, copyto : .}
+
   # TL conformance sweep -- spec-golden, driven at the tlp_layer level.
   cocotb_conf_requester:
     files:
@@ -267,6 +278,39 @@ targets:
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, cocotb_cfg0_spine]
+    toplevel : [tlp_layer]
+
+  # ---- D-1b: CFG1 (Type 1 config) -> CPL spine ----
+  # CfgRd1/CfgWr1 out the TX AXIS (whole-DW0 goldens -- Trap A), hand-rolled
+  # spec-golden Cpl/CplD back with the echoed tag+RID, tracker correlation
+  # (F1b.4), outstanding -> 0, no unexpected-completion.
+  verilate_tlp_cfg1_spine:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_cfg1_spine
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, cocotb_cfg1_spine]
+    toplevel : [tlp_layer]
+
+  # ---- D-1b: CFG1 origination, requester level ----
+  # On-wire CfgRd1/CfgWr1 goldens (F1b.1/F1b.2), the full offset x byte_count
+  # admission matrix re-proven for the Type 1 commands (F1b.3), and the
+  # anti-segmentation proof that over-length CFG1 is rejected, never split on
+  # MPS/MRRS (F1b.5).
+  verilate_tlp_conf_cfg1:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_conf_cfg1
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, cocotb_conf_cfg1]
     toplevel : [tlp_layer]
 
   # ---- TL conformance sweep, Area 1: requester origination completeness ----
