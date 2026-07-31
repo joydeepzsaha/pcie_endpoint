@@ -11,7 +11,8 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer, with_timeout
 from cocotbext.axi import AxiStreamBus, AxiStreamFrame, AxiStreamSink, AxiStreamSource
 from cocotbext.pcie.core.dllp import Dllp, DllpType, FcScale
-from cocotbext.pcie.core.tlp import Tlp, TlpType
+from cocotbext.pcie.core.tlp import CplStatus, Tlp, TlpType
+from cocotbext.pcie.core.utils import PcieId
 
 
 PHY_USER_IS_DLLP = 1
@@ -102,7 +103,6 @@ async def capture_target_payload(dut) -> bytes:
     payload = bytearray()
     while True:
         await RisingEdge(dut.clk_i)
-        await Timer(1, units="ps")
         if int(dut.target_data_valid_o.value) and int(dut.target_data_ready_i.value):
             payload.extend(
                 word_bytes(int(dut.target_data_o.value), int(dut.target_keep_o.value))
@@ -310,7 +310,10 @@ async def exact_outbound_header_sequence_credit_and_classification(dut):
     frame = await receive_link_frame(tb.phy_sink)
     link_packet = bytes(frame.tdata)
     assert int.from_bytes(link_packet[:2], "big") == 0
-    assert all(int(value) == PHY_USER_IS_TLP for value in frame.tuser)
+    frame_tuser = (
+        frame.tuser if isinstance(frame.tuser, (list, tuple)) else [frame.tuser]
+    )
+    assert all(int(value) == PHY_USER_IS_TLP for value in frame_tuser)
 
     tlp = Tlp.unpack(link_packet[2:-4])
     assert tlp.fmt_type == TlpType.MEM_WRITE
@@ -481,7 +484,7 @@ async def physical_input_reaches_target_through_mid_layer(dut):
     packet = Tlp()
     packet.fmt_type = TlpType.MEM_WRITE
     packet.set_addr_be_data(0x80, payload)
-    packet.requester_id = 1
+    packet.requester_id = PcieId.from_int(1)
     packet.tag = 0x22
     raw_tlp = bytes(packet.pack())
     link_packet = add_sequence_and_lcrc(0, raw_tlp)
@@ -523,7 +526,7 @@ async def inbound_header_fields_payload_backpressure_and_poison(dut):
     packet = Tlp()
     packet.fmt_type = TlpType.MEM_WRITE
     packet.set_addr_be_data(0x81, payload)
-    packet.requester_id = 0x1234
+    packet.requester_id = PcieId.from_int(0x1234)
     packet.tag = 0xA5
     packet.tc = 6
     packet.attr = 3
@@ -596,7 +599,7 @@ async def bar_boundary_memory_disable_and_config_routing(dut):
     crossing = Tlp()
     crossing.fmt_type = TlpType.MEM_WRITE
     crossing.set_addr_be_data(0xFFC, bytes.fromhex("0001020304050607"))
-    crossing.requester_id = 1
+    crossing.requester_id = PcieId.from_int(1)
     await send_axis(
         tb.phy_source,
         add_sequence_and_lcrc(0, bytes(crossing.pack())),
@@ -615,7 +618,7 @@ async def bar_boundary_memory_disable_and_config_routing(dut):
     disabled = Tlp()
     disabled.fmt_type = TlpType.MEM_READ
     disabled.set_addr_be(0x100, 4)
-    disabled.requester_id = 2
+    disabled.requester_id = PcieId.from_int(2)
     disabled.tag = 7
     await send_axis(
         tb.phy_source,
@@ -633,9 +636,9 @@ async def bar_boundary_memory_disable_and_config_routing(dut):
     config = Tlp()
     config.fmt_type = TlpType.CFG_READ_0
     config.set_addr_be(0x40, 4)
-    config.requester_id = 3
+    config.requester_id = PcieId.from_int(3)
     config.tag = 9
-    config.completer_id = (
+    config.completer_id = PcieId.from_int(
         (int(dut.cfg_bus_number_o.value) << 8)
         | (int(dut.cfg_device_number_o.value) << 3)
         | int(dut.cfg_function_number_o.value)
@@ -653,11 +656,23 @@ async def bar_boundary_memory_disable_and_config_routing(dut):
     dut.target_request_ready_i.value = 1
     await RisingEdge(dut.clk_i)
     dut.target_request_ready_i.value = 0
+    config_read_link = await receive_link_tlp(tb.phy_sink)
+    config_read_sequence = int.from_bytes(config_read_link[:2], "big") & 0xFFF
+    config_read_completion = Tlp.unpack(config_read_link[2:-4])
+    assert config_read_completion.fmt_type == TlpType.CPL_DATA
+    assert config_read_completion.status == CplStatus.SC
+    assert int(config_read_completion.requester_id) == int(config.requester_id)
+    assert config_read_completion.tag == config.tag
+    await send_axis(
+        tb.phy_source,
+        build_ack_nak(DllpType.ACK, config_read_sequence),
+        PHY_USER_IS_DLLP,
+    )
 
     config_write = Tlp()
     config_write.fmt_type = TlpType.CFG_WRITE_0
     config_write.set_addr_be_data(0x44, bytes.fromhex("78563412"))
-    config_write.requester_id = 3
+    config_write.requester_id = PcieId.from_int(3)
     config_write.tag = 10
     config_write.completer_id = config.completer_id
     await send_axis(
@@ -670,6 +685,20 @@ async def bar_boundary_memory_disable_and_config_routing(dut):
     assert int(dut.target_config_hit_o.value)
     assert int(dut.target_config_offset_o.value) == 0x44
     assert int(dut.target_write_o.value)
+    dut.target_request_ready_i.value = 1
+    await RisingEdge(dut.clk_i)
+    config_write_link = await receive_link_tlp(tb.phy_sink)
+    config_write_sequence = int.from_bytes(config_write_link[:2], "big") & 0xFFF
+    config_write_completion = Tlp.unpack(config_write_link[2:-4])
+    assert config_write_completion.fmt_type == TlpType.CPL
+    assert config_write_completion.status == CplStatus.SC
+    assert int(config_write_completion.requester_id) == int(config_write.requester_id)
+    assert config_write_completion.tag == config_write.tag
+    await send_axis(
+        tb.phy_source,
+        build_ack_nak(DllpType.ACK, config_write_sequence),
+        PHY_USER_IS_DLLP,
+    )
 
 
 @cocotb.test()
@@ -682,7 +711,7 @@ async def completion_generation_and_multiple_outstanding_requests(dut):
     request = Tlp()
     request.fmt_type = TlpType.MEM_READ
     request.set_addr_be(0x100, 4)
-    request.requester_id = 0x1234
+    request.requester_id = PcieId.from_int(0x1234)
     request.tag = 0x44
     dut.target_request_ready_i.value = 0
     await send_axis(
@@ -770,7 +799,7 @@ async def corrupted_link_input_is_rejected_with_nak(dut):
     packet = Tlp()
     packet.fmt_type = TlpType.MEM_WRITE
     packet.set_addr_be_data(0x20, bytes.fromhex("a5a5a5a5"))
-    packet.requester_id = 1
+    packet.requester_id = PcieId.from_int(1)
     packet.tag = 3
     corrupt = bytearray(add_sequence_and_lcrc(0, bytes(packet.pack())))
     corrupt[-1] ^= 1
