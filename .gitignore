@@ -1,2 +1,9 @@
 build/*
 *.conf
+*.fst
+*.vcd
+*.fsdb
+*.ghw
+__pycache__/
+*.pyc
+*.key
