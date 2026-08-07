@@ -90,6 +90,9 @@ filesets:
   cocotb_vc_buffer:
     files:
       - test_tlp_vc_buffer.py : {file_type : user, copyto : .}
+  cocotb_vc_buffer_wrap:
+    files:
+      - test_tlp_vc_buffer_wrap.py : {file_type : user, copyto : .}
 
   # Flow-control gating driven at the tlp_layer level: proves the credit
   # accounting fix where it throttles real traffic (vc_packet_ready,
@@ -568,7 +571,43 @@ targets:
     filesets : [rtl, bench_vc_buffer, cocotb_vc_buffer]
     toplevel : [tb_tlp_vc_buffer]
 
+  # ---- The same buffer at a NON-power-of-two geometry -----------------------
+  # PACKET_DEPTH=3, MAX_PACKET_WORDS=5.  The slot pointers are $clog2(DEPTH) bits
+  # wide (tlp_vc_buffer.sv:46), so at DEPTH 2 or 4 they wrap on their own width
+  # and the explicit `== PACKET_DEPTH-1` wrap (:96, :110) is unobservable -- an
+  # off-by-one there is invisible at every power-of-two depth.  At DEPTH=3 the
+  # pointer is two bits but must wrap at 2, so the ternary is load-bearing.  A
+  # non-power-of-two word bound likewise makes `wr_word_r < MAX_PACKET_WORDS` a
+  # real comparison, which is the case the shipped instance is in: tlp_layer.sv
+  # :455 overrides PACKET_DEPTH only and leaves MAX_PACKET_WORDS at 1030.
+  verilate_tlp_vc_buffer_wrap:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_vc_buffer_wrap
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_vc_buffer, cocotb_vc_buffer_wrap]
+    parameters : [PACKET_DEPTH=3, MAX_PACKET_WORDS=5]
+    toplevel : [tb_tlp_vc_buffer]
+
 parameters:
+  PACKET_DEPTH:
+    datatype: int
+    default: 2
+    description: >
+      Whole TLPs the tlp_vc_buffer bench instance can hold.  Only the
+      non-power-of-two target overrides it; see verilate_tlp_vc_buffer_wrap.
+    paramtype: vlogparam
+  MAX_PACKET_WORDS:
+    datatype: int
+    default: 16
+    description: >
+      Longest packet in words the tlp_vc_buffer bench instance accepts before it
+      backpressures and raises overflow_o.
+    paramtype: vlogparam
   CPL_TIMEOUT_CYCLES:
     datatype: int
     default: 4096
