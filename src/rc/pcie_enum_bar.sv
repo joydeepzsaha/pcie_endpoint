@@ -2,6 +2,17 @@
 // pcie_enum_bar -- the BAR sizing, assignment and enable phase of Root Complex
 // enumeration. Commit 2b-3.
 //
+// SPEC ANCHORS
+//   [PCI3] SS6.2.5.1 p.225-226 ... BAR bit layout and the write-all-ones sizing
+//                                  algorithm; the I/O bit, the unimplemented
+//                                  encoding, and the reserved [2:1] faults.
+//   [PCI3] Table 6-4 p.226 ....... memory BAR type field encodings.
+//   [PCI3] SS6.2.2 Table 6-1 p.218 reset state of the Command register bits.
+//   [BASE] Figure 7-5 p.491 ...... Type 0 header: which registers are BARs
+//                                  (4..9) and which are not -- register 11 is
+//                                  the Expansion ROM pointer, not a BAR.
+//   Tag conventions are defined in pcie_enum_pkg.sv:29.
+//
 //   bar_start_i -> [for each candidate register 4..9]
 //                     all-ones write -> readback -> decode
 //                        unimplemented -> skip,          N += 1

@@ -2,6 +2,19 @@
 // pcie_enum_scan -- the presence phase of Root Complex enumeration.
 // Commit 2b-2.
 //
+// SPEC ANCHORS
+//   [BASE] SS7.3.1 p.479 ......... Downstream Ports associate with Device 0
+//                                  only -- the reason this module probes ONE
+//                                  device and not a 0..31 sweep.
+//   [BASE] SS7.3.3 p.480 ......... the general Endpoint rule for an
+//                                  unimplemented Function.
+//   [BASE] SS2.3.2 p.122 ......... Implementation Note: a Root Complex
+//                                  synthesises all-ones for a failed probe,
+//                                  which is what "absent" decodes from.
+//   [BASE] Figure 7-5 p.491 ...... Type 0 header layout (Vendor/Device ID,
+//                                  Header Type).
+//   Tag conventions are defined in pcie_enum_pkg.sv:29.
+//
 //   scan_start_i -> Vendor/Device ID probe -> [absent? done]
 //                -> Header Type read       -> [Type 1? unsupported]
 //                -> scan_done_o
@@ -70,7 +83,7 @@
 //      and sees UR for 1-31 -- but that UR is synthesised by the Root Port's own
 //      downstream-port logic and the request never reaches the wire. THIS DESIGN
 //      HAS NO SUCH LOGIC: the completer surface is tied off
-//      (pcie_rq_rc_top.sv:83-99) and pcie_rq_rc_top originates Type 0 straight
+//      (pcie_rq_rc_top.sv:96-99) and pcie_rq_rc_top originates Type 0 straight
 //      onto the link. A request naming device 5 would actually be transmitted.
 //
 //   2. "Non-ARI Devices must respond to all Type 0 Configuration Read Requests,

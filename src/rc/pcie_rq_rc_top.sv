@@ -13,6 +13,18 @@
 // of the two wrappers, and a reader chasing one should go there, not here. If
 // this file ever grows an always_ff, something has been put in the wrong place.
 //
+// SPEC ANCHORS
+//   PG213 v1.3 ......... the s_axis_rq_* / m_axis_rc_* user interface shape.
+//                        The descriptor rules themselves live in pcie_rq_if
+//                        (Table 60/61) and pcie_rc_if (Table 65); nothing here
+//                        decodes a descriptor field.
+//   PCIe Base 2.1 SS2.6  flow control. Not implemented here either -- this
+//                        module only EXPOSES link_up_i / transmit_enable_i /
+//                        fc_initialized_i / fc_update_valid_i, because
+//                        tlp_layer is silent without all four. See the block
+//                        immediately below, which is the whole reason those
+//                        four ports are on this boundary at all.
+//
 // ===========================================================================
 // !! FLOW CONTROL AND LINK STATE -- READ THIS BEFORE DEBUGGING SILENCE
 // ===========================================================================
@@ -25,7 +37,7 @@
 //     fc_initialized_i  == 1
 //     at least one fc_update_valid_i pulse has loaded NON-ZERO credits
 //
-// (tlp_layer.sv:249, tlp_credit_manager.sv:53-54, 66-83.)
+// (tlp_layer.sv:280 and :475-479, tlp_credit_manager.sv:53-54, 66-83.)
 //
 // The failure mode is SILENT. With any of them missing the RQ interface still
 // accepts descriptors and still asserts s_axis_rq_tready, the command still
@@ -41,9 +53,10 @@
 //
 // Tag allocation sits UPSTREAM of the credit gate. tlp_requester enters REQ_TAG
 // as soon as the command is accepted and raises tag_request_valid_o there
-// (tlp_requester.sv:138, 211), referencing neither fc_initialized_i nor any
-// credit signal. The gate is further down, at the VC-buffer-to-transmit
-// boundary: vc_packet_ready = credit_request_ready && transmit_enable_i &&
+// (tlp_requester.sv:176 raises it, :247 enters the state), referencing neither
+// fc_initialized_i nor any credit signal. The gate is further down, at the
+// VC-buffer-to-transmit boundary:
+// vc_packet_ready = credit_request_ready && transmit_enable_i &&
 // link_up_i (tlp_layer.sv:280). So the tag is handed out, the TLP is assembled,
 // and only then does it park in the VC buffer with nothing to spend.
 //
@@ -98,7 +111,7 @@
 //
 // The tag is NOT available at the moment the command is accepted -- the
 // requester leaves REQ_IDLE and allocates in REQ_TAG a cycle or more later
-// (tlp_requester.sv:211, 215-218) -- which is why it comes with its own valid
+// (tlp_requester.sv:247, 251-252) -- which is why it comes with its own valid
 // strobe rather than qualified by s_axis_rq_tready. Strobes arrive in issue
 // order, one per emitted non-posted TLP.
 //
@@ -112,7 +125,7 @@
 // {mem_read_r, addr_r[11:0]} -- 13 of the 16 bits -- and pcie_rc_if reads it
 // back to reconstruct the RC descriptor's Lower Address field, which is not
 // otherwise derivable because the CPL header carries only the low 7 bits
-// (pcie_rc_if.sv:240, 252). It is not exposed on this module's ports and must
+// (pcie_rc_if.sv:251, 252). It is not exposed on this module's ports and must
 // not be treated as a spare correlation channel.
 //
 // Bits [15:13] of the context word are unused and would be free if a future
@@ -170,7 +183,7 @@
 //    through to the integrator. Nothing here reads a config register to
 //    populate them.
 //
-// From 2a-ii (pcie_rc_if.sv:117-154):
+// From 2a-ii (pcie_rc_if.sv:128-154):
 //
 //  * RC descriptor Error Code 0011 (RC_DESC_ERR_BAD_LENGTH) is UNREACHABLE by
 //    construction. The tracker suppresses the result for a completion with no

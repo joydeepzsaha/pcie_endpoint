@@ -27,11 +27,23 @@
 // SPEC_PREDICTIONS_ENUM.md SS0.2:
 //
 //   [BASE]      PCI Express Base Specification Rev 2.1, section + page. Golden.
-//   [PCI3-REF]  the normative source is the PCI Local Bus Specification 3.0,
-//               which Base 2.1 incorporates by reference (definitions p.30-31)
-//               but which is NOT on this project's spec shelf. Citation pending.
+//   [PCI3]      PCI Local Bus Specification 3.0, section + page + line. Golden
+//               since Commit 2b-3 put it on the shelf at
+//               /home/kourosh/openPCIE/0.doc/pci-local-bus-3.0.txt. This is the
+//               DISCHARGED form of the tag below; see :197 for the discharge
+//               note and the page-numbering correction it required.
+//   [PCI3-REF]  the historical form: the normative source is PCI 3.0, which
+//               Base 2.1 incorporates by reference (definitions p.30-31) but
+//               which was NOT on the shelf when a constant was first needed, so
+//               the constant was withheld rather than cited loosely.
 //
-// !! NOTHING TAGGED [PCI3-REF] IS IN THIS FILE, DELIBERATELY.
+// !! HISTORICAL -- THIS RESTRICTION WAS LIFTED IN COMMIT 2b-3.
+//
+// What follows is why the [PCI3-REF] constants were withheld when this package
+// was written. They are no longer withheld: PCI 3.0 reached the shelf in
+// Commit 2b-3, the debt was discharged (:197), and the constants below now
+// carry full [PCI3] anchors. The paragraph is kept because it records WHY the
+// package was shaped this way, which is not recoverable from the code.
 //
 // The Command register's Memory Space Enable (bit 1) and I/O Space Enable
 // (bit 0) are [PCI3-REF]: Base 2.1's Table 7-3 (SS7.5.1.1 p.485-487) maps only
@@ -40,10 +52,10 @@
 // write-all-ones sizing algorithm are [PCI3-REF] for the same reason -- Base
 // 2.1 SS7.5.2.1 p.491-492 gives only usage policy and the 128-byte minimum.
 //
-// Those constants are deliberately NOT added ahead of the acquisition decision
-// recorded in SPEC_PREDICTIONS_ENUM.md SS9. They arrive with Commit 2b-3, by
-// which time PCI 3.0 is required to be on the shelf. Adding them now would put
-// uncited numbers in the tree for an increment that does not use them.
+// Those constants were deliberately NOT added ahead of the acquisition decision
+// recorded in SPEC_PREDICTIONS_ENUM.md SS9. They arrived with Commit 2b-3, by
+// which time PCI 3.0 was on the shelf. Adding them earlier would have put
+// uncited numbers in the tree for an increment that did not use them.
 //
 // The REGISTER NUMBERS below are a different matter: they are read straight off
 // Base 2.1 Figure 7-5 p.491, the Type 0 Configuration Space Header, and are
@@ -159,7 +171,7 @@ package pcie_enum_pkg;
   // the Root Port with an Unsupported Request Completion Status" -- in a
   // conventional Root Complex that UR is synthesised by the Downstream Port and
   // the request never reaches the wire, but THIS DESIGN HAS NO SUCH LOGIC (CQ/CC
-  // is tied off, pcie_rq_rc_top.sv:83-99), so such a request would actually be
+  // is tied off, pcie_rq_rc_top.sv:96-99), so such a request would actually be
   // transmitted, which the rule forbids. And (2) "Non-ARI Devices must respond
   // to all Type 0 Configuration Read Requests, REGARDLESS of the Device Number
   // specified in the Request" -- so if one were transmitted, the attached device

@@ -3,6 +3,17 @@
 //
 // Wiring only. No policy, no mechanism, no state of its own.
 //
+// SPEC ANCHORS: none of its own, by construction. Every spec rule this assembly
+// obeys is enforced in a module it instantiates -- presence in pcie_enum_scan,
+// BAR layout in pcie_enum_bar, bus numbering in pcie_enum_bus, transaction
+// mechanics in pcie_cfg_txn. Two constraints do surface here because they are
+// properties of the ASSEMBLY rather than of any one stage:
+//   PCIe Base 2.1 Table 2-37 ..... only ONE pcie_cfg_txn exists, so
+//                                  single-outstanding is a property of the
+//                                  netlist and not of an FSM behaving well.
+//   [BASE] Figure 7-5 p.491 ...... the Command register's write-1-to-clear
+//                                  bits, which a whole-Dword write destroys.
+//
 //   pcie_enum_top
 //   |- pcie_cfg_txn    (ONE instance -- the only tag holder)
 //   |- pcie_enum_scan  (presence policy, level 1)
@@ -78,7 +89,7 @@
 // the one the bench must assert on:
 //
 //   cmd_valid   scan drives 0 in every terminal state          -> merge is a no-op
-//   cmd_write   scan drives a hard 0 (pcie_enum_scan.sv:269)   -> merge is a no-op
+//   cmd_write   scan drives a hard 0 (pcie_enum_scan.sv:282)   -> merge is a no-op
 //   cmd_wdata   scan drives a hard 0 (:272)                    -> merge is a no-op
 //   cmd_reg_num scan drives 0 in every terminal state          -> merge is a no-op
 //   cmd_ext_reg both stages drive the same constant            -> merge is a no-op

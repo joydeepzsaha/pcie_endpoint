@@ -2,6 +2,17 @@
 // pcie_cfg_txn -- ONE Configuration transaction, issue to outcome.
 // Commit 2b-1; Stage D added the per-transaction Type 0/1 select (cmd_type1_i).
 //
+// SPEC ANCHORS
+//   PCIe Base 2.1 SS2.3.2 p.122 .. Implementation Note naming the
+//                                  device-existence semantics this module
+//                                  classifies outcomes against, including CRS.
+//   PCIe Base 2.1 Table 2-37 p.137 the MINIMUM initial Non-Posted Header credit
+//                                  advertisement -- the reason a single
+//                                  outstanding transaction is always issuable.
+//   PG213 v1.3 Table 61 .......... the Configuration RQ descriptor this module
+//                                  builds. Field placement is owned by
+//                                  pcie_rq_rc_pkg; nothing is duplicated here.
+//
 //   cmd_* -> RQ descriptor -> pcie_rq_rc_top socket -> ... -> completion
 //         -> classify -> rsp_*
 //
@@ -60,9 +71,9 @@
 //
 // pcie_rq_tag_o is NOT valid when the descriptor is accepted. The Transaction
 // Layer's requester leaves REQ_IDLE and only allocates in REQ_TAG a cycle or
-// more later (tlp_requester.sv:211, 215-218), which is why the socket pairs the
+// more later (tlp_requester.sv:247, 251-252), which is why the socket pairs the
 // tag with its own one-cycle valid strobe instead of qualifying it with
-// s_axis_rq_tready (pcie_rq_rc_top.sv:51-60).
+// s_axis_rq_tready (pcie_rq_rc_top.sv:64-73).
 //
 // awaiting_tag_r is armed when the DESCRIPTOR beat is accepted -- that is when
 // the command reaches the TL -- and the capture is written outside the state
@@ -96,7 +107,7 @@
 //
 //  * NO late_cpl / orphan-data PORTS. A drained late completion raises
 //    late_cpl_valid_o upstream and, once per drained Dword, rc_protocol_error_o
-//    with RC_ERR_ORPHAN_DATA (pcie_rc_if.sv:403-405). Neither is a fault and
+//    with RC_ERR_ORPHAN_DATA (pcie_rc_if.sv:414-416). Neither is a fault and
 //    neither reaches this module: the tracker drains the completion, so no RC
 //    packet is produced. The requirement here is TRANSPARENCY -- an idle or
 //    in-flight transaction must be unperturbed -- and transparency is proved by
@@ -145,7 +156,7 @@ module pcie_cfg_txn
     // the retry must not decay to Type 0).
     input  logic                        cmd_type1_i,
     // The target BDF. This becomes the descriptor's Completer ID, which is what
-    // forms the routing Dword -- NOT the address (pcie_rq_if.sv:249-262,
+    // forms the routing Dword -- NOT the address (pcie_rq_if.sv:261-262,
     // tlp_generator.sv:81-82, PG213 Table 61 :3740).
     input  logic [15:0]                 cmd_bdf_i,
     input  logic [5:0]                  cmd_reg_num_i,
@@ -290,7 +301,7 @@ module pcie_cfg_txn
   assign s_axis_rq_tkeep_o  = driving_data ? AXIS_KEEP_WIDTH'(1) : '1;
   assign s_axis_rq_tvalid_o = driving_desc || driving_data;
   // A read is a single-beat packet; a write ends on its payload beat. Both
-  // shapes are enforced upstream (pcie_rq_if.sv:295-297), so getting this wrong
+  // shapes are enforced upstream (pcie_rq_if.sv:307-309), so getting this wrong
   // is a rejection, not a silent malformation.
   assign s_axis_rq_tlast_o  = (driving_desc && !write_r) || driving_data;
   assign s_axis_rq_tuser_o  = {{(AXIS_USER_WIDTH-8){1'b0}}, CFG_LAST_BE, first_be_r};
@@ -302,7 +313,7 @@ module pcie_cfg_txn
   // on the RC stream; back-pressuring it would stall the receive path for
   // completions this module is not even waiting for -- including the drained
   // remains of a late completion. The same reasoning ties CQ's ready high in
-  // pcie_rq_rc_top.sv:87-92: discarding is survivable, wedging is not.
+  // pcie_rq_rc_top.sv:100-105: discarding is survivable, wedging is not.
   //
   // Beat 0 carries the 3-Dword RC descriptor in Dwords 0..2 with the first
   // payload Dword in Dword 3 (pcie_rq_rc_pkg.sv:109-115). A configuration

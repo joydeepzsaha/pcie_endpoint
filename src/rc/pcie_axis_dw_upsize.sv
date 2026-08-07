@@ -1,6 +1,11 @@
 // ---------------------------------------------------------------------------
 // pcie_axis_dw_upsize -- AXI-Stream width converter, 32 -> 128 (4:1).
 //
+// SPEC ANCHORS: none directly. Like its downsize twin this module implements no
+// PCIe or PG213 rule; it is a plain AXI-Stream width converter. The 3-Dword RC
+// descriptor's placement is the caller's arithmetic (pcie_rc_if), not a layout
+// rule encoded here -- see the DESCRIPTOR-BLIND note below.
+//
 // Up to four narrow Dword beats are packed into one wide beat, LSB group first.
 // On tlast the partial wide beat is emitted IMMEDIATELY with the tkeep actually
 // accumulated -- the module never stalls waiting for a fourth beat that is not

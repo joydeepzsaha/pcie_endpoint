@@ -1,6 +1,17 @@
 // ---------------------------------------------------------------------------
 // pcie_enum_bus -- the bridge bus-number assignment phase.  Stage D.
 //
+// SPEC ANCHORS
+//   [BASE] SS7.3.3 p.481 ..... the three Configuration Request routing arms;
+//                              why a bridge answers UR until the 18h write
+//                              lands, and why bus-number policy is left to the
+//                              enumerator rather than mandated.
+//   [BASE] SS7.3.1 p.479 ..... Device 0 association on a point-to-point link.
+//   [PCI3] SS3.2.2.3.x p.49 .. Type 1 is compelled only for a target on ANOTHER
+//                              bus -- which is why cmd_type1_o is a hard 0
+//                              here. See the note below.
+//   Tag conventions are defined in pcie_enum_pkg.sv:29.
+//
 //   bus_start_i + the scan's Type 1 verdict
 //       -> ONE CfgWr0 to the bridge's register 6 (offset 18h)
 //       -> sec_bus_o / bus_type1_o asserted, handoff to the second scan
@@ -18,7 +29,7 @@
 //
 // The name "bridge sequencer" invites "the bridge phase uses Type 1".  It
 // does not: the bus-number write targets the BRIDGE ITSELF, which sits on
-// the bus directly behind the port, and [PCI30] SS3.2.2.3.x p.49 compels
+// the bus directly behind the port, and [PCI3] SS3.2.2.3.x p.49 compels
 // Type 1 only for a target on ANOTHER bus.  So cmd_type1_o is a hard 0 here
 // (Trap C, SPEC_PREDICTIONS_STAGE_D.md SS8.3).  Everything from the first
 // secondary-bus probe onward is Type 1 -- and that traffic is the second
@@ -82,7 +93,7 @@
 //                        annotation and never control flow
 //
 // Terminal states self-loop until reset, same invariant and same rationale
-// as the scan (pcie_enum_scan.sv:400-403): enumeration is single-shot after
+// as the scan (pcie_enum_scan.sv:413-416): enumeration is single-shot after
 // link-up, and a status surface that could be re-entered would let a
 // consumer sample it mid-rescan.  bus_start_i is sampled in S_IDLE only.
 //

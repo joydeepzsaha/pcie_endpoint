@@ -2,6 +2,18 @@
 // pcie_rq_if -- PG213 Requester Request (RQ) AXI4-Stream slave -> TL command
 // port. Commit 2a-i.
 //
+// SPEC ANCHORS
+//   PG213 v1.3 Table 60/61 ....... the 16-byte RQ descriptor on beat 0
+//                                  (Memory/IO and Configuration respectively).
+//   PG213 v1.3 Table 57 .......... req_type encodings, mapped to tlp_cmd_e.
+//   PCIe Base 2.1 SS2.2.4.1 ...... the legality rules this module is the last
+//                                  line of defence for -- there is NO validator
+//                                  anywhere on the transmit path.
+//   PCIe Base 2.1 SS2.2.7 ........ byte-enable rules; transfer size comes from
+//                                  the Length field, not the byte enables.
+//   PCIe Base 2.1 SS7.3.1 p.479 .. Downstream Ports associate with Device 0 --
+//                                  the basis of the Type 0 tripwire below.
+//
 // Beat 0 of every packet is a 16-byte RQ descriptor (PG213 v1.3 Table 60/61);
 // beats 1..n are payload. The descriptor is decoded into the Transaction
 // Layer's existing command_* port and the payload is narrowed 128 -> 32 by
@@ -26,7 +38,7 @@
 //
 //    It is applied on the NARROW side, after the gearbox, not before it. The
 //    gearbox rejects tkeep that is not contiguous from bit 0 (keep_illegal(),
-//    pcie_axis_dw_downsize.sv:104-106) -- correctly, since that is illegal
+//    pcie_axis_dw_downsize.sv:109-111) -- correctly, since that is illegal
 //    AXI-Stream -- and a byte-granular mask like first_be=0010 is exactly that
 //    shape. Feeding whole-Dword keeps into the gearbox and masking its 4-bit
 //    output with first_be/last_be gives an identical result without ever
@@ -168,13 +180,13 @@ module pcie_rq_if
     //
     // Timing: the tag is NOT available when the command is accepted. The
     // requester leaves REQ_IDLE and only allocates in REQ_TAG a cycle or more
-    // later (tlp_requester.sv:211, 215-218), which is why PG213 pairs the tag
+    // later (tlp_requester.sv:247, 251-252), which is why PG213 pairs the tag
     // with a valid strobe instead of qualifying it with the command handshake.
     // The wrapper forwards the strobe rather than re-timing it, so a host that
     // pipelines requests still sees one tag per emitted TLP in issue order.
     //
     // Posted writes are absent from this stream by construction: MEM_WRITE
-    // never enters REQ_TAG (tlp_requester.sv:211, 253), so nothing is
+    // never enters REQ_TAG (tlp_requester.sv:247), so nothing is
     // allocated and the strobe cannot fire. A segmented non-posted request
     // strobes once per segment, each with that segment's own tag.
     //
@@ -184,9 +196,9 @@ module pcie_rq_if
     // CONSUMED by the 2a-ii wrapper pair: this module loads it with
     // {mem_read_r, addr_r[11:0]} (:345 below) and pcie_rc_if reads it back to
     // reconstruct the RC descriptor's Lower Address, which the CPL header does
-    // not otherwise carry (pcie_rc_if.sv:240, 252). It is not raised to a port
+    // not otherwise carry (pcie_rc_if.sv:251, 252). It is not raised to a port
     // on pcie_rq_rc_top and must not be treated as client-visible -- see that
-    // module's header, pcie_rq_rc_top.sv:65-77, which is authoritative.
+    // module's header, pcie_rq_rc_top.sv:78-90, which is authoritative.
     // Correlate completions BY TAG, via pcie_rq_tag_o / pcie_rq_tag_vld_o.
     input  logic [7:0]                  allocated_tag_i,
     input  logic                        allocated_tag_valid_i,
@@ -529,7 +541,7 @@ module pcie_rq_if
 
       // Core-managed tag. Forwarded from the tracker's allocation strobe, not
       // from the descriptor accept: the tag does not exist yet at accept time
-      // (tlp_requester.sv:211, 215-218). Registered rather than combinational,
+      // (tlp_requester.sv:247, 251-252). Registered rather than combinational,
       // like every other output here, so nothing drives a path from inside the
       // TL straight out to the host. One presented tag per emitted TLP, in
       // issue order; posted writes allocate nothing and so never appear.

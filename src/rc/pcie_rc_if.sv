@@ -1,6 +1,17 @@
 // ---------------------------------------------------------------------------
 // pcie_rc_if -- PG213 Requester Completion (RC) AXI4-Stream master. Commit 2a-ii.
 //
+// SPEC ANCHORS
+//   PG213 v1.3 Fig 56 / Table 65 . the 96-bit / 3-Dword RC descriptor this
+//                                  module builds. Cited via the addendum, not
+//                                  read from the PDF -- see the note below.
+//   PCIe Base 2.1 completion
+//   header fields ................ lower_address, byte_count_modified and the
+//                                  completion status, all taken from the TL's
+//                                  parsed header rather than re-decoded here
+//                                  (tlp_parser.sv:167, :188).
+//   Field placement is owned by pcie_rq_rc_pkg; nothing is duplicated here.
+//
 // The mirror of pcie_rq_if. It takes the completions the Transaction Layer has
 // received and parsed, builds the 96-bit / 3-Dword RC descriptor (PG213 v1.3
 // Fig 56 / Table 65, via the addendum -- cited as such, the PDF is still
@@ -76,7 +87,7 @@
 // {payload DW0, desc DW2, desc DW1, desc DW0} and every later beat is offset by
 // one Dword -- which IS the PG213 Dword-aligned RC layout. There is no rotation
 // logic here and no DESC_DW parameter in the gearbox; it stays descriptor-blind
-// exactly as ccb2a52 intended (pcie_axis_dw_upsize.sv:22-25).
+// exactly as ccb2a52 intended (pcie_axis_dw_upsize.sv:27-30).
 //
 // ---------------------------------------------------------------------------
 // SS LOWER ADDRESS [11:7]
