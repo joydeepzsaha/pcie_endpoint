@@ -48,6 +48,10 @@ filesets:
     files:
       - tb_tlp_credit_manager.sv
     file_type: systemVerilogSource
+  bench_vc_buffer:
+    files:
+      - tb_tlp_vc_buffer.sv
+    file_type: systemVerilogSource
 
   # TL conformance sweep: parser wrapper exposing poisoned/attributes/BE.
   bench_conf_parser:
@@ -83,6 +87,9 @@ filesets:
   cocotb_credit_manager:
     files:
       - test_tlp_credit_manager.py : {file_type : user, copyto : .}
+  cocotb_vc_buffer:
+    files:
+      - test_tlp_vc_buffer.py : {file_type : user, copyto : .}
 
   # Flow-control gating driven at the tlp_layer level: proves the credit
   # accounting fix where it throttles real traffic (vc_packet_ready,
@@ -536,6 +543,30 @@ targets:
         - waiver.vlt
     filesets : [rtl, cocotb_credit_integration]
     toplevel : [tlp_layer]
+
+  # ---- VC0 store-and-forward packet buffer ---------------------------------
+  # tlp_vc_buffer (instantiated once at tlp_layer.sv:455 as vc_buffer_inst) is
+  # the last TL module whose bundled bench had never been run: tb_tlp_vc_buffer.sv
+  # and test_tlp_vc_buffer.py shipped with the inherited RTL but were wired into
+  # no target, so nothing under src/tlp/tlp_vc_buffer.sv had ever executed
+  # standalone.  It is a packet-granular FIFO -- PACKET_DEPTH whole TLPs, each up
+  # to MAX_PACKET_WORDS words -- so its contract is packet atomicity (a TLP is
+  # visible downstream only after its last beat lands), credit metadata latched
+  # at the first beat, and ordinary AXIS backpressure rather than overflow when
+  # the packet FIFO is full.  The wrapper narrows PACKET_DEPTH to 2 and
+  # MAX_PACKET_WORDS to 16 so a full-buffer and a maximum-length packet are both
+  # reachable in a short sim.  Wiring only -- the RTL is untouched by this target.
+  verilate_tlp_vc_buffer:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_vc_buffer
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_vc_buffer, cocotb_vc_buffer]
+    toplevel : [tb_tlp_vc_buffer]
 
 parameters:
   CPL_TIMEOUT_CYCLES:
