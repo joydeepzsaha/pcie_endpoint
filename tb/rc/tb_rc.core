@@ -1,0 +1,439 @@
+CAPI=2:
+name: fusesoc:pcie:tb_rc:1.0.0
+description: >
+  Verilator+cocotb benches for the RC-owned RTL (Commit 2a). 2a-0 covers the
+  descriptor-agnostic AXI-Stream width gearboxes standalone. 2a-i covers
+  pcie_rq_if twice: verilate_rq_if drives its command port from the bench, and
+  verilate_rq_if_tlp puts a real tlp_layer behind it to check the on-wire TLPs.
+  Only the latter needs FC-credit initialisation -- tlp_layer emits zero packets
+  and no error until link_up_i, transmit_enable_i, fc_initialized_i and one
+  fc_update_valid_i pulse with non-zero credits are all present
+  (tlp_layer.sv:249, tlp_credit_manager.sv:53-54).
+
+filesets:
+  rtl:
+    depend:
+      - ::rc_core:1.0.0
+      - fusesoc:pcie:lint
+
+  # Flattened shim: standalone downsize + standalone upsize + round-trip pair.
+  bench_axis_gearbox:
+    files:
+      - tb_pcie_axis_gearbox.sv
+    file_type: systemVerilogSource
+
+  cocotb_axis_gearbox:
+    files:
+      - test_axis_dw_gearbox.py : {file_type : user, copyto : .}
+
+  # 2a-i: pcie_rq_if standalone -- the bench plays tlp_requester's command port.
+  bench_rq_if:
+    files:
+      - tb_pcie_rq_if.sv
+    file_type: systemVerilogSource
+
+  cocotb_rq_if:
+    files:
+      - test_pcie_rq_if.py : {file_type : user, copyto : .}
+
+  # 2a-i integration: pcie_rq_if in front of a real tlp_layer.
+  bench_rq_if_tlp:
+    files:
+      - tb_pcie_rq_if_tlp.sv
+    file_type: systemVerilogSource
+
+  cocotb_rq_if_tlp:
+    files:
+      - test_pcie_rq_if_tlp.py : {file_type : user, copyto : .}
+
+  # 2a-ii: pcie_rc_if standalone -- the bench plays tlp_layer's received-
+  # completion surface, including the one-cycle offset between the
+  # combinational header and the registered tracker result. That offset is the
+  # whole subject of U10 and cannot be reproduced with the TL in the loop.
+  bench_rc_if:
+    files:
+      - tb_pcie_rc_if.sv
+    file_type: systemVerilogSource
+
+  cocotb_rc_if:
+    files:
+      - test_pcie_rc_if.py : {file_type : user, copyto : .}
+
+  # 2a-ii integration: the whole loop -- pcie_rq_if -> tlp_layer -> pcie_rc_if.
+  # MUST initialise FC credits: this bench has to originate a request and get a
+  # tag allocated before a completion for it means anything.
+  bench_rc_if_tlp:
+    files:
+      - tb_pcie_rc_if_tlp.sv
+    file_type: systemVerilogSource
+
+  cocotb_rc_if_tlp:
+    files:
+      - test_pcie_rc_if_tlp.py : {file_type : user, copyto : .}
+
+  # 2b-1: pcie_cfg_txn standalone -- the DUT is the transaction primitive alone
+  # and the Python bench PLAYS the pcie_rq_rc_top socket (tag strobe timing,
+  # tready stalls, RC descriptors, the completion-timeout sideband). See
+  # test_pcie_enum_txn.py, SS THE SOCKET MODEL, for why that model is itself
+  # mutation-tested.
+  bench_enum_txn:
+    files:
+      - tb_pcie_enum_txn.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_txn:
+    files:
+      - enum_tb_common.py    : {file_type : user, copyto : .}
+      - test_pcie_enum_txn.py : {file_type : user, copyto : .}
+
+  # 2b-2: the presence scan standalone. DUT is pcie_enum_top since 2b-3 -- the
+  # sequencer plus the one pcie_cfg_txn, which the TOP now instantiates rather
+  # than pcie_enum_scan. Behaviour-neutral: the shim's port list and every
+  # assertion in test_pcie_enum_scan.py are unchanged across the hoist, and the
+  # 16 tests hold their sim end time to the cycle. The bench plays the shared
+  # socket via enum_tb_common.Socket, which asserts its own ordering invariants.
+  bench_enum_scan:
+    files:
+      - tb_pcie_enum_scan.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_scan:
+    files:
+      - enum_tb_common.py      : {file_type : user, copyto : .}
+      - test_pcie_enum_scan.py : {file_type : user, copyto : .}
+
+  # 2b-1 integration: pcie_cfg_txn in front of a REAL pcie_rq_rc_top. The bench
+  # plays the Data Link Layer and answers config requests with the swappable
+  # completer (four-name interface preserved from test_pcie_rq_rc_top.py). MUST
+  # initialise FC credits -- and I8 deliberately does not, once, to pin the RC1
+  # signature.
+  bench_enum_txn_tlp:
+    files:
+      - tb_pcie_enum_txn_tlp.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_txn_tlp:
+    files:
+      - enum_tb_common.py        : {file_type : user, copyto : .}
+      - test_pcie_enum_txn_tlp.py : {file_type : user, copyto : .}
+
+  # 2b-2 integration: the presence scan in front of a REAL pcie_rq_rc_top. DUT
+  # is pcie_enum_top since 2b-3, same hoist as above. The completer models a
+  # tiny configuration space whose DEFAULT ARM IS UR, not silence -- see
+  # test_pcie_enum_scan_tlp.py, SS THE COMPLETER.
+  bench_enum_scan_tlp:
+    files:
+      - tb_pcie_enum_scan_tlp.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_scan_tlp:
+    files:
+      - enum_tb_common.py          : {file_type : user, copyto : .}
+      - test_pcie_enum_scan_tlp.py : {file_type : user, copyto : .}
+
+  # 2b-3: the BAR phase standalone. DUT is the WHOLE enumeration assembly --
+  # pcie_enum_scan, pcie_enum_bar, the one pcie_cfg_txn and the REAL static
+  # handoff mux -- so the observed transaction sequence begins with the two scan
+  # transactions and the handoff is part of what is tested. bar_enable_i is HIGH
+  # here and low in the two scan shims; see pcie_enum_top, SS WHY THE BAR PHASE
+  # NEEDS AN ENABLE. The shim carries two extra instances whose allocator
+  # geometry the shipped MEM_BAR_BASE / MEM_BAR_WINDOW cannot reach.
+  bench_enum_bar:
+    files:
+      - tb_pcie_enum_bar.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_bar:
+    files:
+      - enum_tb_common.py     : {file_type : user, copyto : .}
+      - test_pcie_enum_bar.py : {file_type : user, copyto : .}
+
+  # 2b-3 integration: the WHOLE enumeration in front of a REAL pcie_rq_rc_top.
+  # The completer drives a full ConfigDevice with real BAR write-mask semantics
+  # -- a completer that echoed writes verbatim would make sizing return garbage
+  # and the DUT look broken. The four-name interface (.start/.seen/.wait_for/
+  # .complete) is preserved verbatim from 2b-1/2b-2.
+  bench_enum_bar_tlp:
+    files:
+      - tb_pcie_enum_bar_tlp.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_bar_tlp:
+    files:
+      - enum_tb_common.py         : {file_type : user, copyto : .}
+      - test_pcie_enum_bar_tlp.py : {file_type : user, copyto : .}
+
+  # Stage D acceptance: the whole enumeration, one bridge level, in front of
+  # a REAL pcie_rq_rc_top, answered by the BDF-routing bridge + device pair
+  # from enum_tb_common. bar_enable_i AND bridge_enable_i are high.
+  bench_enum_bridge_tlp:
+    files:
+      - tb_pcie_enum_bridge_tlp.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_bridge_tlp:
+    files:
+      - enum_tb_common.py            : {file_type : user, copyto : .}
+      - test_pcie_enum_bridge_tlp.py : {file_type : user, copyto : .}
+
+  # Stage D-3: the bridge bus-number sequencer standalone. DUT is
+  # pcie_enum_bus plus one real pcie_cfg_txn wired directly (the mux and the
+  # per-level instances are the integration target's subject). The bench plays
+  # the shared socket via enum_tb_common.Socket and drives the scan-verdict
+  # inputs itself, so every eligibility branch is reachable without a scan.
+  bench_enum_bus:
+    files:
+      - tb_pcie_enum_bus.sv
+    file_type: systemVerilogSource
+
+  cocotb_enum_bus:
+    files:
+      - enum_tb_common.py     : {file_type : user, copyto : .}
+      - test_pcie_enum_bus.py : {file_type : user, copyto : .}
+
+  # 2a-iii: pcie_rq_rc_top -- the assembled Root Complex requester surface.
+  # The bench plays the Data Link Layer on both DLL streams and answers config
+  # requests with a small, swappable Python completer; see test_pcie_rq_rc_top.py.
+  bench_rq_rc_top:
+    files:
+      - tb_pcie_rq_rc_top.sv
+    file_type: systemVerilogSource
+
+  cocotb_rq_rc_top:
+    files:
+      - test_pcie_rq_rc_top.py : {file_type : user, copyto : .}
+
+targets:
+  # 2a-0: pcie_axis_dw_downsize / pcie_axis_dw_upsize, G1..G10.
+  verilate_axis_gearbox:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_axis_dw_gearbox
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_axis_gearbox, cocotb_axis_gearbox]
+    toplevel : [tb_pcie_axis_gearbox]
+
+  # 2a-i: pcie_rq_if standalone, T1..T11.
+  verilate_rq_if:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_rq_if
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_rq_if, cocotb_rq_if]
+    toplevel : [tb_pcie_rq_if]
+
+  # 2a-i integration: T12..T15, on-wire TLP goldens through a real tlp_layer.
+  # This one MUST initialise FC credits (see test_pcie_rq_if_tlp.py).
+  verilate_rq_if_tlp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_rq_if_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_rq_if_tlp, cocotb_rq_if_tlp]
+    toplevel : [tb_pcie_rq_if_tlp]
+
+  # 2a-ii: pcie_rc_if standalone, U1..U11.
+  verilate_rc_if:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_rc_if
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_rc_if, cocotb_rc_if]
+    toplevel : [tb_pcie_rc_if]
+
+  # 2a-ii integration: U12..U15, a tag out on a CfgRd0 and back in an RC
+  # descriptor. This one MUST initialise FC credits (see test_pcie_rc_if_tlp.py).
+  verilate_rc_if_tlp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_rc_if_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_rc_if_tlp, cocotb_rc_if_tlp]
+    toplevel : [tb_pcie_rc_if_tlp]
+
+  # 2a-iii acceptance: the assembled top level, V0..V6. Round trips, out-of-
+  # order completions, tag exhaustion under RC backpressure, CRS and UR.
+  # MUST initialise FC credits (see test_pcie_rq_rc_top.py).
+  verilate_rq_rc_top:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_rq_rc_top
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_rq_rc_top, cocotb_rq_rc_top]
+    toplevel : [tb_pcie_rq_rc_top]
+
+  # 2b-1: pcie_cfg_txn standalone, E1..E13. No tlp_layer in this target, so no
+  # FC preconditions -- the credit story is verilate_enum_txn_tlp's subject.
+  verilate_enum_txn:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_txn
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_txn, cocotb_enum_txn]
+    toplevel : [tb_pcie_enum_txn]
+
+  # 2b-1 integration: I1..I8. On-wire TLP goldens, the real completion timeout,
+  # and the credit vectors from SPEC_PREDICTIONS_ENUM.md SS2 (Table 2-37 minimum
+  # with a cumulative drip; P-NPD1-STALL; P-NPD-INF; RC1).
+  verilate_enum_txn_tlp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_txn_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_txn_tlp, cocotb_enum_txn_tlp]
+    toplevel : [tb_pcie_enum_txn_tlp]
+
+  # 2b-2: pcie_enum_scan standalone, S1..S14. Phase-dependent policy, every
+  # fault path, and the credit annotation proved to be annotation only.
+  verilate_enum_scan:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_scan
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_scan, cocotb_enum_scan]
+    toplevel : [tb_pcie_enum_scan]
+
+  # 2b-2 integration: K1..K6. On-wire goldens for both scan descriptors, a
+  # CRS-first device, the Table 2-37 minimum credit with a cumulative drip, and
+  # the fabricated-timeout signature from SPEC_PREDICTIONS_ENUM.md SSD.6.
+  verilate_enum_scan_tlp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_scan_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_scan_tlp, cocotb_enum_scan_tlp]
+    toplevel : [tb_pcie_enum_scan_tlp]
+
+  # 2b-3: the BAR phase standalone, B1..B25. Sizing, the 64-bit pair, the
+  # allocator, every decode and outcome fault, P-CMD-LAST and P-NO-ROM asserted
+  # on the wire, and the handoff proved by the Command write's byte enables.
+  verilate_enum_bar:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bar
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bar, cocotb_enum_bar]
+    toplevel : [tb_pcie_enum_bar]
+
+  # Stage D acceptance: B1..B5. The SS5.4 sequence in order (probe -> 18h ->
+  # CFG1 probe -> BAR phase -> Command last), saturated AND under the Table
+  # 2-37 drip, CRS at both points, the stalled-write ordering discriminator,
+  # and the direct-attach regression with the bridge path enabled.
+  verilate_enum_bridge_tlp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bridge_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bridge_tlp, cocotb_enum_bridge_tlp]
+    toplevel : [tb_pcie_enum_bridge_tlp]
+
+  # Stage D-3: pcie_enum_bus standalone, N1..N10. The one 18h write's goldens,
+  # every fault path, the handoff ordering, the mandatory no-settle variants
+  # (F3.5) and the bypass/single-shot structure.
+  verilate_enum_bus:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bus
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bus, cocotb_enum_bus]
+    toplevel : [tb_pcie_enum_bus]
+
+  # Waveform variant of the above. --trace-fst was removed from every functional
+  # target (nothing in the flow consumes a waveform, and the flag was the only
+  # reason Verilator's FST tracer compiled at all -- see that commit). Debugging
+  # is an explicit opt-in instead, and this target is NOT part of the regression
+  # gate: it runs the same 25 tests and differs only in emitting a trace.
+  verilate_enum_bar_trace:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bar
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bar, cocotb_enum_bar]
+    toplevel : [tb_pcie_enum_bar]
+
+  # 2b-3 integration: E1..E7. THE ACCEPTANCE TARGET -- an NVMe-like endpoint
+  # enumerated end to end from FC init to enum_done_o, every emitted DW asserted
+  # against SPEC_PREDICTIONS_ENUM.md SSE.8 with payloads, run both saturated and
+  # under the Table 2-37 minimum credit drip.
+  verilate_enum_bar_tlp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bar_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bar_tlp, cocotb_enum_bar_tlp]
+    toplevel : [tb_pcie_enum_bar_tlp]
+
+  # Waveform variant; debug-only, not part of the regression gate.
+  verilate_enum_bar_tlp_trace:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_bar_tlp
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, bench_enum_bar_tlp, cocotb_enum_bar_tlp]
+    toplevel : [tb_pcie_enum_bar_tlp]

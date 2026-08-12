@@ -7,6 +7,8 @@ module tlp_layer
     parameter int USER_WIDTH = 3,
     parameter int TAG_COUNT = 32,
     parameter int CONTEXT_WIDTH = 16,
+    // Completion Timeout; 0 disables. See tlp_request_tracker.sv header.
+    parameter int unsigned CPL_TIMEOUT_CYCLES = 32'd4096,
     parameter int VC_PACKET_DEPTH = 4,
     parameter bit PCIE_WIRE_ORDER = 1'b0,
     parameter int BAR_COUNT = 2,
@@ -71,6 +73,23 @@ module tlp_layer
     output logic                     command_data_ready_o,
     output logic                     command_error_valid_o,
     output tlp_error_e               command_error_code_o,
+    // The tag the request tracker just handed out, and a one-cycle strobe at
+    // the moment it did.  This is the tag that goes on the wire in the emitted
+    // header and that the matching completion returns, so a client can
+    // correlate a request it issued with the completion that answers it.
+    //
+    // The tag is NOT known when the command is accepted: the requester leaves
+    // REQ_IDLE, then allocates in REQ_TAG a cycle or more later
+    // (tlp_requester.sv:211, 215-218), which is why this is a strobe rather
+    // than a value qualified by command_ready_o.
+    //
+    // Posted writes allocate nothing -- TLP_CMD_MEM_WRITE goes REQ_IDLE ->
+    // REQ_HEADER directly (tlp_requester.sv:211, 253) -- so the strobe never
+    // fires for them.  A segmented non-posted request re-enters REQ_TAG per
+    // segment (:228, :253), so it strobes once per emitted TLP, each with that
+    // TLP's own tag.
+    output logic [7:0]               allocated_tag_o,
+    output logic                     allocated_tag_valid_o,
 
     output logic                     target_request_valid_o,
     input  logic                     target_request_ready_i,
@@ -136,6 +155,11 @@ module tlp_layer
     output logic                     vc_overflow_o,
     output logic                     unexpected_completion_o,
     output tlp_error_e               completion_error_code_o,
+    // Completion Timeout sideband, raised straight out of the tracker.
+    output logic                     cpl_timeout_valid_o,
+    output logic [7:0]               cpl_timeout_tag_o,
+    output logic                     late_cpl_valid_o,
+    output logic [7:0]               late_cpl_tag_o,
     output logic [$clog2(TAG_COUNT+1)-1:0] outstanding_o
 );
 
@@ -165,6 +189,13 @@ module tlp_layer
   logic tracker_completion_ready;
   logic [12:0] completion_payload_bytes;
   logic [7:0] allocated_tag;
+  // Pure taps on the existing requester <-> tracker allocation handshake.  The
+  // strobe condition is the same expression the tracker commits the tag on
+  // (tlp_request_tracker.sv:113), and allocated_tag is combinational there
+  // (:56-63), so it carries the committed value in exactly this cycle.
+  // Nothing else in this module reads either output.
+  assign allocated_tag_o       = allocated_tag;
+  assign allocated_tag_valid_o = tag_valid && tag_ready;
   logic [15:0] tag_requester_id;
   logic [12:0] tag_byte_count;
   logic [CONTEXT_WIDTH-1:0] tag_context;
@@ -354,12 +385,20 @@ module tlp_layer
   );
 
   tlp_request_tracker #(
-      .TAG_COUNT(TAG_COUNT), .CONTEXT_WIDTH(CONTEXT_WIDTH)
+      .TAG_COUNT(TAG_COUNT), .CONTEXT_WIDTH(CONTEXT_WIDTH),
+      .CPL_TIMEOUT_CYCLES(CPL_TIMEOUT_CYCLES)
   ) tracker_inst (
       .clk_i(clk_i), .rst_i(layer_reset), .extended_tag_enable_i(extended_tag_enable_i),
       .allocate_valid_i(tag_valid), .allocate_ready_o(tag_ready),
       .allocate_requester_id_i(tag_requester_id), .allocate_byte_count_i(tag_byte_count),
-      .allocate_address_i(requester_header.address),
+      // The tracker seeds its expected completion Lower Address from this
+      // (tlp_request_tracker.sv:119-120).  PCIe defines Lower Address only for
+      // Memory Read Completions; every other completion carries 0.  A config
+      // request's "address" is a bus/device/function/register DW rather than a
+      // byte address, so forwarding it would demand a Lower Address that a
+      // spec-conformant CplD never sets.
+      .allocate_address_i(requester_header.tlp_type == TLP_TYPE_MEM ?
+                          requester_header.address : 64'd0),
       .allocate_context_i(tag_context), .allocate_expects_data_i(tag_expects_data),
       .allocate_tag_o(allocated_tag),
       .completion_valid_i(parsed_header_valid && parsed_completion && received_completion_ready_i),
@@ -369,6 +408,8 @@ module tlp_layer
       .result_context_o(result_context_o), .result_status_o(result_status_o),
       .result_last_o(result_last_o), .unexpected_completion_o(unexpected_completion_o),
       .completion_error_code_o(completion_error_code_o),
+      .cpl_timeout_valid_o(cpl_timeout_valid_o), .cpl_timeout_tag_o(cpl_timeout_tag_o),
+      .late_cpl_valid_o(late_cpl_valid_o), .late_cpl_tag_o(late_cpl_tag_o),
       .outstanding_o(outstanding_o)
   );
 

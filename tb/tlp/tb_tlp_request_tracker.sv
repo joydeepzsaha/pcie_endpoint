@@ -1,5 +1,9 @@
 `timescale 1ns/1ps
-module tb_tlp_request_tracker;
+module tb_tlp_request_tracker #(
+    // Overridden per target (FuseSoC vlogparam applies to the toplevel).
+    // 4096 is the tracker's own default; the timeout targets override it.
+    parameter int unsigned CPL_TIMEOUT_CYCLES = 32'd4096
+);
   import tlp_pkg::*;
   logic clk_i = 0;
   logic rst_i;
@@ -27,6 +31,10 @@ module tb_tlp_request_tracker;
   logic result_last;
   logic unexpected_completion;
   logic [4:0] completion_error_code;
+  logic       cpl_timeout_valid;
+  logic [7:0] cpl_timeout_tag;
+  logic       late_cpl_valid;
+  logic [7:0] late_cpl_tag;
   logic [5:0] outstanding;
   tlp_header_t completion_header;
 
@@ -39,7 +47,8 @@ module tb_tlp_request_tracker;
     completion_header.lower_address = completion_lower_address;
   end
 
-  tlp_request_tracker #(.TAG_COUNT(32), .CONTEXT_WIDTH(16)) dut (
+  tlp_request_tracker #(.TAG_COUNT(32), .CONTEXT_WIDTH(16),
+                       .CPL_TIMEOUT_CYCLES(CPL_TIMEOUT_CYCLES)) dut (
       .clk_i(clk_i), .rst_i(rst_i), .extended_tag_enable_i(extended_tag_enable),
       .allocate_valid_i(allocate_valid), .allocate_ready_o(allocate_ready),
       .allocate_requester_id_i(allocate_requester_id),
@@ -53,6 +62,8 @@ module tb_tlp_request_tracker;
       .result_context_o(result_context), .result_status_o(result_status),
       .result_last_o(result_last), .unexpected_completion_o(unexpected_completion),
       .completion_error_code_o(completion_error_code),
+      .cpl_timeout_valid_o(cpl_timeout_valid), .cpl_timeout_tag_o(cpl_timeout_tag),
+      .late_cpl_valid_o(late_cpl_valid), .late_cpl_tag_o(late_cpl_tag),
       .outstanding_o(outstanding)
   );
 endmodule

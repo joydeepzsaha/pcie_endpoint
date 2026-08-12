@@ -130,6 +130,15 @@ module tb_pcie_endpoint_top;
   logic vc_overflow_o;
   logic unexpected_completion_o;
   tlp_error_e completion_error_code_o;
+  // Completion Timeout sideband. Observed-only here -- nothing in this bench
+  // asserts on them yet. Tag widths are a fixed 8 bits all the way down
+  // (pcie_endpoint_top.sv:146,148 <- tlp_layer.sv:154,156 <-
+  // tlp_request_tracker.sv:147,149); they are not TAG_COUNT-parameterised the
+  // way outstanding_o below is.
+  logic cpl_timeout_valid_o;
+  logic [7:0] cpl_timeout_tag_o;
+  logic late_cpl_valid_o;
+  logic [7:0] late_cpl_tag_o;
   logic [5:0] outstanding_o;
 
   // Keep packed structs at the DUT boundary, but expose flat vectors to

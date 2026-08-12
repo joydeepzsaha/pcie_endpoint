@@ -45,6 +45,7 @@ module tlp_completion_generator
   logic [12:0] segment_bytes_r;
   logic [6:0] lower_address_r;
   logic [12:0] accepted_bytes;
+  logic [12:0] segment_wire_bytes;
   logic expected_last;
   integer lane;
 
@@ -66,7 +67,15 @@ module tlp_completion_generator
     accepted_bytes = '0;
     for (lane = 0; lane < KEEP_WIDTH; lane = lane + 1)
       accepted_bytes = accepted_bytes + request_keep_i[lane];
-    expected_last = sent_bytes_r + accepted_bytes >= segment_bytes_r;
+    // header_r.length_dw counts the leading partial DW created by an unaligned
+    // lower_address, so the payload occupies ceil((segment_bytes +
+    // lower_address[1:0]) / 4) beats on the wire.  The data phase must budget
+    // those same pad bytes, or it closes the packet a DW short of the length the
+    // header already declared.  Only the beat accounting takes the padding --
+    // segment_bytes_r stays in true payload-byte space for the RCB/MPS segment
+    // advance below.  Identical to the raw byte count when lower_address[1:0]==0.
+    segment_wire_bytes = segment_bytes_r + {11'd0, lower_address_r[1:0]};
+    expected_last = sent_bytes_r + accepted_bytes >= segment_wire_bytes;
   end
 
   assign request_ready_o = state_r == CPL_IDLE;
