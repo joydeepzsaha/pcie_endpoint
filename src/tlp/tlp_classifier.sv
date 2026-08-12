@@ -6,6 +6,7 @@ module tlp_classifier
     output tlp_class_e  class_o,
     output logic        memory_request_o,
     output logic        config_request_o,
+    output logic        message_request_o,
     output logic        completion_o,
     output logic        read_request_o,
     output logic        write_request_o,
@@ -19,6 +20,7 @@ module tlp_classifier
     class_o          = TLP_CLASS_UNSUPPORTED;
     memory_request_o = 1'b0;
     config_request_o = 1'b0;
+    message_request_o = 1'b0;
     completion_o     = 1'b0;
     read_request_o   = 1'b0;
     write_request_o  = 1'b0;
@@ -46,6 +48,11 @@ module tlp_classifier
         class_o      = TLP_CLASS_COMPLETION;
         completion_o = 1'b1;
       end
+      TLP_TYPE_MSG_TO_RC, TLP_TYPE_MSG_ADDR, TLP_TYPE_MSG_ID,
+      TLP_TYPE_MSG_BCAST, TLP_TYPE_MSG_LOCAL, TLP_TYPE_MSG_GATHER: begin
+        class_o           = TLP_CLASS_POSTED;
+        message_request_o = 1'b1;
+      end
       default: unsupported_o = 1'b1;
     endcase
 
@@ -58,6 +65,7 @@ module tlp_classifier
       class_o          = TLP_CLASS_UNSUPPORTED;
       memory_request_o = 1'b0;
       config_request_o = 1'b0;
+      message_request_o = 1'b0;
       completion_o     = 1'b0;
       read_request_o   = 1'b0;
       write_request_o  = 1'b0;

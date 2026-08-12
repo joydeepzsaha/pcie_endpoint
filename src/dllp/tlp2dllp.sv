@@ -60,6 +60,7 @@ module tlp2dllp
   //tlp to dllp fsm emum
   typedef enum logic [3:0] {
     ST_IDLE,
+    ST_PREFIX,
     ST_CHECK_CREDITS_NPH,
     ST_CHECK_CREDITS_NPH_NPD,
     ST_CHECK_CREDITS_PH,
@@ -80,6 +81,8 @@ module tlp2dllp
   //transmit sequence logic
   logic                 [          11:0] next_transmit_seq_c;
   logic                 [          11:0] next_transmit_seq_r;
+  logic                                  prefix_c;
+  logic                                  prefix_r;
   //skid buffer axis stage1 signals
   logic                 [DATA_WIDTH-1:0] skid_axis_tdata;
   logic                 [KEEP_WIDTH-1:0] skid_axis_tkeep;
@@ -118,6 +121,9 @@ module tlp2dllp
   logic                                  tlp_nullified_r;
   //tlp type signals
   pcie_tlp_header_dw0_t                  tlp_dw0;
+  logic                 [DATA_WIDTH-1:0] initial_axis_tdata;
+  logic                 [DATA_WIDTH-1:0] initial_crc_tdata;
+  logic                                  initial_axis_tvalid;
   //credits consumed
   logic                 [           7:0] ph_credits_consumed_c;
   logic                 [           7:0] ph_credits_consumed_r;
@@ -174,6 +180,7 @@ module tlp2dllp
     if (rst_i) begin
       curr_state              <= ST_IDLE;
       next_transmit_seq_r     <= '0;
+      prefix_r                <= 1'b0;
       crc_in_r                <= '1;
       ph_credits_consumed_r   <= '0;
       pd_credits_consumed_r   <= '0;
@@ -190,6 +197,7 @@ module tlp2dllp
     end else begin
       curr_state              <= next_state;
       next_transmit_seq_r     <= next_transmit_seq_c;
+      prefix_r                <= prefix_c;
       ph_credits_consumed_r   <= ph_credits_consumed_c;
       pd_credits_consumed_r   <= pd_credits_consumed_c;
       nph_credits_consumed_r  <= nph_credits_consumed_c;
@@ -265,6 +273,27 @@ module tlp2dllp
     cplh_credits_consumed_c = cplh_credits_consumed_r;
     cpld_credits_consumed_c = cpld_credits_consumed_r;
     next_transmit_seq_c     = next_transmit_seq_r;
+    prefix_c                = prefix_r;
+    initial_axis_tdata      = {
+      skid_axis_tdata[15:0], next_transmit_seq_r[7:0],
+      4'h0, next_transmit_seq_r[11:8]
+    };
+    initial_crc_tdata       = {
+      skid_axis_tdata[15:0], 4'h0,
+      next_transmit_seq_r[11:8], next_transmit_seq_r[7:0]
+    };
+    initial_axis_tvalid     = skid_axis_tvalid;
+    if (prefix_r) begin
+      initial_axis_tdata = {
+        pipeline_axis_tdata[15:0], next_transmit_seq_r[7:0],
+        4'h0, next_transmit_seq_r[11:8]
+      };
+      initial_crc_tdata = {
+        pipeline_axis_tdata[15:0], 4'h0,
+        next_transmit_seq_r[11:8], next_transmit_seq_r[7:0]
+      };
+      initial_axis_tvalid = pipeline_axis_tvalid;
+    end
     case (curr_state)
       //wait until pipeline is full and upstream ready
       //store packet, because we're shifting the data to fit in
@@ -272,47 +301,73 @@ module tlp2dllp
       ST_IDLE: begin
         // Do not remove a TLP from the input buffer unless retry storage has a
         // free slot.  Every transmitted TLP must be replayable until ACKed.
-        if (tlp_axis_tready && skid_axis_tvalid && retry_available_i) begin
-          tlp_dw0  = skid_axis_tdata;
+        if (skid_axis_tvalid && retry_available_i) begin
           crc_in_c = '1;
-          //handle posted request
-          if (tlp_dw0.byte0 inside {MRd, MRdLk, IORd, CfgRd0, CfgRd1, TCfgRd}) begin
-            next_state = ST_CHECK_CREDITS_NPH;
-          end else if (tlp_dw0.byte0 inside {MWr, MsgD}) begin
-            next_state = ST_CHECK_CREDITS_PH_PD;
-          end else if (tlp_dw0.byte0 inside {Msg}) begin
-            next_state = ST_CHECK_CREDITS_PH;
-          end else if (tlp_dw0.byte0 inside {IOWr, CfgWr0, CfgWr1,TCfgWr,FetchAdd,
-          Swap,CAS}) begin
-            next_state = ST_CHECK_CREDITS_NPH_NPD;
-          end else if (tlp_dw0.byte0 inside {Cpl, CplLk}) begin
-            next_state = ST_CHECK_CREDITS_CPLH;
-          end else if (tlp_dw0.byte0 inside {CplD, CplDLk}) begin
-            next_state = ST_CHECK_CREDITS_CPLH_CPLD;
+          if (skid_axis_tdata[7:5] == TLP_PREFIX) begin
+            // Hold the prefix in the flow register. Credit classification must
+            // use the following DW0, while the sequence number is still placed
+            // before the prefix on the transmitted packet.
+            skid_axis_tready = 1'b1;
+            prefix_c = 1'b1;
+            next_state = ST_PREFIX;
+          end else if (tlp_axis_tready) begin
+            tlp_dw0 = skid_axis_tdata;
+            if (tlp_dw0.byte0 inside {MRd, MRdLk, IORd, CfgRd0, CfgRd1, TCfgRd}) begin
+              next_state = ST_CHECK_CREDITS_NPH;
+            end else if (tlp_dw0.byte0 inside {MWr, MsgD}) begin
+              next_state = ST_CHECK_CREDITS_PH_PD;
+            end else if (tlp_dw0.byte0 inside {Msg}) begin
+              next_state = ST_CHECK_CREDITS_PH;
+            end else if (tlp_dw0.byte0 inside {IOWr, CfgWr0, CfgWr1,TCfgWr,FetchAdd,
+            Swap,CAS}) begin
+              next_state = ST_CHECK_CREDITS_NPH_NPD;
+            end else if (tlp_dw0.byte0 inside {Cpl, CplLk}) begin
+              next_state = ST_CHECK_CREDITS_CPLH;
+            end else if (tlp_dw0.byte0 inside {CplD, CplDLk}) begin
+              next_state = ST_CHECK_CREDITS_CPLH_CPLD;
+            end
           end
+        end
+      end
+      ST_PREFIX: begin
+        // The prefix is retained in pipeline_axis_tdata and DW0 remains at the
+        // skid output until the appropriate credit check succeeds.
+        if (skid_axis_tvalid) begin
+          tlp_dw0 = skid_axis_tdata;
+          if (tlp_dw0.byte0 inside {MRd, MRdLk, IORd, CfgRd0, CfgRd1, TCfgRd})
+            next_state = ST_CHECK_CREDITS_NPH;
+          else if (tlp_dw0.byte0 inside {MWr, MsgD})
+            next_state = ST_CHECK_CREDITS_PH_PD;
+          else if (tlp_dw0.byte0 inside {Msg})
+            next_state = ST_CHECK_CREDITS_PH;
+          else if (tlp_dw0.byte0 inside {IOWr, CfgWr0, CfgWr1,TCfgWr,FetchAdd,
+          Swap,CAS})
+            next_state = ST_CHECK_CREDITS_NPH_NPD;
+          else if (tlp_dw0.byte0 inside {Cpl, CplLk})
+            next_state = ST_CHECK_CREDITS_CPLH;
+          else if (tlp_dw0.byte0 inside {CplD, CplDLk})
+            next_state = ST_CHECK_CREDITS_CPLH_CPLD;
         end
       end
       ST_CHECK_CREDITS_NPH: begin
         static logic has_nph_credit;
         has_nph_credit = '0;
         //assign seq number then first 2 bytes of tlp
-        tlp_axis_tdata = {
-          skid_axis_tdata[15:0], next_transmit_seq_r[7:0], 4'h0, next_transmit_seq_r[11:8]
-        };
-        crc_tlp_axis_tdata = {
-          skid_axis_tdata[15:0], 4'h0, next_transmit_seq_r[11:8], next_transmit_seq_r[7:0]
-        };
+        tlp_axis_tdata = initial_axis_tdata;
+        crc_tlp_axis_tdata = initial_crc_tdata;
         tlp_axis_tkeep = '1;
         //check that nph credit is available
         if ((nph_credit_limit_r - nph_credits_consumed_r) >= 1'b1) begin
-          nph_credits_consumed_c = nph_credits_consumed_r + 1'b1;
           has_nph_credit         = '1;
         end
         if (has_nph_credit) begin
-          crc_in_c         = crc_out_32;
-          tlp_axis_tvalid  = skid_axis_tvalid;
-          skid_axis_tready = '1;
-          next_state       = ST_TLP_STREAM;
+          tlp_axis_tvalid = initial_axis_tvalid;
+          skid_axis_tready = !prefix_r && tlp_axis_tready;
+          if (initial_axis_tvalid && tlp_axis_tready) begin
+            nph_credits_consumed_c = nph_credits_consumed_r + 1'b1;
+            crc_in_c = crc_out_32;
+            next_state = ST_TLP_STREAM;
+          end
         end
       end
       ST_CHECK_CREDITS_NPH_NPD: begin
@@ -323,12 +378,8 @@ module tlp2dllp
         has_npd_credit = '0;
         data_credits_required = 1'b1;
         //assign seq number then first 2 bytes of tlp
-        tlp_axis_tdata = {
-          skid_axis_tdata[15:0], next_transmit_seq_r[7:0], 4'h0, next_transmit_seq_r[11:8]
-        };
-        crc_tlp_axis_tdata = {
-          skid_axis_tdata[15:0], 4'h0, next_transmit_seq_r[11:8], next_transmit_seq_r[7:0]
-        };
+        tlp_axis_tdata = initial_axis_tdata;
+        crc_tlp_axis_tdata = initial_crc_tdata;
         tlp_axis_tkeep = '1;
         //check that posted header credit is available
         if ((nph_credit_limit_r - nph_credits_consumed_r) >= 1'b1) begin
@@ -340,36 +391,36 @@ module tlp2dllp
         end
         //check next_state criteria
         if (has_nph_credit && has_npd_credit) begin
-          nph_credits_consumed_c = nph_credits_consumed_r + 1'b1;
-          npd_credits_consumed_c = npd_credits_consumed_r + data_credits_required;
-          crc_in_c               = crc_out_32;
-          tlp_axis_tvalid        = skid_axis_tvalid;
-          skid_axis_tready       = '1;
-          next_state             = ST_TLP_STREAM;
+          tlp_axis_tvalid = initial_axis_tvalid;
+          skid_axis_tready = !prefix_r && tlp_axis_tready;
+          if (initial_axis_tvalid && tlp_axis_tready) begin
+            nph_credits_consumed_c = nph_credits_consumed_r + 1'b1;
+            npd_credits_consumed_c = npd_credits_consumed_r + data_credits_required;
+            crc_in_c = crc_out_32;
+            next_state = ST_TLP_STREAM;
+          end
         end
       end
       ST_CHECK_CREDITS_PH: begin
         static logic has_ph_credit;
         has_ph_credit = '0;
         //assign seq number then first 2 bytes of tlp
-        tlp_axis_tdata = {
-          skid_axis_tdata[15:0], next_transmit_seq_r[7:0], 4'h0, next_transmit_seq_r[11:8]
-        };
-        crc_tlp_axis_tdata = {
-          skid_axis_tdata[15:0], 4'h0, next_transmit_seq_r[11:8], next_transmit_seq_r[7:0]
-        };
+        tlp_axis_tdata = initial_axis_tdata;
+        crc_tlp_axis_tdata = initial_crc_tdata;
         tlp_axis_tkeep = '1;
         //check that posted header credit is available
         if ((ph_credit_limit_r - ph_credits_consumed_r) >= 1'b1) begin
-          ph_credits_consumed_c = ph_credits_consumed_r + 1'b1;
           has_ph_credit         = '1;
         end
         //check next_state criteria
         if (has_ph_credit) begin
-          crc_in_c         = crc_out_32;
-          tlp_axis_tvalid  = skid_axis_tvalid;
-          skid_axis_tready = '1;
-          next_state       = ST_TLP_STREAM;
+          tlp_axis_tvalid = initial_axis_tvalid;
+          skid_axis_tready = !prefix_r && tlp_axis_tready;
+          if (initial_axis_tvalid && tlp_axis_tready) begin
+            ph_credits_consumed_c = ph_credits_consumed_r + 1'b1;
+            crc_in_c = crc_out_32;
+            next_state = ST_TLP_STREAM;
+          end
         end
       end
       ST_CHECK_CREDITS_PH_PD: begin
@@ -383,12 +434,8 @@ module tlp2dllp
         data_length = {tlp_dw0.byte2.Length1, tlp_dw0.byte3.Length0};
         data_credits_required = data_length == '0 ? 16'd256 : (data_length + 16'd3) >> 2;
         //assign seq number then first 2 bytes of tlp
-        tlp_axis_tdata = {
-          skid_axis_tdata[15:0], next_transmit_seq_r[7:0], 4'h0, next_transmit_seq_r[11:8]
-        };
-        crc_tlp_axis_tdata = {
-          skid_axis_tdata[15:0], 4'h0, next_transmit_seq_r[11:8], next_transmit_seq_r[7:0]
-        };
+        tlp_axis_tdata = initial_axis_tdata;
+        crc_tlp_axis_tdata = initial_crc_tdata;
         tlp_axis_tkeep = '1;
         //check that posted header credit is available
         if ((ph_credit_limit_r - ph_credits_consumed_r) >= 1'b1) begin
@@ -400,36 +447,36 @@ module tlp2dllp
         end
         //check next_state criteria
         if (has_ph_credit && has_pd_credit) begin
-          pd_credits_consumed_c = pd_credits_consumed_r + data_credits_required;
-          ph_credits_consumed_c = ph_credits_consumed_r + 1'b1;
-          crc_in_c              = crc_out_32;
-          tlp_axis_tvalid       = skid_axis_tvalid;
-          skid_axis_tready      = '1;
-          next_state            = ST_TLP_STREAM;
+          tlp_axis_tvalid = initial_axis_tvalid;
+          skid_axis_tready = !prefix_r && tlp_axis_tready;
+          if (initial_axis_tvalid && tlp_axis_tready) begin
+            pd_credits_consumed_c = pd_credits_consumed_r + data_credits_required;
+            ph_credits_consumed_c = ph_credits_consumed_r + 1'b1;
+            crc_in_c = crc_out_32;
+            next_state = ST_TLP_STREAM;
+          end
         end
       end
       ST_CHECK_CREDITS_CPLH: begin
         static logic has_cplh_credit;
         has_cplh_credit = '0;
         //assign seq number then first 2 bytes of tlp
-        tlp_axis_tdata = {
-          skid_axis_tdata[15:0], next_transmit_seq_r[7:0], 4'h0, next_transmit_seq_r[11:8]
-        };
-        crc_tlp_axis_tdata = {
-          skid_axis_tdata[15:0], 4'h0, next_transmit_seq_r[11:8], next_transmit_seq_r[7:0]
-        };
+        tlp_axis_tdata = initial_axis_tdata;
+        crc_tlp_axis_tdata = initial_crc_tdata;
         tlp_axis_tkeep = '1;
         //check that nph credit is available
         if ((cplh_credit_limit_r == '0) ||
             ((cplh_credit_limit_r[7:0] - cplh_credits_consumed_r) >= 1'b1)) begin
-          cplh_credits_consumed_c = cplh_credits_consumed_r + 1'b1;
-          has_cplh_credit         = '1;
+          has_cplh_credit = '1;
         end
         if (has_cplh_credit) begin
-          crc_in_c         = crc_out_32;
-          tlp_axis_tvalid  = skid_axis_tvalid;
-          skid_axis_tready = '1;
-          next_state       = ST_TLP_STREAM;
+          tlp_axis_tvalid = initial_axis_tvalid;
+          skid_axis_tready = !prefix_r && tlp_axis_tready;
+          if (initial_axis_tvalid && tlp_axis_tready) begin
+            cplh_credits_consumed_c = cplh_credits_consumed_r + 1'b1;
+            crc_in_c = crc_out_32;
+            next_state = ST_TLP_STREAM;
+          end
         end
       end
       ST_CHECK_CREDITS_CPLH_CPLD: begin
@@ -443,12 +490,8 @@ module tlp2dllp
         data_length = {tlp_dw0.byte2.Length1, tlp_dw0.byte3.Length0};
         data_credits_required = data_length == '0 ? 16'd256 : (data_length + 16'd3) >> 2;
         //assign seq number then first 2 bytes of tlp
-        tlp_axis_tdata = {
-          skid_axis_tdata[15:0], next_transmit_seq_r[7:0], 4'h0, next_transmit_seq_r[11:8]
-        };
-        crc_tlp_axis_tdata = {
-          skid_axis_tdata[15:0], 4'h0, next_transmit_seq_r[11:8], next_transmit_seq_r[7:0]
-        };
+        tlp_axis_tdata = initial_axis_tdata;
+        crc_tlp_axis_tdata = initial_crc_tdata;
         tlp_axis_tkeep = '1;
         //check that posted header credit is available
         if ((cplh_credit_limit_r == '0) ||
@@ -462,12 +505,14 @@ module tlp2dllp
         end
         //check next_state criteria
         if (has_cplh_credit && has_cpld_credit) begin
-          cplh_credits_consumed_c = cplh_credits_consumed_r + 1'b1;
-          cpld_credits_consumed_c = cpld_credits_consumed_r + data_credits_required;
-          crc_in_c                = crc_out_32;
-          tlp_axis_tvalid         = skid_axis_tvalid;
-          skid_axis_tready        = '1;
-          next_state              = ST_TLP_STREAM;
+          tlp_axis_tvalid = initial_axis_tvalid;
+          skid_axis_tready = !prefix_r && tlp_axis_tready;
+          if (initial_axis_tvalid && tlp_axis_tready) begin
+            cplh_credits_consumed_c = cplh_credits_consumed_r + 1'b1;
+            cpld_credits_consumed_c = cpld_credits_consumed_r + data_credits_required;
+            crc_in_c = crc_out_32;
+            next_state = ST_TLP_STREAM;
+          end
         end
       end
       //wait until pipeline is full and upstream ready
@@ -526,6 +571,7 @@ module tlp2dllp
         // 12-bit sequence number. This pulse was previously never asserted.
         dllp_valid_o        = '1;
         next_transmit_seq_c = next_transmit_seq_r + 1'b1;
+        prefix_c            = 1'b0;
         next_state          = ST_IDLE;
       end
       default: begin

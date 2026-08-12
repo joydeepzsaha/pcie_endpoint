@@ -122,13 +122,15 @@ module tlp_parser
             header_r.fmt <= s_axis_tdata[7:5];
             header_r.tlp_type <= s_axis_tdata[4:0];
             header_r.th <= s_axis_tdata[8];
-            header_r.attributes <= {s_axis_tdata[21:20], s_axis_tdata[10]};
+            header_r.attributes <= {s_axis_tdata[10], s_axis_tdata[21:20]};
             header_r.traffic_class <= s_axis_tdata[14:12];
             header_r.address_type <= s_axis_tdata[19:18];
             header_r.poisoned <= s_axis_tdata[22];
             header_r.digest_present <= s_axis_tdata[23];
-            header_r.length_dw <= ((s_axis_tdata[4:0] == TLP_TYPE_CPL ||
-                s_axis_tdata[4:0] == TLP_TYPE_CPL_LOCK) &&
+            header_r.length_dw <= (
+                (s_axis_tdata[4:0] == TLP_TYPE_CPL ||
+                 s_axis_tdata[4:0] == TLP_TYPE_CPL_LOCK ||
+                 tlp_is_message(s_axis_tdata[4:0])) &&
                 !tlp_has_data(s_axis_tdata[7:5]) &&
                 {s_axis_tdata[17:16],s_axis_tdata[31:24]} == 0) ? 0 :
                 tlp_decode_length({s_axis_tdata[17:16],s_axis_tdata[31:24]});
@@ -143,13 +145,15 @@ module tlp_parser
           header_r.fmt <= s_axis_tdata[7:5];
           header_r.tlp_type <= s_axis_tdata[4:0];
           header_r.th <= s_axis_tdata[8];
-          header_r.attributes <= {s_axis_tdata[21:20], s_axis_tdata[10]};
+          header_r.attributes <= {s_axis_tdata[10], s_axis_tdata[21:20]};
           header_r.traffic_class <= s_axis_tdata[14:12];
           header_r.address_type <= s_axis_tdata[19:18];
           header_r.poisoned <= s_axis_tdata[22];
           header_r.digest_present <= s_axis_tdata[23];
-          header_r.length_dw <= ((s_axis_tdata[4:0] == TLP_TYPE_CPL ||
-              s_axis_tdata[4:0] == TLP_TYPE_CPL_LOCK) &&
+          header_r.length_dw <= (
+              (s_axis_tdata[4:0] == TLP_TYPE_CPL ||
+               s_axis_tdata[4:0] == TLP_TYPE_CPL_LOCK ||
+               tlp_is_message(s_axis_tdata[4:0])) &&
               !tlp_has_data(s_axis_tdata[7:5]) &&
               {s_axis_tdata[17:16],s_axis_tdata[31:24]} == 0) ? 0 :
               tlp_decode_length({s_axis_tdata[17:16],s_axis_tdata[31:24]});
@@ -167,6 +171,10 @@ module tlp_parser
             header_r.byte_count_modified <= header_dw[12];
             header_r.byte_count <= header_dw[11:0] == 0 ? 13'd4096 :
                                    {1'b0,header_dw[11:0]};
+          end else if (tlp_is_message(header_r.tlp_type)) begin
+            header_r.requester_id <= header_dw[31:16];
+            header_r.tag <= header_dw[15:8];
+            header_r.message_code <= header_dw[7:0];
           end else begin
             header_r.requester_id <= header_dw[31:16];
             header_r.tag <= header_dw[15:8];
@@ -203,7 +211,8 @@ module tlp_parser
         end
 
         RX_DW3: if (input_fire) begin
-          header_r.address[31:0] <= {header_dw[31:2],2'b00};
+          header_r.address[31:0] <= tlp_is_message(header_r.tlp_type) ?
+                                    header_dw : {header_dw[31:2],2'b00};
           packet_ended_r <= s_axis_tlast;
           state_r <= RX_VALIDATE;
         end

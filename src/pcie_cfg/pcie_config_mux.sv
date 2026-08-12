@@ -87,6 +87,9 @@ module pcie_config_mux
   logic                  cfg_axis_tlast;
   logic [USER_WIDTH-1:0] cfg_axis_tuser;
   logic                  cfg_axis_tready;
+  logic                  cfg_beat_sent_r;
+  logic                  tlp_beat_sent_r;
+  logic                  route_cfg;
 
 
   //   axis_pcie_conv_t                            Q.state;
@@ -131,8 +134,19 @@ module pcie_config_mux
   always_ff @(posedge clk_i) begin : main_seq
     if (rst_i) begin
       Q <= '{state: ST_IDLE, default: 'd0};
+      cfg_beat_sent_r <= 1'b0;
+      tlp_beat_sent_r <= 1'b0;
     end else begin
       Q <= D;
+      if (!route_cfg || (skid_axis_tvalid && skid_axis_tready)) begin
+        cfg_beat_sent_r <= 1'b0;
+        tlp_beat_sent_r <= 1'b0;
+      end else begin
+        if (cfg_axis_tvalid && cfg_axis_tready)
+          cfg_beat_sent_r <= 1'b1;
+        if (tlp_axis_tvalid && tlp_axis_tready)
+          tlp_beat_sent_r <= 1'b1;
+      end
     end
     //non resetable
     // word_count_r <= word_count_c;
@@ -159,6 +173,8 @@ module pcie_config_mux
     //tlp axis signals
     tlp_axis_tvalid = '0;
     cfg_axis_tvalid = '0;
+    skid_axis_tready = '0;
+    route_cfg = 1'b0;
     tlp_axis_tdata  = skid_axis_tdata;
     tlp_axis_tkeep  = skid_axis_tkeep;
     tlp_axis_tlast  = skid_axis_tlast;
@@ -170,44 +186,45 @@ module pcie_config_mux
 
     case (Q.state)
       ST_IDLE: begin
-        skid_axis_tready = tlp_axis_tready && cfg_axis_tready;
         if (skid_axis_tvalid) begin
           tlp_dw0 = skid_axis_tdata;
-          if (1 & tlp_dw0.byte0.Type inside {IORd, CfgRd0, TCfgRd,MsgD,IOWr,
-           CfgWr0,TCfgWr}) begin
-            cfg_axis_tvalid = '1;
-            //  tlp_axis_tvalid = '1;
-            if (!skid_axis_tlast) begin
+          if (tlp_dw0.byte0 inside {CfgRd0, CfgWr0}) begin
+            // Configuration Type 0 requests are visible at the endpoint TLL
+            // target interface while the internal configuration handler owns
+            // the actual register access and completion generation. Track each
+            // output handshake independently so neither consumer sees a beat
+            // more than once when the other applies backpressure.
+            route_cfg = 1'b1;
+            cfg_axis_tvalid = skid_axis_tvalid && !cfg_beat_sent_r;
+            tlp_axis_tvalid = skid_axis_tvalid && !tlp_beat_sent_r;
+            skid_axis_tready =
+                (cfg_beat_sent_r || cfg_axis_tready) &&
+                (tlp_beat_sent_r || tlp_axis_tready);
+            if (skid_axis_tready && !skid_axis_tlast)
               D.state = ST_CFG_TLP;
-            end
           end else begin
-            tlp_axis_tvalid = '1;
-            if (!skid_axis_tlast) begin
+            tlp_axis_tvalid = skid_axis_tvalid;
+            skid_axis_tready = tlp_axis_tready;
+            if (skid_axis_tready && !skid_axis_tlast)
               D.state = ST_MEM_TLP;
-            end
           end
         end
       end
       ST_CFG_TLP: begin
-        skid_axis_tready = cfg_axis_tready;
-        cfg_axis_tvalid = skid_axis_tvalid;
-        // tlp_axis_tvalid = skid_axis_tvalid;
-        if (skid_axis_tvalid) begin
-          // cfg_axis_tvalid = '1;
-          if (skid_axis_tlast) begin
-            D.state = ST_IDLE;
-          end
-        end
+        route_cfg = 1'b1;
+        cfg_axis_tvalid = skid_axis_tvalid && !cfg_beat_sent_r;
+        tlp_axis_tvalid = skid_axis_tvalid && !tlp_beat_sent_r;
+        skid_axis_tready =
+            (cfg_beat_sent_r || cfg_axis_tready) &&
+            (tlp_beat_sent_r || tlp_axis_tready);
+        if (skid_axis_tvalid && skid_axis_tready && skid_axis_tlast)
+          D.state = ST_IDLE;
       end
       ST_MEM_TLP: begin
         skid_axis_tready = tlp_axis_tready;
         tlp_axis_tvalid = skid_axis_tvalid;
-        if (skid_axis_tvalid) begin
-          // tlp_axis_tvalid = '1;
-          if (skid_axis_tlast) begin
-            D.state = ST_IDLE;
-          end
-        end
+        if (skid_axis_tvalid && skid_axis_tready && skid_axis_tlast)
+          D.state = ST_IDLE;
       end
       default: begin
       end

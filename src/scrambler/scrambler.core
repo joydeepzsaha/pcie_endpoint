@@ -10,6 +10,8 @@ filesets:
       - scrambler.sv
       - gen1_scramble.sv
       - gen3_scramble.sv
+      - encode_8b10b.sv
+      - decode_8b10b.sv
     file_type: systemVerilogSource
     depend:
       - fusesoc:pcie:packages

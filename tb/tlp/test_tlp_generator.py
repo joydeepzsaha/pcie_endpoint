@@ -63,8 +63,8 @@ async def collect(dut, count, stalls=(1,)):
 
 def expected_dw0(fmt, tlp_type, length, tc=0, attr=0, digest=0):
     enc = 0 if length == 1024 else length
-    return ((fmt << 5) | tlp_type | ((attr & 1) << 10) | (tc << 12)
-            | (((enc >> 8) & 3) << 16) | (((attr >> 1) & 3) << 20)
+    return ((fmt << 5) | tlp_type | (((attr >> 2) & 1) << 10) | (tc << 12)
+            | (((enc >> 8) & 3) << 16) | ((attr & 3) << 20)
             | (digest << 23) | ((enc & 0xFF) << 24))
 
 

@@ -7,8 +7,8 @@ from cocotb.triggers import RisingEdge, Timer
 def dw0(fmt, tlp_type, length=1, td=0, tc=0, attr=0):
     encoded = 0 if length == 1024 else length
     return (
-        (fmt << 5) | tlp_type | ((attr & 1) << 10) | (tc << 12)
-        | (((encoded >> 8) & 3) << 16) | (((attr >> 1) & 3) << 20)
+        (fmt << 5) | tlp_type | (((attr >> 2) & 1) << 10) | (tc << 12)
+        | (((encoded >> 8) & 3) << 16) | ((attr & 3) << 20)
         | (td << 23) | ((encoded & 0xFF) << 24)
     )
 

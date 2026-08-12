@@ -29,6 +29,12 @@ module pcie_config_reg (
         output pcie_config_reg_pkg::pcie_config_reg__out_t hwif_out
     );
 
+    // PeakRDL emits one sequential process per leaf field in field_storage.
+    // The leaves are disjoint, but Verilator reports their common unpacked
+    // aggregate as multiply driven.  Keep this waiver local to the generated
+    // register block so genuine multiple drivers elsewhere remain visible.
+    /* verilator lint_off MULTIDRIVEN */
+
     //--------------------------------------------------------------------------
     // CPU Bus interface logic
     //--------------------------------------------------------------------------
@@ -2127,4 +2133,5 @@ module pcie_config_reg (
     assign cpuif_rd_ack = readback_done;
     assign cpuif_rd_data = readback_data;
     assign cpuif_rd_err = readback_err;
+    /* verilator lint_on MULTIDRIVEN */
 endmodule
