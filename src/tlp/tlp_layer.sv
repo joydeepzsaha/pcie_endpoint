@@ -58,6 +58,8 @@ module tlp_layer
     input  logic [12:0]              command_byte_count_i,
     input  logic [2:0]               command_tc_i,
     input  logic [2:0]               command_attr_i,
+    input  logic [2:0]               command_message_route_i,
+    input  logic [7:0]               command_message_code_i,
     input  logic [CONTEXT_WIDTH-1:0] command_context_i,
     input  logic                     command_prefix_valid_i,
     input  logic [31:0]              command_prefix_i,
@@ -76,6 +78,10 @@ module tlp_layer
     output tlp_class_e               target_request_class_o,
     output logic                     target_memory_o,
     output logic                     target_config_o,
+    output logic                     target_message_o,
+    output logic [2:0]               target_message_route_o,
+    output logic [7:0]               target_message_code_o,
+    output logic [63:0]              target_message_data_o,
     output logic                     target_config_hit_o,
     output logic                     target_config_type_one_o,
     output logic [11:0]              target_config_offset_o,
@@ -144,7 +150,7 @@ module tlp_layer
   logic parsed_data_last;
   logic parsed_data_ready;
   tlp_class_e parsed_class;
-  logic parsed_memory, parsed_config, parsed_completion;
+  logic parsed_memory, parsed_config, parsed_message, parsed_completion;
   logic parsed_read, parsed_write, parsed_unsupported;
   logic [12:0] parsed_request_span;
   logic [BAR_INDEX_WIDTH-1:0] decoded_bar;
@@ -200,6 +206,10 @@ module tlp_layer
   assign target_request_valid_o = parsed_header_valid && !parsed_completion;
   assign target_memory_o = parsed_memory;
   assign target_config_o = parsed_config;
+  assign target_message_o = parsed_message;
+  assign target_message_route_o = parsed_header.tlp_type[2:0];
+  assign target_message_code_o = parsed_header.message_code;
+  assign target_message_data_o = parsed_header.address;
   assign target_read_o = parsed_read;
   assign target_write_o = parsed_write;
   assign target_unsupported_o = parsed_unsupported ||
@@ -265,7 +275,9 @@ module tlp_layer
       if (generator_header.tlp_type == TLP_TYPE_CPL ||
           generator_header.tlp_type == TLP_TYPE_CPL_LOCK)
         tx_packet_class_r <= TLP_CLASS_COMPLETION;
-      else if (generator_header.tlp_type == TLP_TYPE_MEM && tlp_has_data(generator_header.fmt))
+      else if ((generator_header.tlp_type == TLP_TYPE_MEM &&
+                tlp_has_data(generator_header.fmt)) ||
+               tlp_is_message(generator_header.tlp_type))
         tx_packet_class_r <= TLP_CLASS_POSTED;
       else
         tx_packet_class_r <= TLP_CLASS_NON_POSTED;
@@ -292,6 +304,7 @@ module tlp_layer
   tlp_classifier classifier_inst (
       .header_i(parsed_header), .class_o(parsed_class),
       .memory_request_o(parsed_memory), .config_request_o(parsed_config),
+      .message_request_o(parsed_message),
       .completion_o(parsed_completion), .read_request_o(parsed_read),
       .write_request_o(parsed_write), .unsupported_o(parsed_unsupported)
   );
@@ -321,6 +334,8 @@ module tlp_layer
       .command_i(command_i), .command_address_i(command_address_i),
       .command_byte_count_i(command_byte_count_i), .command_tc_i(command_tc_i),
       .command_attr_i(command_attr_i), .command_context_i(command_context_i),
+      .command_message_route_i(command_message_route_i),
+      .command_message_code_i(command_message_code_i),
       .command_prefix_valid_i(command_prefix_valid_i), .command_prefix_i(command_prefix_i),
       .command_ecrc_enable_i(command_ecrc_enable_i),
       .command_data_i(command_data_i), .command_keep_i(command_keep_i),

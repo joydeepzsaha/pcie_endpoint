@@ -23,7 +23,13 @@ package tlp_pkg;
     TLP_TYPE_CPL_LOCK  = 5'b01011,
     TLP_TYPE_FETCH_ADD = 5'b01100,
     TLP_TYPE_SWAP      = 5'b01101,
-    TLP_TYPE_CAS       = 5'b01110
+    TLP_TYPE_CAS       = 5'b01110,
+    TLP_TYPE_MSG_TO_RC = 5'b10000,
+    TLP_TYPE_MSG_ADDR  = 5'b10001,
+    TLP_TYPE_MSG_ID    = 5'b10010,
+    TLP_TYPE_MSG_BCAST = 5'b10011,
+    TLP_TYPE_MSG_LOCAL = 5'b10100,
+    TLP_TYPE_MSG_GATHER = 5'b10101
   } tlp_type_e;
 
   typedef enum logic [1:0] {
@@ -46,7 +52,9 @@ package tlp_pkg;
     TLP_CMD_CFG_READ0,
     TLP_CMD_CFG_WRITE0,
     TLP_CMD_IO_READ,
-    TLP_CMD_IO_WRITE
+    TLP_CMD_IO_WRITE,
+    TLP_CMD_MSG,
+    TLP_CMD_MSG_DATA
   } tlp_cmd_e;
 
   typedef enum logic [1:0] {
@@ -86,6 +94,7 @@ package tlp_pkg;
     logic [15:0] requester_id;
     logic [15:0] completer_id;
     logic [7:0]  tag;
+    logic [7:0]  message_code;
     logic [3:0]  first_be;
     logic [3:0]  last_be;
     logic [63:0] address;
@@ -104,6 +113,10 @@ package tlp_pkg;
 
   function automatic logic tlp_is_4dw(input logic [2:0] fmt);
     return fmt == TLP_FMT_4DW_NO_DATA || fmt == TLP_FMT_4DW_DATA;
+  endfunction
+
+  function automatic logic tlp_is_message(input logic [4:0] tlp_type);
+    return tlp_type >= TLP_TYPE_MSG_TO_RC && tlp_type <= TLP_TYPE_MSG_GATHER;
   endfunction
 
   function automatic logic [9:0] tlp_encode_length(input logic [10:0] length_dw);

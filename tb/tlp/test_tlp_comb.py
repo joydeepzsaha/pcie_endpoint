@@ -11,6 +11,8 @@ TYPE_IO = 2
 TYPE_CFG0 = 4
 TYPE_CFG1 = 5
 TYPE_CPL = 10
+TYPE_MSG_TO_RC = 16
+TYPE_MSG_GATHER = 21
 
 
 async def settle():
@@ -93,6 +95,24 @@ async def classifier_all_three_classes(dut):
         assert int(dut.completion.value) == 0
         assert int(dut.read_request.value) == 0
         assert int(dut.write_request.value) == 0
+
+
+@cocotb.test()
+async def classifier_accepts_message_routes_as_posted(dut):
+    for fmt, tlp_type, length in [
+        (FMT_4DW_ND, TYPE_MSG_TO_RC, 0),
+        (FMT_4DW_D, TYPE_MSG_GATHER, 2),
+    ]:
+        dut.fmt.value = fmt
+        dut.tlp_type.value = tlp_type
+        dut.length_dw.value = length
+        await settle()
+        assert int(dut.class_value.value) == 0
+        assert int(dut.message_request.value) == 1
+        assert int(dut.unsupported.value) == 0
+        assert int(dut.memory_request.value) == 0
+        assert int(dut.config_request.value) == 0
+        assert int(dut.completion.value) == 0
 
 
 @cocotb.test()

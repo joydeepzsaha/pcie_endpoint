@@ -13,6 +13,8 @@ async def reset(dut):
     dut.max_read_bytes.value = 128
     dut.command_tc.value = 0
     dut.command_attr.value = 0
+    dut.command_message_route.value = 0
+    dut.command_message_code.value = 0
     dut.command_context.value = 0x55AA
     dut.command_prefix_valid.value = 0
     dut.command_prefix.value = 0

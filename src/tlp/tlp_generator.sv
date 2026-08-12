@@ -78,13 +78,17 @@ module tlp_generator
       dw1 = {header_r.completer_id, header_r.completion_status,
              header_r.byte_count_modified, header_r.byte_count[11:0]};
       dw2 = {header_r.requester_id, header_r.tag, 1'b0, header_r.lower_address};
+    end else if (tlp_is_message(header_r.tlp_type)) begin
+      dw1 = {header_r.requester_id, header_r.tag, header_r.message_code};
+      dw2 = header_r.address[63:32];
     end else begin
       dw1 = {header_r.requester_id, header_r.tag, header_r.last_be, header_r.first_be};
       dw2 = tlp_is_4dw(header_r.fmt) ? header_r.address[63:32] :
             {header_r.address[31:2], 2'b00};
     end
 
-    dw3 = {header_r.address[31:2], 2'b00};
+    dw3 = tlp_is_message(header_r.tlp_type) ? header_r.address[31:0] :
+          {header_r.address[31:2], 2'b00};
     axis_dw1 = dw1;
     axis_dw2 = dw2;
     axis_dw3 = dw3;
@@ -99,7 +103,9 @@ module tlp_generator
   assign formatter_start_valid = state_r == TX_PAYLOAD_START;
   assign payload_offset = (header_r.tlp_type == TLP_TYPE_CPL ||
                            header_r.tlp_type == TLP_TYPE_CPL_LOCK) ?
-                          header_r.lower_address[1:0] : header_r.address[1:0];
+                          header_r.lower_address[1:0] :
+                          tlp_is_message(header_r.tlp_type) ? 2'b00 :
+                          header_r.address[1:0];
 
   always_comb begin
     m_axis_tdata  = '0;

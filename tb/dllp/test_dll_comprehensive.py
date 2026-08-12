@@ -2435,12 +2435,18 @@ async def run_test(dut):
                 tlp_payload=raw_tlp,
             )
 
+            # Sequence one deliberately inserts three source-idle cycles
+            # between accepted words.  Receive alignment and LCRC checking
+            # must depend only on AXI handshakes, not adjacent valid cycles.
+            if sequence_number == 1:
+                tb.phy_source.set_pause_generator(cycle_pause())
             await send_frame_with_timeout(
                 tb.phy_source,
                 link_packet,
                 "incoming valid Memory Write TLP seq={}".format(sequence_number),
                 tuser=PHY_USER_IS_TLP,
             )
+            tb.phy_source.set_pause_generator(None)
 
             received_tlp = await receive_frame_with_timeout(
                 tb.tlp_sink,

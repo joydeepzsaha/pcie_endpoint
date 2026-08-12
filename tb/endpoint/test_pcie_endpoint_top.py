@@ -165,6 +165,8 @@ class EndpointTB:
         d.command_byte_count_i.value = 0
         d.command_tc_i.value = 0
         d.command_attr_i.value = 0
+        d.command_message_route_i.value = 0
+        d.command_message_code_i.value = 0
         d.command_context_i.value = 0
         d.command_prefix_valid_i.value = 0
         d.command_prefix_i.value = 0

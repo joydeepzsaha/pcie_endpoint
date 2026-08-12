@@ -7,6 +7,7 @@ endpoint connects the Transaction Layer to the Data Link Layer and exposes:
 
 - An application command interface for generating requests.
 - A target interface for requests received by the endpoint.
+- Generic Message and Message-with-Data transmit/receive interfaces.
 - Completion request and completion result interfaces.
 - A packet-oriented AXI-Stream interface toward the Physical Layer.
 - Link, configuration, flow-control, and error status.
@@ -57,6 +58,11 @@ The endpoint testbench is located in [`../../tb/endpoint`](../../tb/endpoint):
 | `tb_pcie_endpoint_top.sv` | Instantiates the endpoint with a single enabled BAR and exposes the internal TLP-to-DLL and DLL-to-TLP streams for verification. |
 | `test_pcie_endpoint_top.py` | Cocotb stimulus, monitors, packet construction, CRC checks, and endpoint tests. |
 | `tb_pcie_endpoint_top.core` | FuseSoC simulation target using the endpoint RTL and cocotb test. |
+| `tb_pcie_endpoint_line_rate.sv` | Instantiates the endpoint behind a parameterized Gen1 logical-PHY model. |
+| `pcie_gen1_logical_phy_model.sv` | Testbench-only x1/x4 byte striping, scrambling, 8b/10b coding, and decoded-byte counters. |
+| `pcie_gen1_traffic.py` | Independent Python scrambler/8b10b reference, DLLP construction, LCRC construction, and symbol grouping. |
+| `test_pcie_endpoint_line_rate.py` | Bidirectional TLP/DLL/logical-PHY data-integrity and Gen1 capacity checks. |
+| `tb_pcie_endpoint_line_rate.core` | Separate FuseSoC Verilator targets for Gen1 x1 and Gen1 x4. |
 
 The SystemVerilog harness uses a 32-bit AXI-Stream interface, one enabled
 4-KiB BAR at address zero, a shortened replay timer, and verification-only
@@ -196,16 +202,43 @@ command is approved.
 ## Unsupported or intentionally excluded behavior
 
 The present RTL does not implement automatic Unsupported Request Completion
-generation, Message requests, Atomic operations, locked requests, AER,
+generation, Message-specific side effects, Atomic operations, locked requests, AER,
 interrupt/MSI/MSI-X generation, request timeouts, power-management DLLPs, or
 Root-Complex enumeration/BAR assignment. Tests must report these as
 capability gaps; they must not claim simulated support.
 
-No new physical functionality is part of this endpoint work. In particular,
+Message TLPs are transported generically. The endpoint preserves the routing
+encoding, message code, routing-specific header data, and optional payload.
+It does not interpret a message code by changing power, interrupt, or AER
+state; those semantic handlers remain application responsibilities.
+
+No new production physical functionality is part of this endpoint work. In particular,
 the endpoint does not add or integrate LTSSM/link training, PIPE, serialization,
 receiver detection, lane alignment/reversal, TS1/TS2 or ordered-set handling,
-scrambling in the packet path, or 8b/10b encoding in the packet path. The
-codec checks are standalone tests of existing RTL only.
+scrambling in the production packet path, or 8b/10b encoding in the production
+packet path. The line-rate harness connects a verification-only logical PHY to
+the endpoint packet interface; it does not change `pcie_endpoint_top`.
+
+## Gen1 logical-PHY line-rate test
+
+The line-rate harness uses a 250-MHz symbol clock. `LANE_COUNT=1` emits one
+8b/10b symbol per cycle and packs four decoded bytes into each 32-bit endpoint
+beat. `LANE_COUNT=4` emits four independent symbols per cycle and maps them
+directly to one endpoint beat. The corresponding decoded capacities are
+250 MB/s for x1 and 1 GB/s for x4 before TLP, DLLP, ACK, and framing overhead.
+
+Each lane has independent scrambler and running-disparity state. The Python
+reference independently generates RX symbols and decodes TX symbols. Tests
+compare the raw TLP at `mid_tx_axis_*`/`mid_rx_axis_*`, the sequence and LCRC
+protected packet, and the application or target payload. Counters report
+protected bytes and active symbol cycles. Protocol stalls are visible as
+elapsed cycles beyond the ideal `ceil(bytes / lanes)` active-cycle count.
+
+The x4 model assumes ideal synchronized lanes and deterministic byte striping.
+It does not model deskew, lane reversal, SKP insertion, ordered sets, electrical
+timing, or transceiver behavior. Simulation establishes logical capacity and
+functional integrity; an FPGA timing report and external PCIe link partner are
+still required to establish hardware line rate.
 
 Functional coverage and code-coverage collection are also not configured.
 Adding coverage goals and simulator coverage-report generation is a separate
@@ -229,6 +262,17 @@ fusesoc run --target=sim fusesoc:pcie:tb_endpoint_protocol:1.0.0
 The target currently selects VCS and requires the Python packages used by
 cocotb, `cocotbext-axi`, and `cocotbext-pcie`.
 
+The separate open-source logical-PHY targets are:
+
+```bash
+fusesoc run --target=sim_x1 fusesoc:pcie:tb_endpoint_line_rate:1.0.0
+fusesoc run --target=sim_x4 fusesoc:pcie:tb_endpoint_line_rate:1.0.0
+```
+
+These targets select Verilator, which supports the SystemVerilog constructs
+used by the endpoint and Data Link dependencies. They do not depend on VCS or
+Icarus.
+
 These commands are documentation only. They should be run only after the RTL
 and testbench changes have been reviewed and test execution has been approved.
 
@@ -244,3 +288,24 @@ The endpoint test passes when:
 - BAR targeting and payload delivery are correct.
 - Credit starvation blocks traffic and a valid update releases it.
 - No cocotb assertion or timeout occurs.
+
+
+
+## Warnings and Errors (Documentation purposes) 
+* Multiple MULTIDRIVE warnings in within pcie_config_reg.sv
+* Multiple Latch warnings in tb_pcie_endpoint_rate.sv
+
+## Safekeeping note (2026-08-12)
+
+Gen1 x1 delivers a 32-bit endpoint word over four symbol clocks, so idle cycles
+between endpoint AXI words are expected. The Data Link receive path must use
+accepted words, not cycle-adjacent look-ahead, when removing the sequence field
+and validating LCRC. The x4 path exercises the same logic without those x1
+packing gaps.
+
+The endpoint fixture has a three-entry retry TLP buffer. Tests that generate
+more than three unacknowledged requests must receive and cumulatively ACK each
+batch before submitting another batch. Command and payload handshakes have
+bounded waits so credit starvation or a full retry buffer reports a diagnostic
+instead of hanging indefinitely. These changes were documented without running
+the simulation, per the execution restriction.
