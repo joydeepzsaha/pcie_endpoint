@@ -3,6 +3,47 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
 
+# PCIe credit counters wrap at their encoded field widths.
+HDR_MOD = 1 << 8
+DATA_MOD = 1 << 12
+
+POSTED = 0
+NON_POSTED = 1
+COMPLETION = 2
+
+
+async def _advertise(dut, ph, pd, nph, npd, cplh, cpld):
+    """One fc_update_valid strobe carrying a cumulative advertisement."""
+    dut.ph.value = ph
+    dut.pd.value = pd
+    dut.nph.value = nph
+    dut.npd.value = npd
+    dut.cplh.value = cplh
+    dut.cpld.value = cpld
+    dut.fc_update_valid.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.fc_update_valid.value = 0
+    await Timer(1, units="ps")
+
+
+async def _reset_and_init(dut, ph, pd, nph, npd, cplh, cpld):
+    """Reset, then deliver the first FC advertisement as initialization."""
+    cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
+    dut.rst_i.value = 1
+    dut.request_valid.value = 0
+    dut.request_class.value = 0
+    dut.request_data_credits.value = 0
+    dut.fc_initialized.value = 0
+    dut.fc_update_valid.value = 0
+    for _ in range(3):
+        await RisingEdge(dut.clk_i)
+    dut.rst_i.value = 0
+    await RisingEdge(dut.clk_i)
+    await _advertise(dut, ph, pd, nph, npd, cplh, cpld)
+    dut.fc_initialized.value = 1
+    await Timer(1, units="ps")
+
+
 @cocotb.test()
 async def exact_short_update_and_independent_pools(dut):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
@@ -48,54 +89,10 @@ async def exact_short_update_and_independent_pools(dut):
 @cocotb.test()
 async def all_starvation_combinations_and_saturating_guards(dut):
     """Prove independent header/data blocking for P, NP, and Cpl pools."""
-    cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
-    dut.rst_i.value = 1
-    dut.request_valid.value = 0
-# ---------------------------------------------------------------------------
-# Commit A -- PCIe Base 2.1 SS2.6.1.1 two-register accounting model.
-#
-# The module tracks CREDIT_LIMIT (cumulative advertised, loaded from fc_*_i) and
-# CREDITS_CONSUMED (cumulative consumed) separately and gates on their
-# difference.  Everything below is new coverage; see SPEC_PREDICTIONS_CREDIT.md
-# SSI-SSK.  The first fc_update_valid strobe after reset is FC initialisation,
-# every later strobe is an UpdateFC (SSI.2).
-# ---------------------------------------------------------------------------
-
-HDR_MOD = 1 << 8
-DATA_MOD = 1 << 12
-
-POSTED = 0
-NON_POSTED = 1
-COMPLETION = 2
-
-
-async def _advertise(dut, ph, pd, nph, npd, cplh, cpld):
-    """One fc_update_valid strobe carrying a cumulative advertisement."""
-    dut.ph.value = ph
-    dut.pd.value = pd
-    dut.nph.value = nph
-    dut.npd.value = npd
-    dut.cplh.value = cplh
-    dut.cpld.value = cpld
-    dut.fc_update_valid.value = 1
-    await RisingEdge(dut.clk_i)
-    dut.fc_update_valid.value = 0
-    await Timer(1, units="ps")
-
-
-async def _reset_and_init(dut, ph, pd, nph, npd, cplh, cpld):
-    """Reset, then deliver the FC-initialisation advertisement."""
-    cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
-    dut.rst_i.value = 1
-    dut.request_valid.value = 0
-    dut.request_class.value = 0
-    dut.request_data_credits.value = 0
-    dut.fc_initialized.value = 0
-    dut.fc_update_valid.value = 0
-    for _ in range(3):
-        await RisingEdge(dut.clk_i)
-    dut.rst_i.value = 0
-    dut.fc_initialized.value = 1
+    # Initialize every pool as finite before any zero-valued cumulative update.
+    # Otherwise a zero used to create a starvation case would correctly latch
+    # that pool as infinite during initialization and invalidate the test.
+    await _reset_and_init(dut, 7, 7, 7, 7, 7, 7)
 
     pools = [
         (0, "ph", "pd", "ph_av", "pd_av"),
@@ -156,10 +153,15 @@ async def _reset_and_init(dut, ph, pd, nph, npd, cplh, cpld):
         await Timer(1, units="ps")
         assert int(getattr(dut, header_out).value) == 0
         assert int(getattr(dut, data_out).value) == 0
-    await RisingEdge(dut.clk_i)
-    await _advertise(dut, ph, pd, nph, npd, cplh, cpld)
-    dut.fc_initialized.value = 1
-    await Timer(1, units="ps")
+
+
+# ---------------------------------------------------------------------------
+# PCIe Base 2.1 SS2.6.1.1 cumulative credit accounting coverage.
+#
+# CREDIT_LIMIT is the cumulative advertisement loaded from fc_* inputs;
+# CREDITS_CONSUMED is tracked independently, and availability is their modular
+# difference.  The remaining tests also cover infinite-credit initialization.
+# ---------------------------------------------------------------------------
 
 
 async def _try_request(dut, cls, data_credits):
