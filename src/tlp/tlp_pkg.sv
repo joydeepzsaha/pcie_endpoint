@@ -40,7 +40,7 @@ package tlp_pkg;
     TLP_CPL_CA  = 3'b100
   } tlp_cpl_status_e;
 
-  typedef enum logic [2:0] {
+  typedef enum logic [3:0] {
     TLP_CMD_MEM_READ,
     TLP_CMD_MEM_WRITE,
     TLP_CMD_CFG_READ0,

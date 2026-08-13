@@ -8,7 +8,7 @@ module tb_tlp_requester;
   logic [12:0] max_read_bytes;
   logic command_valid;
   logic command_ready;
-  logic [2:0] command;
+  logic [3:0] command;
   logic [63:0] command_address;
   logic [12:0] command_byte_count;
   logic [2:0] command_tc;
