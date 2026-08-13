@@ -48,7 +48,31 @@ package tlp_pkg;
     TLP_CMD_IO_READ,
     TLP_CMD_IO_WRITE,
     TLP_CMD_CFG_READ1,
-    TLP_CMD_CFG_WRITE1
+    TLP_CMD_CFG_WRITE1,
+    // RESERVED ENCODINGS -- declared, never decoded.  Nothing in this tree
+    // drives ordinal 8 or 9, no test constructs one, and no datapath decodes
+    // one.  The six command_is_* predicates in tlp_requester each return 0 for
+    // both, because each is an explicit member list and an unlisted member
+    // matches no term.
+    //
+    // They exist so the command encoding is ALREADY the union of this tree's
+    // set and the endpoint branch's, which lets tlp_pkg.sv merge as "take
+    // ours".  The alternative -- adopting the other branch's numbering -- would
+    // move CFG_READ1/CFG_WRITE1 off 6 and 7, and three bench files bind those
+    // two ordinals as Python integers while eight more bind ordinals 0..5.
+    // See RECON_MERGE.md SSR1 for the collision and M1_FINDINGS.md for the gate.
+    //
+    // !! WARNING to whoever gives these a datapath: the requester FAILS OPEN on
+    // them today.  command_non_posted is derived as "!= TLP_CMD_MEM_WRITE", so
+    // a message would read as non-posted although messages are posted; and the
+    // tlp_type select has no message arm, so header_c.tlp_type falls through to
+    // TLP_TYPE_MEM and a message command would be emitted as a well-formed
+    // Memory Read.  That is pre-existing out-of-range behaviour -- see the
+    // comment above command_is_config in tlp_requester.sv, which records the
+    // same failure mode -- and it is harmless ONLY while these stay undriven.
+    // Adding a message datapath means fixing both, not just adding arms.
+    TLP_CMD_MSG,
+    TLP_CMD_MSG_DATA
   } tlp_cmd_e;
 
   typedef enum logic [1:0] {
