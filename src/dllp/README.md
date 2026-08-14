@@ -196,3 +196,17 @@ boundaries. They do not validate analog signaling, equalization, lane
 alignment, LTSSM compliance, or the physical symbol encoding used on an actual
 PCIe link.
 
+## Change notes (12-Aug-26)
+
+The receive aligner in `dllp2tlp.sv` stores only AXI words that complete a
+ready/valid handshake. It uses one accepted protected word plus one pending TLP
+DWORD to remove the two-byte sequence prefix, separate the four-byte LCRC, and
+mark the final FIFO beat good or bad. Do not restore raw-input look-ahead or
+delay taps whose input-ready ports are disconnected: either change makes LCRC
+checking depend on adjacent valid cycles and breaks x1 traffic containing
+normal source-idle gaps.
+
+Both DLL regression suites insert three idle source cycles between accepted
+words of one valid receive TLP. This protects the bubble-safe alignment rule.
+The changes were intentionally not simulated when added; run the documented
+regressions only after explicit execution approval.

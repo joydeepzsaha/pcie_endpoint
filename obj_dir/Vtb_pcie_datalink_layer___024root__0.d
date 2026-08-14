@@ -1,2 +1,0 @@
-Vtb_pcie_datalink_layer___024root__0.o: \
- Vtb_pcie_datalink_layer___024root__0.cpp Vtb_pcie_datalink_layer__pch.h

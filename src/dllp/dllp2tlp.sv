@@ -139,20 +139,17 @@ module dllp2tlp
   logic                                  skid_axis_tlast;
   logic                 [USER_WIDTH-1:0] skid_axis_tuser;
   logic                                  skid_axis_tready;
-  // tlp pipeline axis bus
-  logic                 [DATA_WIDTH-1:0] pipeline_axis_tdata;
-  logic                 [KEEP_WIDTH-1:0] pipeline_axis_tkeep;
-  logic                                  pipeline_axis_tvalid;
-  logic                                  pipeline_axis_tlast;
-  logic                 [USER_WIDTH-1:0] pipeline_axis_tuser;
-  logic                                  pipeline_axis_tready;
-  // tlp second stage pipeline axis bus
-  logic                 [DATA_WIDTH-1:0] pipeline_stg2_axis_tdata;
-  logic                 [KEEP_WIDTH-1:0] pipeline_stg2_axis_tkeep;
-  logic                                  pipeline_stg2_axis_tvalid;
-  logic                                  pipeline_stg2_axis_tlast;
-  logic                 [USER_WIDTH-1:0] pipeline_stg2_axis_tuser;
-  logic                                  pipeline_stg2_axis_tready;
+  // A protected TLP is shifted by the two-byte sequence prefix.  Keep one
+  // accepted input word and one assembled TLP word so alignment never relies
+  // on an unaccepted AXI look-ahead beat.  This is intentionally bubble-safe.
+  logic                 [DATA_WIDTH-1:0] previous_word_c;
+  logic                 [DATA_WIDTH-1:0] previous_word_r;
+  logic                 [DATA_WIDTH-1:0] pending_tlp_word_c;
+  logic                 [DATA_WIDTH-1:0] pending_tlp_word_r;
+  logic                                  pending_tlp_valid_c;
+  logic                                  pending_tlp_valid_r;
+  logic                 [DATA_WIDTH-1:0] crc_data;
+  logic                 [DATA_WIDTH-1:0] aligned_tlp_word;
   //phy response signals
   // logic                 [DATA_WIDTH-1:0] phy_axis_tdata;
   // logic                 [KEEP_WIDTH-1:0] phy_axis_tkeep;
@@ -229,6 +226,17 @@ module dllp2tlp
       cpld_credits_consumed_r <= 0;
       tlp_nullified_r         <= '0;
       fc_start_r              <= '0;
+      word_count_r            <= '0;
+      tlp_is_cplh_r           <= '0;
+      tlp_is_nph_r            <= '0;
+      tlp_is_ph_r             <= '0;
+      tlp_is_cpld_r           <= '0;
+      tlp_is_npd_r            <= '0;
+      tlp_is_pd_r             <= '0;
+      crc_from_tlp_r          <= '0;
+      previous_word_r         <= '0;
+      pending_tlp_word_r      <= '0;
+      pending_tlp_valid_r     <= '0;
     end else begin
       curr_state              <= next_state;
       next_transmit_seq_r     <= next_transmit_seq_c;
@@ -248,16 +256,18 @@ module dllp2tlp
       cpld_credits_consumed_r <= cpld_credits_consumed_c;
       tlp_nullified_r         <= tlp_nullified_c;
       fc_start_r              <= fc_start_c;
+      word_count_r            <= word_count_c;
+      tlp_is_cplh_r           <= tlp_is_cplh_c;
+      tlp_is_nph_r            <= tlp_is_nph_c;
+      tlp_is_ph_r             <= tlp_is_ph_c;
+      tlp_is_cpld_r           <= tlp_is_cpld_c;
+      tlp_is_npd_r            <= tlp_is_npd_c;
+      tlp_is_pd_r             <= tlp_is_pd_c;
+      crc_from_tlp_r          <= crc_from_tlp_c;
+      previous_word_r         <= previous_word_c;
+      pending_tlp_word_r      <= pending_tlp_word_c;
+      pending_tlp_valid_r     <= pending_tlp_valid_c;
     end
-    //non resetable
-    word_count_r   <= word_count_c;
-    tlp_is_cplh_r  <= tlp_is_cplh_c;
-    tlp_is_nph_r   <= tlp_is_nph_c;
-    tlp_is_ph_r    <= tlp_is_ph_c;
-    tlp_is_cpld_r  <= tlp_is_cpld_c;
-    tlp_is_npd_r   <= tlp_is_npd_c;
-    tlp_is_pd_r    <= tlp_is_pd_c;
-    crc_from_tlp_r <= crc_from_tlp_c;
   end
 
 
@@ -345,13 +355,17 @@ module dllp2tlp
     nak_scheduled_c         = nak_scheduled_r;
     advance_expected_seq_c  = advance_expected_seq_r;
     response_required_c     = response_required_r;
+    previous_word_c         = previous_word_r;
+    pending_tlp_word_c      = pending_tlp_word_r;
+    pending_tlp_valid_c     = pending_tlp_valid_r;
+    crc_data                = '0;
+    aligned_tlp_word        = {skid_axis_tdata[15:0], previous_word_r[31:16]};
     case (curr_state)
       ST_IDLE: begin
         // Do not begin another packet until the previous response handshake
         // has returned to idle.  Otherwise a lingering ACK can acknowledge a
         // new request, or the new packet can overwrite the prior response.
-        skid_axis_tready = tlp_axis_tready &&
-                           (link_status_i == DL_ACTIVE) &&
+        skid_axis_tready = (link_status_i == DL_ACTIVE) &&
                            !start_flow_control_ack_i;
         if (skid_axis_tready && skid_axis_tvalid) begin
           //store incoming sequence number
@@ -364,6 +378,16 @@ module dllp2tlp
           // frame bad but must not poison a later valid TLP.
           tlp_nullified_c = |skid_axis_tdata[7:4] ||
                             (skid_axis_tkeep != {KEEP_WIDTH{1'b1}});
+          previous_word_c     = skid_axis_tdata;
+          pending_tlp_word_c  = '0;
+          pending_tlp_valid_c = '0;
+          tlp_is_nph_c        = '0;
+          tlp_is_pd_c         = '0;
+          tlp_is_ph_c         = '0;
+          tlp_is_npd_c        = '0;
+          tlp_is_cplh_c       = '0;
+          tlp_is_cpld_c       = '0;
+          word_count_c        = '0;
           if (skid_axis_tlast) begin
             // A complete link TLP cannot contain sequence, header and LCRC in
             // one beat. Consume the truncated frame and request one replay.
@@ -379,250 +403,151 @@ module dllp2tlp
               next_state = ST_IDLE;
             end
           end else begin
-          tlp_axis_tdata      = skid_axis_tdata[15:0];
-          crc_byte_select     = 2'b11;
-          crc_calculated_c    = crc_output_16;
-          //tlp type
-          tlp_is_nph_c        = '0;
-          tlp_is_pd_c         = '0;
-          tlp_is_ph_c         = '0;
-          tlp_is_npd_c        = '0;
-          tlp_is_cplh_c       = '0;
-          tlp_is_cpld_c       = '0;
-          // crc_calculated_c    = '1;
-          word_count_c        = '0;
-          //state control
-          next_state          = ST_CHECK_TLP_TYPE;
-          end
-        end
-      end
-      ST_CHECK_TLP_TYPE: begin
-        skid_axis_tready = tlp_axis_tready;
-        crc_byte_select  = 2'b11;
-        if (skid_axis_tready && skid_axis_tvalid) begin
-          if (skid_axis_tkeep != {KEEP_WIDTH{1'b1}} || skid_axis_tlast) begin
-            tlp_nullified_c = '1;
-          end
-          crc_calculated_c = crc_output_32;
-          //shift data_in to account for seq_num offset
-          tlp_axis_tdata   = {skid_axis_tdata[15:0], pipeline_axis_tdata[31:16]};
-          tlp_axis_tkeep   = '1;
-          tlp_axis_tvalid  = '1;
-          tlp_dw0          = tlp_axis_tdata;
-          word_count_c     = {tlp_dw0.byte2.Length1, tlp_dw0.byte3.Length0};
-          //handle posted request
-          if (tlp_dw0.byte0 inside {MRd, MRdLk, IORd, CfgRd0, CfgRd1, TCfgRd}) begin
-            tlp_is_nph_c = '1;
-          end else if (tlp_dw0.byte0 inside {MWr, MsgD}) begin
-            tlp_is_pd_c = '1;
-          end else if (tlp_dw0.byte0 inside {Msg}) begin
-            tlp_is_ph_c = '1;
-          end else if (tlp_dw0.byte0 inside {IOWr, CfgWr0, CfgWr1,TCfgWr,FetchAdd,
-        Swap,CAS}) begin
-            tlp_is_npd_c = '1;
-          end else if (tlp_dw0.byte0 inside {Cpl, CplLk}) begin
-            tlp_is_cplh_c = '1;
-          end else if (tlp_dw0.byte0 inside {CplD, CplDLk}) begin
-            tlp_is_cpld_c = '1;
-          end
-          if (skid_axis_tlast) begin
-            // Close and mark the partially buffered frame so FRAME_FIFO drops
-            // it, then emit a NAK unless one is already scheduled.
-            tlp_axis_tlast = '1;
-            tlp_axis_tuser = '1;
-            if (!nak_scheduled_r) begin
-              response_seq_c          = next_expected_seq_num_r - 12'h001;
-              response_is_nak_c       = '1;
-              advance_expected_seq_c  = '0;
-              nak_scheduled_c         = '1;
-              fc_start_c              = '1;
-              next_state              = ST_SEND_ACK;
-            end else begin
-              next_state = ST_IDLE;
-            end
-          end else begin
-            next_state = ST_TLP_STREAM;
+            // The LCRC covers the two sequence bytes before it covers the
+            // TLP.  Only accepted bytes are supplied to the CRC functions.
+            crc_data             = {{(DATA_WIDTH-16){1'b0}}, skid_axis_tdata[15:0]};
+            crc_byte_select      = 2'b11;
+            crc_calculated_c     = crc_output_16;
+            next_state           = ST_TLP_STREAM;
           end
         end
       end
       ST_TLP_STREAM: begin
-        // This state deliberately observes the upstream beat as one-beat
-        // look-ahead for the two-byte sequence/LCRC alignment.  The buffered
-        // beat must nevertheless participate in a real AXI handshake before
-        // any CRC or packet state is updated.
-        skid_axis_tready = tlp_axis_tready && s_axis_tvalid;
-        crc_byte_select  = 2'b11;
+        // The final protected beat contains only the upper half of the LCRC.
+        // Capture it locally.  A non-final beat assembles one TLP dword from
+        // two accepted protected-stream words and advances the LCRC exactly
+        // once.  The pending dword is held until the following accepted beat
+        // tells us whether it is the final TLP dword.
+        if (skid_axis_tvalid && skid_axis_tlast) begin
+          skid_axis_tready = '1;
+        end else begin
+          skid_axis_tready = !pending_tlp_valid_r || tlp_axis_tready;
+          tlp_axis_tdata   = pending_tlp_word_r;
+          tlp_axis_tkeep   = {KEEP_WIDTH{1'b1}};
+          tlp_axis_tvalid  = skid_axis_tvalid && pending_tlp_valid_r;
+        end
+
         if (skid_axis_tready && skid_axis_tvalid) begin
-          if ((!s_axis_tlast && skid_axis_tkeep != {KEEP_WIDTH{1'b1}}) ||
-              (s_axis_tlast && !keep_is_contiguous(s_axis_tkeep))) begin
-            tlp_nullified_c = '1;
-          end
-          crc_calculated_c = crc_output_32;
-          tlp_axis_tdata   = {skid_axis_tdata[15:0], pipeline_axis_tdata[31:16]};
-          tlp_axis_tkeep   = skid_axis_tkeep;
-          tlp_axis_tvalid  = '1;
-          if (s_axis_tlast) begin
-            word_count_c    = word_count_r;
-            tlp_axis_tvalid = '0;
-            next_state      = ST_TLP_LAST;
-            crc_from_tlp_c   = {s_axis_tdata[15:0], skid_axis_tdata[31:16]};
-            //if last packet of tlp, store crc from phy
-            // case (s_axis_tkeep)
-            //   4'b0001: begin
-            //     // crc_byte_select = '1;
-            //     crc_calculated_c = crc_output_16;
-            //     tlp_axis_tvalid  = '1;
-            //     crc_from_tlp_c   = {s_axis_tdata[7:0], skid_axis_tdata[31:8]};
-            //   end
-            //   4'b0011: begin
-            //     crc_calculated_c = crc_output_16;
-            //     crc_byte_select  = 2'b11;
-            //     crc_from_tlp_c   = {s_axis_tdata[15:0], skid_axis_tdata[31:16]};
-            //   end
-            //   4'b0111: begin
-            //     crc_byte_select = 2'b11;
-            //     crc_from_tlp_c  = {s_axis_tdata[23:0], skid_axis_tdata[31:24]};
-            //   end
-            //   4'b1111: begin
-            //     crc_byte_select = '1;
-            //     crc_from_tlp_c  = s_axis_tdata;
-            //   end
-            //   default: begin
-            //   end
-            // endcase
+          if (skid_axis_tlast) begin
+            crc_from_tlp_c = {skid_axis_tdata[15:0], previous_word_r[31:16]};
+            if ((skid_axis_tkeep != {{(KEEP_WIDTH-2){1'b0}}, 2'b11}) ||
+                !pending_tlp_valid_r) begin
+              tlp_nullified_c = '1;
+            end
+            next_state = ST_CHECK_CRC;
+          end else begin
+            if (skid_axis_tkeep != {KEEP_WIDTH{1'b1}}) begin
+              tlp_nullified_c = '1;
+            end
+            crc_data            = aligned_tlp_word;
+            crc_calculated_c    = crc_output_32;
+            previous_word_c     = skid_axis_tdata;
+            pending_tlp_word_c  = aligned_tlp_word;
+            pending_tlp_valid_c = '1;
+
+            if (!pending_tlp_valid_r) begin
+              tlp_dw0      = aligned_tlp_word;
+              word_count_c = {tlp_dw0.byte2.Length1, tlp_dw0.byte3.Length0};
+              case (tlp_dw0.byte0)
+                MRd, MRdLk, IORd, CfgRd0, CfgRd1, TCfgRd:
+                  tlp_is_nph_c = '1;
+                MWr, MsgD:
+                  tlp_is_pd_c = '1;
+                Msg:
+                  tlp_is_ph_c = '1;
+                IOWr, CfgWr0, CfgWr1, TCfgWr, FetchAdd, Swap, CAS:
+                  tlp_is_npd_c = '1;
+                Cpl, CplLk:
+                  tlp_is_cplh_c = '1;
+                CplD, CplDLk:
+                  tlp_is_cpld_c = '1;
+                default: begin
+                end
+              endcase
+            end
           end
         end
-      end
-      ST_TLP_LAST: begin
-        crc_byte_select = 2'b11;
-        next_state = ST_CHECK_CRC;
-        // if (tlp_axis_tready) begin
-        //   crc_calculated_c = crc_output_32;
-        //   next_state = ST_CHECK_CRC;
-        //   //if last packet of tlp, store crc from phy
-        //   case (skid_axis_tkeep)
-        //     4'b0001: begin
-        //       crc_byte_select = '0;
-        //     end
-        //     4'b0011: begin
-        //       crc_byte_select = 2'b01;
-        //     end
-        //     4'b0111: begin
-        //       crc_byte_select = 2'b10;
-        //     end
-        //     4'b1111: begin
-        //       crc_byte_select = '1;
-        //     end
-        //     default: begin
-        //     end
-        //   endcase
-        //   // end
-        // end
       end
       ST_CHECK_CRC: begin
-        tlp_axis_tdata   = {pipeline_axis_tdata[15:0], pipeline_stg2_axis_tdata[31:16]};
-        tlp_axis_tvalid  = '1;
+        tlp_axis_tdata   = pending_tlp_word_r;
+        tlp_axis_tkeep   = {KEEP_WIDTH{1'b1}};
+        tlp_axis_tvalid  = pending_tlp_valid_r;
         tlp_axis_tlast   = '1;
-        crc_calculated_c = '1;
-        // The last LCRC beat is observed through the upstream look-ahead path,
-        // but a buffered copy must still be consumed before another TLP starts.
-        next_state       = ST_DRAIN_LCRC;
-        fc_start_c       = '0;
-        tlp_axis_tkeep = 4'b1111;
-        //assign tkeep based on last keep and alignement
-        // case (skid_axis_tkeep)
-        //   4'b0001: begin
-        //     tlp_axis_tkeep = 4'b0111;
-        //   end
-        //   4'b0011: begin
-        //     tlp_axis_tkeep = 4'b1111;
-        //   end
-        //   4'b0111: begin
-        //     tlp_axis_tkeep = 4'b0001;
-        //   end
-        //   4'b1111: begin
-        //     tlp_axis_tkeep = 4'b0011;
-        //   end
-        //   default: begin
-        //     //unknown keep value... null tlp buffer
-        //     tlp_nullified_c = '1;
-        //     tlp_axis_tuser  = '1;
-        //   end
-        // endcase
-        // Default malformed packets and bad-LCRC packets to a NAK carrying
-        // NEXT_RCV_SEQ-1.  This is the last sequence that reached the
-        // Transaction Layer and is the point after which replay must begin.
-        response_seq_c         = next_expected_seq_num_r - 12'h001;
-        response_is_nak_c      = '1;
-        advance_expected_seq_c = '0;
-        response_required_c    = '1;
-
-        // First validate packet structure and LCRC.  Sequence classification
-        // is meaningful only when those checks pass.
-        if (!tlp_nullified_r && (lcrc32d32 == crc_from_tlp_r) &&
-            (next_expected_seq_num_r == next_transmit_seq_r)) begin
-          // Expected packet: deliver it, acknowledge it, and advance the
-          // receive sequence only after the response generator completes.
-          response_seq_c         = next_transmit_seq_r;
-          response_is_nak_c      = '0;
-          nak_scheduled_c        = '0;
-          advance_expected_seq_c = '1;
-          if (tlp_is_nph_r) begin
-            nph_credits_consumed_c = nph_credits_consumed_r + 8'h1;
-          end else if (tlp_is_npd_r) begin
-            nph_credits_consumed_c = nph_credits_consumed_r + 8'h1;
-            npd_credits_consumed_c = npd_credits_consumed_r +
-          (word_count_r == '0 ? 12'd256 : (word_count_r + 16'd3) >> 2);
-          end else if (tlp_is_ph_r) begin
-            ph_credits_consumed_c = ph_credits_consumed_r + 8'h1;
-          end else if (tlp_is_pd_r) begin
-            ph_credits_consumed_c = ph_credits_consumed_r + 8'h1;
-            pd_credits_consumed_c = pd_credits_consumed_r +
-          (word_count_r == '0 ? 12'd256 : (word_count_r + 16'd3) >> 2);
-          end else if (tlp_is_cplh_r) begin
-            cplh_credits_consumed_c = cplh_credits_consumed_r + 8'h1;
-          end else if (tlp_is_cpld_r) begin
-            cplh_credits_consumed_c = cplh_credits_consumed_r + 8'h1;
-            cpld_credits_consumed_c = cpld_credits_consumed_r +
-          (word_count_r == '0 ? 12'd256 : (word_count_r + 16'd3) >> 2);
-          end
-        end else if (!tlp_nullified_r && (lcrc32d32 == crc_from_tlp_r) &&
-                     sequence_is_duplicate(next_transmit_seq_r,
-                                           next_expected_seq_num_r)) begin
-          // Duplicate/old packet: discard it but send a cumulative ACK for
-          // the last good TLP.  Do not consume credits or advance NEXT_RCV_SEQ.
-          response_seq_c         = next_expected_seq_num_r - 12'h001;
-          response_is_nak_c      = '0;
-          advance_expected_seq_c = '0;
-          tlp_axis_tuser          = '1;
-          tlp_nullified_c         = '1;
-        end else begin
-          // Bad LCRC, malformed framing, reserved sequence bits, or a future
-          // sequence: discard and request replay after the last good TLP.
-          tlp_axis_tuser  = '1;
-          tlp_nullified_c = '1;
-          if (!nak_scheduled_r) begin
-            nak_scheduled_c = '1;
-          end else begin
-            // NAK already sent for this missing sequence.  Drop this frame
-            // after draining its LCRC without scheduling another response.
-            response_required_c = '0;
-          end
+        // Mark the final FIFO beat bad unless both framing/LCRC and sequence
+        // checks pass.  FRAME_FIFO then atomically commits or drops the frame.
+        if (tlp_nullified_r || (lcrc32d32 != crc_from_tlp_r) ||
+            (next_expected_seq_num_r != next_transmit_seq_r)) begin
+          tlp_axis_tuser = {USER_WIDTH{1'b1}};
         end
-      end
-      ST_DRAIN_LCRC: begin
-        // Consume the buffered final LCRC beat.  Leaving it in the input skid
-        // buffer makes ST_IDLE interpret it as a new two-byte truncated TLP.
-        skid_axis_tready = '1;
-        if (skid_axis_tvalid) begin
-          if (!skid_axis_tlast ||
-              (skid_axis_tkeep != {{(KEEP_WIDTH - 2){1'b0}}, 2'b11})) begin
-            response_seq_c         = next_expected_seq_num_r - 12'h001;
-            response_is_nak_c      = '1;
-            advance_expected_seq_c = '0;
-            nak_scheduled_c        = '1;
+
+        if (!pending_tlp_valid_r) begin
+          // A protected frame without a complete TLP dword cannot terminate a
+          // FIFO frame.  It has not written any payload, so schedule NAK now.
+          response_seq_c         = next_expected_seq_num_r - 12'h001;
+          response_is_nak_c      = '1;
+          advance_expected_seq_c = '0;
+          tlp_nullified_c        = '1;
+          crc_calculated_c       = '1;
+          if (!nak_scheduled_r) begin
+            nak_scheduled_c     = '1;
+            response_required_c = '1;
+            fc_start_c          = '1;
+            next_state          = ST_SEND_ACK;
+          end else begin
+            response_required_c = '0;
+            next_state          = ST_IDLE;
           end
-          if (response_required_r) begin
+        end else if (tlp_axis_tready) begin
+          pending_tlp_valid_c  = '0;
+          crc_calculated_c     = '1;
+          response_seq_c       = next_expected_seq_num_r - 12'h001;
+          response_is_nak_c    = '1;
+          advance_expected_seq_c = '0;
+          response_required_c  = '1;
+
+          if (!tlp_nullified_r && (lcrc32d32 == crc_from_tlp_r) &&
+              (next_expected_seq_num_r == next_transmit_seq_r)) begin
+            response_seq_c         = next_transmit_seq_r;
+            response_is_nak_c      = '0;
+            nak_scheduled_c        = '0;
+            advance_expected_seq_c = '1;
+            tlp_nullified_c        = '0;
+            if (tlp_is_nph_r) begin
+              nph_credits_consumed_c = nph_credits_consumed_r + 8'h1;
+            end else if (tlp_is_npd_r) begin
+              nph_credits_consumed_c = nph_credits_consumed_r + 8'h1;
+              npd_credits_consumed_c = npd_credits_consumed_r +
+                (word_count_r == '0 ? 12'd256 : (word_count_r + 16'd3) >> 2);
+            end else if (tlp_is_ph_r) begin
+              ph_credits_consumed_c = ph_credits_consumed_r + 8'h1;
+            end else if (tlp_is_pd_r) begin
+              ph_credits_consumed_c = ph_credits_consumed_r + 8'h1;
+              pd_credits_consumed_c = pd_credits_consumed_r +
+                (word_count_r == '0 ? 12'd256 : (word_count_r + 16'd3) >> 2);
+            end else if (tlp_is_cplh_r) begin
+              cplh_credits_consumed_c = cplh_credits_consumed_r + 8'h1;
+            end else if (tlp_is_cpld_r) begin
+              cplh_credits_consumed_c = cplh_credits_consumed_r + 8'h1;
+              cpld_credits_consumed_c = cpld_credits_consumed_r +
+                (word_count_r == '0 ? 12'd256 : (word_count_r + 16'd3) >> 2);
+            end
+          end else if (!tlp_nullified_r && (lcrc32d32 == crc_from_tlp_r) &&
+                       sequence_is_duplicate(next_transmit_seq_r,
+                                             next_expected_seq_num_r)) begin
+            response_seq_c         = next_expected_seq_num_r - 12'h001;
+            response_is_nak_c      = '0;
+            advance_expected_seq_c = '0;
+            tlp_nullified_c        = '1;
+          end else begin
+            tlp_nullified_c = '1;
+            if (!nak_scheduled_r) begin
+              nak_scheduled_c = '1;
+            end else begin
+              response_required_c = '0;
+            end
+          end
+
+          if (response_required_c) begin
             fc_start_c = '1;
             next_state = ST_SEND_ACK;
           end else begin
@@ -742,85 +667,16 @@ module dllp2tlp
       .m_axis_tdest ()
   );
 
-  //axis pipeline skid buffer
-  axis_register #(
-      .DATA_WIDTH (DATA_WIDTH),
-      .KEEP_ENABLE('1),
-      .KEEP_WIDTH (KEEP_WIDTH),
-      .LAST_ENABLE('1),
-      .ID_ENABLE  ('0),
-      .ID_WIDTH   (1),
-      .DEST_ENABLE('0),
-      .DEST_WIDTH (1),
-      .USER_ENABLE('1),
-      .USER_WIDTH (USER_WIDTH),
-      .REG_TYPE   (SkidBuffer)
-  ) axis_register_inst (
-      .clk          (clk_i),
-      .rst          (rst_i),
-      .s_axis_tdata (skid_axis_tdata),
-      .s_axis_tkeep (skid_axis_tkeep),
-      .s_axis_tvalid(skid_axis_tvalid),
-      .s_axis_tready(),
-      .s_axis_tlast (skid_axis_tlast),
-      .s_axis_tuser (skid_axis_tuser),
-      .s_axis_tid   ('0),
-      .s_axis_tdest ('0),
-      .m_axis_tdata (pipeline_axis_tdata),
-      .m_axis_tkeep (pipeline_axis_tkeep),
-      .m_axis_tvalid(pipeline_axis_tvalid),
-      .m_axis_tready(skid_axis_tready),
-      .m_axis_tlast (pipeline_axis_tlast),
-      .m_axis_tid   (),
-      .m_axis_tdest (),
-      .m_axis_tuser (pipeline_axis_tuser)
-  );
-
-
-  //axis pipeline skid buffer
-  axis_register #(
-      .DATA_WIDTH (DATA_WIDTH),
-      .KEEP_ENABLE('1),
-      .KEEP_WIDTH (KEEP_WIDTH),
-      .LAST_ENABLE('1),
-      .ID_ENABLE  ('0),
-      .ID_WIDTH   (1),
-      .DEST_ENABLE('0),
-      .DEST_WIDTH (1),
-      .USER_ENABLE('1),
-      .USER_WIDTH (USER_WIDTH),
-      .REG_TYPE   (SkidBuffer)
-  ) axis_register_pipeline_stage_2_inst (
-      .clk          (clk_i),
-      .rst          (rst_i),
-      .s_axis_tdata (pipeline_axis_tdata),
-      .s_axis_tkeep (pipeline_axis_tkeep),
-      .s_axis_tvalid(pipeline_axis_tvalid),
-      .s_axis_tready(),
-      .s_axis_tlast (pipeline_axis_tlast),
-      .s_axis_tuser (pipeline_axis_tuser),
-      .s_axis_tid   ('0),
-      .s_axis_tdest ('0),
-      .m_axis_tdata (pipeline_stg2_axis_tdata),
-      .m_axis_tkeep (pipeline_stg2_axis_tkeep),
-      .m_axis_tvalid(pipeline_stg2_axis_tvalid),
-      .m_axis_tready(skid_axis_tready),
-      .m_axis_tlast (pipeline_stg2_axis_tlast),
-      .m_axis_tid   (),
-      .m_axis_tdest (),
-      .m_axis_tuser (pipeline_stg2_axis_tuser)
-  );
-
   //tlp crc instance
   pcie_lcrc16 tlp_crc16_inst (
-      .data  (tlp_axis_tdata[16:0]),
+      .data  (crc_data),
       .crcIn (crc_calculated_r),
       .crcOut(crc_output_16)
   );
 
   pcie_lcrc32 pcie_lcrc32_inst (
       .crcIn (crc_calculated_r),
-      .data  (tlp_axis_tdata),
+      .data  (crc_data),
       .crcOut(crc_output_32)
   );
 
