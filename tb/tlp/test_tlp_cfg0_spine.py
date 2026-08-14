@@ -9,9 +9,9 @@ All golden values are derived from the PCIe spec config-request/completion TLP
 formats and cross-checked against the RTL byte layout, NOT transcribed from DUT
 output.  file:line citations accompany each expectation.
 
-tlp_cmd_e encoding .............. src/tlp/tlp_pkg.sv:43-50
+tlp_cmd_e encoding .............. src/tlp/tlp_pkg.sv, typedef tlp_cmd_e
 CFG0 header build (requester) ... src/tlp/tlp_requester.sv:116-130
-TX serialization (generator) .... src/tlp/tlp_generator.sv:49-79
+TX serialization (generator) .... src/tlp/tlp_generator.sv, the dw0/dw1/dw2/dw3 assembly
 config-address bit layout ....... src/tlp/tlp_config_decoder.sv (round-trip)
 RX completion parse ............. src/tlp/tlp_parser.sv:151-195
 tracker tag+RID match / clear ... src/tlp/tlp_request_tracker.sv:64-73,115-135
@@ -21,7 +21,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-# --- tlp_cmd_e members (tlp_pkg.sv:43-50) ---
+# --- tlp_cmd_e members (tlp_pkg.sv, typedef tlp_cmd_e) ---
 CMD_CFG_READ0 = 2
 CMD_CFG_WRITE0 = 3
 
@@ -41,7 +41,7 @@ def cfg_addr(bus, dev, fn, reg_byte_offset, ext_reg=0):
 
     The requester copies command_address_i straight into header.address
     (tlp_requester.sv:130) and the generator emits {address[31:2],2'b00} as the
-    3rd DW (tlp_generator.sv:70-71).  The design's own config decode reads these
+    3rd DW (tlp_generator.sv, the dw0 attr/length assignments).  The design's own config decode reads these
     same fields (tlp_config_decoder.sv), so this is the standard PCIe layout:
       [31:24]=Bus  [23:19]=Device  [18:16]=Function
       [15:12]=rsvd [11:8]=ExtReg   [7:2]=Register#  [1:0]=00

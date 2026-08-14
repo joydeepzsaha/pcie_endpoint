@@ -29,7 +29,7 @@ RTL cited (read, not assumed):
     REQUEST ....................... src/tlp/tlp_request_tracker.sv:140-142
   Lower Address seeded 0 for
     non-memory requests ........... src/tlp/tlp_layer.sv:371-378
-  DW0 assembly (TX golden) ........ src/tlp/tlp_generator.sv:60-73
+  DW0 assembly (TX golden) ........ src/tlp/tlp_generator.sv, the dw0 assembly
 """
 
 import cocotb

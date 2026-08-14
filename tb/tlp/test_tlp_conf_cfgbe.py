@@ -36,7 +36,7 @@ RTL cited (read, not assumed):
   length_dw / first_be /
     last_be build ............. src/tlp/tlp_requester.sv:125-129
   command_limit (CFG/IO = 4B) . src/tlp/tlp_requester.sv:75-82
-  generator DW0/DW1/DW2 ....... src/tlp/tlp_generator.sv:49-72,81-85
+  generator DW0/DW1/DW2 ....... src/tlp/tlp_generator.sv, the dw0 and dw2 assembly
   tlp_error_e ................. src/tlp/tlp_pkg.sv:58-74
 """
 
@@ -44,7 +44,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-# tlp_cmd_e (src/tlp/tlp_pkg.sv:43-50)
+# tlp_cmd_e (src/tlp/tlp_pkg.sv, typedef tlp_cmd_e)
 CMD_MEM_WRITE = 1
 CMD_CFG_READ0 = 2
 CMD_CFG_WRITE0 = 3
@@ -235,7 +235,7 @@ async def settle(dut, n=16):
 
 
 def dec_len(dw0):
-    """Decode the Length field out of DW0 (tlp_generator.sv:49-62)."""
+    """Decode the Length field out of DW0 (tlp_generator.sv, the dw0 assembly)."""
     enc = (((dw0 >> 16) & 0x3) << 8) | ((dw0 >> 24) & 0xFF)
     return 1024 if enc == 0 else enc
 

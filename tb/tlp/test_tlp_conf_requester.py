@@ -16,7 +16,7 @@ RTL cited (read, not assumed):
     MemRd=MRRS, MemWr=MPS) ..... src/tlp/tlp_requester.sv:75-82
   calculate_segment (4KB +
     aligned MPS/MRRS) .......... src/tlp/tlp_requester.sv:84-101
-  generator DW0/DW1/DW2/DW3 ... src/tlp/tlp_generator.sv:49-72,102-112
+  generator DW0/DW1/DW2/DW3 ... src/tlp/tlp_generator.sv, the dw0 assembly and payload_offset
   length encode ............... src/tlp/tlp_pkg.sv:85-87
   fmt/type encodings .......... src/tlp/tlp_pkg.sv:8-27
 """
@@ -25,7 +25,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-# tlp_cmd_e (tlp_pkg.sv:43-50)
+# tlp_cmd_e (tlp_pkg.sv, typedef tlp_cmd_e)
 CMD_MEM_READ = 0
 CMD_MEM_WRITE = 1
 CMD_CFG_READ0 = 2
@@ -88,7 +88,7 @@ def spec_last_be(off, nbytes):
 
 
 def golden_dw1(rid, tag, first_be, last_be):
-    """DW1 non-CPL: {rid, tag, last_be, first_be} (tlp_generator.sv:69)."""
+    """DW1 non-CPL: {rid, tag, last_be, first_be} (tlp_generator.sv, the dw0 length assignment)."""
     return ((rid & 0xFFFF) << 16) | ((tag & 0xFF) << 8) | \
            ((last_be & 0xF) << 4) | (first_be & 0xF)
 

@@ -20,9 +20,9 @@ tlp_credit_manager.sv:53-54, 66-83).  Every "N packets" assertion below would
 otherwise be vacuously satisfied by silence.  This was regression RC1.
 
 RTL cited (read, not assumed):
-  DW0 assembly ..................... src/tlp/tlp_generator.sv:60-73
-  DW1 = {rid, tag, last_be, first_be}  src/tlp/tlp_generator.sv:80
-  config DW2 = {address[31:2],00} .. src/tlp/tlp_generator.sv:81-82
+  DW0 assembly ..................... src/tlp/tlp_generator.sv, the dw0 assembly
+  DW1 = {rid, tag, last_be, first_be}  src/tlp/tlp_generator.sv, the dw1 assembly
+  config DW2 = {address[31:2],00} .. src/tlp/tlp_generator.sv, the dw2 assembly
   CPL parse, DW1/DW2 fields ........ src/tlp/tlp_parser.sv:163-189
   tracker match + accounting ....... src/tlp/tlp_request_tracker.sv:123-155
   Lower Address seeded 0 for
@@ -98,7 +98,7 @@ def cfg_wire_dw2(bus, dev, fn, reg_num, ext_reg=0):
     """The config-request address DW as the generator emits it.
 
     {bus[31:24], device[23:19], function[18:16], ext_reg[11:8], reg[7:2], 00}
-    (tlp_generator.sv:81-82).  The BDF comes from the RQ descriptor's Completer
+    (tlp_generator.sv, the dw2 assembly).  The BDF comes from the RQ descriptor's Completer
     ID field, NOT from the address -- which is why a config request needs
     completer_id set and why this golden carries it.
     """
@@ -126,7 +126,7 @@ def decode_rc_desc(v):
 
 
 def dw0_length(dw0):
-    """Recover length_dw from a TX DW0 (inverse of tlp_generator.sv:60-73)."""
+    """Recover length_dw from a TX DW0 (inverse of tlp_generator.sv, the dw0 assembly)."""
     enc = ((dw0 >> 24) & 0xFF) | (((dw0 >> 16) & 0x3) << 8)
     return 1024 if enc == 0 else enc
 

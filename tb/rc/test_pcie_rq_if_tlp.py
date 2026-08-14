@@ -15,9 +15,9 @@ tlp_credit_manager.sv:53-54, 66-83).  Config requests consume NPH/NPD.  Every
 "zero packets" result in this file would otherwise be meaningless.
 
 RTL cited (read, not assumed):
-  DW0 assembly ................... src/tlp/tlp_generator.sv:60-73
-  DW1 = {rid, tag, last_be, first_be} .. src/tlp/tlp_generator.sv:80
-  config DW2 = {address[31:2],00} .. src/tlp/tlp_generator.sv:81-82
+  DW0 assembly ................... src/tlp/tlp_generator.sv, the dw0 assembly
+  DW1 = {rid, tag, last_be, first_be} .. src/tlp/tlp_generator.sv, the dw1 assembly
+  config DW2 = {address[31:2],00} .. src/tlp/tlp_generator.sv, the dw2 assembly
   length encode .................. src/tlp/tlp_pkg.sv:85-87
   fmt/type encodings ............. src/tlp/tlp_pkg.sv:8-27
   command_error_valid_o .......... src/tlp/tlp_requester.sv:225-231
@@ -57,7 +57,7 @@ def enc_len(length_dw):
 
 
 def golden_dw0(fmt, typ, length_dw, tc=0, attr=0):
-    """DW0 per the generator bit map (tlp_generator.sv:60-73)."""
+    """DW0 per the generator bit map (tlp_generator.sv, the dw0 assembly)."""
     enc = enc_len(length_dw)
     v = 0
     v |= (fmt & 0x7) << 5

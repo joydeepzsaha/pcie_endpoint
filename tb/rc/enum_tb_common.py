@@ -346,7 +346,7 @@ def cfg_wire_dw2(bus, dev, fn, reg_num, ext_reg=0):
 
     {Bus[31:24], Device[23:19], Function[18:16], Reserved[15:12],
      Ext Reg[11:8], Register[7:2], R[1:0]} -- PCIe Base 2.1 Figure 2-18 p.80,
-    built by tlp_generator.sv:81-82.  The BDF comes from the RQ descriptor's
+    built by tlp_generator.sv, the dw2 assembly.  The BDF comes from the RQ descriptor's
     Completer ID field, NOT from the address.
     """
     return (((bus & 0xFF) << 24) | ((dev & 0x1F) << 19) | ((fn & 0x7) << 16)
@@ -410,14 +410,14 @@ _selftest_type1_one_bit()
 def cfg_wire_dw1(requester_id, tag, first_be, last_be=0):
     """{Requester ID[31:16], Tag[15:8], Last DW BE[7:4], 1st DW BE[3:0]}.
 
-    tlp_generator.sv:80.  Base 2.1 SS2.2.7 p.79: Last DW BE must be 0000b.
+    tlp_generator.sv, the dw1 assembly.  Base 2.1 SS2.2.7 p.79: Last DW BE must be 0000b.
     """
     return (((requester_id & 0xFFFF) << 16) | ((tag & 0xFF) << 8)
             | ((last_be & 0xF) << 4) | (first_be & 0xF))
 
 
 def dw0_length(dw0):
-    """Recover length_dw from a TX DW0 (inverse of tlp_generator.sv:60-73)."""
+    """Recover length_dw from a TX DW0 (inverse of tlp_generator.sv, the dw0 assembly)."""
     enc = ((dw0 >> 24) & 0xFF) | (((dw0 >> 16) & 0x3) << 8)
     return 1024 if enc == 0 else enc
 
