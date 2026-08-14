@@ -1,4 +1,4 @@
-build/*
+build/
 *.conf
 *.fst
 *.vcd
@@ -7,3 +7,47 @@ build/*
 __pycache__/
 *.pyc
 *.key
+
+# --- class A: what M-4 removed, so that it does not come back --------------
+# Extension patterns are unrooted where only an artifact ever carries that
+# extension.  Anything whose name is also plausible for a source file is rooted
+# (leading /) to the repo root, where our own flows produce it, so these rules do
+# not shadow the inherited Vivado trees under tb/ and example/.
+
+# FuseSoC / Verilator / cocotb
+obj_dir/
+sim_build/
+*.diag
+results.xml
+
+# VCS
+/simv
+/simv.daidir/
+/csrc/
+/DVEfiles/
+/ucli.key
+/*.log
+tb/*.log
+
+# Vivado
+/*.jou
+tb/*.jou
+*.str
+*.wdb
+*.wlf
+*.vpd
+.Xil/
+
+# Captured run output the repo-level Makefile tees at the repo root
+/output_testPcie_python.txt
+/output_testPcie_console.txt
+/pcie_endpoint.txt
+/dllp_handler_output.txt
+/make_sim_output.txt
+
+# Merge-tool leftovers
+*.orig
+*.rej
+
+# `pip install pkg>=N` without quotes writes a file literally named "=N"
+/=*
