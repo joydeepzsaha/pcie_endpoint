@@ -136,9 +136,9 @@ def cpl_dw0(has_data, length_dw, tc=0, attr=0):
     fmt = FMT_3DW_DATA if has_data else FMT_3DW_NO_DATA
     enc = length_dw & 0x3FF
     v = (fmt << 5) | TYPE_CPL
-    v |= (attr & 0x1) << 10
+    v |= ((attr >> 2) & 0x1) << 10
     v |= (tc & 0x7) << 12
-    v |= ((attr >> 1) & 0x3) << 20
+    v |= (attr & 0x3) << 20
     v |= ((enc >> 8) & 0x3) << 16
     v |= (enc & 0xFF) << 24
     return v & 0xFFFFFFFF

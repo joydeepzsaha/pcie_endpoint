@@ -354,6 +354,13 @@ def cfg_wire_dw2(bus, dev, fn, reg_num, ext_reg=0):
 
 
 def cfg_wire_dw0(write, length_dw=1, tc=0, attr=0, type1=False):
+    # attr is PCIe Attr[2:0] = {IDO, RO, NS}; Base 2.1 SS2.2.1 p.57 puts
+    # Attr[2] at dw0[10] and Attr[1:0] at dw0[21:20] -- the halves are not
+    # adjacent.  KEEP attr=0 AND tc=0 HERE: Base 2.1 SS2.2.7 p.79 says a
+    # Configuration Request must carry TC[2:0]=000b and Attr[1:0]=00b with
+    # Attr[2] reserved, so a non-zero value would build an ILLEGAL TLP.
+    # The enumeration targets are attr-blind by the spec, not by omission;
+    # non-zero attr belongs on a completion (cpl_dw0) or a memory request.
     """Configuration Request DW0 as tlp_generator assembles it (:60-73).
 
     Base 2.1 SS2.2.7 p.79 fixes Length to 1 and TC/Attr/AT to zero for every
@@ -365,9 +372,9 @@ def cfg_wire_dw0(write, length_dw=1, tc=0, attr=0, type1=False):
     fmt = FMT_3DW_DATA if write else FMT_3DW_NO_DATA
     enc = length_dw & 0x3FF
     v = (fmt << 5) | (TYPE_CFG1 if type1 else TYPE_CFG0)
-    v |= (attr & 0x1) << 10
+    v |= ((attr >> 2) & 0x1) << 10
     v |= (tc & 0x7) << 12
-    v |= ((attr >> 1) & 0x3) << 20
+    v |= (attr & 0x3) << 20
     v |= ((enc >> 8) & 0x3) << 16
     v |= (enc & 0xFF) << 24
     return v & 0xFFFFFFFF
@@ -416,13 +423,17 @@ def dw0_length(dw0):
 
 
 def cpl_dw0(has_data, length_dw, tc=0, attr=0):
+    # attr is PCIe Attr[2:0] = {IDO, RO, NS}: Attr[2] -> dw0[10] and
+    # Attr[1:0] -> dw0[21:20] (Base 2.1 SS2.2.1 p.57).  Unlike a config
+    # request, a completion may legitimately carry non-zero attributes,
+    # echoed from the request it answers.
     """CPL DW0 as the parser reads it back (tlp_parser.sv:145-147, 150-155)."""
     fmt = FMT_3DW_DATA if has_data else FMT_3DW_NO_DATA
     enc = length_dw & 0x3FF
     v = (fmt << 5) | TYPE_CPL
-    v |= (attr & 0x1) << 10
+    v |= ((attr >> 2) & 0x1) << 10
     v |= (tc & 0x7) << 12
-    v |= ((attr >> 1) & 0x3) << 20
+    v |= (attr & 0x3) << 20
     v |= ((enc >> 8) & 0x3) << 16
     v |= (enc & 0xFF) << 24
     return v & 0xFFFFFFFF
