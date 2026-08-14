@@ -54,15 +54,20 @@ def enc_len(length_dw):
 
 
 def golden_dw0(fmt, typ, length_dw, tc=0, attr=0):
-    """DW0 per the generator bit map (tlp_generator.sv:49-62)."""
+    """DW0 per PCIe Base 2.1 SS2.2.1 p.57.
+
+    attr is PCIe Attr[2:0] = {IDO, RO, NS}: Attr[2] -> dw0[10] and
+    Attr[1:0] -> dw0[21:20].  The two halves are not adjacent (SS2.2.6.3 p.73).
+    Spec-derived, not read back from tlp_generator.
+    """
     enc = enc_len(length_dw)
     v = 0
     v |= (fmt & 0x7) << 5
     v |= (typ & 0x1F)
-    v |= (attr & 0x1) << 10
+    v |= ((attr >> 2) & 0x1) << 10
     v |= (tc & 0x7) << 12
     v |= ((enc >> 8) & 0x3) << 16
-    v |= ((attr >> 1) & 0x3) << 20
+    v |= (attr & 0x3) << 20
     v |= (enc & 0xFF) << 24
     return v & 0xFFFFFFFF
 

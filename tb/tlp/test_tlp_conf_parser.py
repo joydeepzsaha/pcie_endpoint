@@ -37,14 +37,16 @@ CPL_UR = 0b001
 
 
 def dw0(fmt, typ, length_dw, tc=0, attr=0, ep=0, td=0, at=0, th=0):
+    # attr is PCIe Attr[2:0] = {IDO, RO, NS}.  Base 2.1 SS2.2.1 p.57:
+    # Attr[2] -> dw0[10], Attr[1:0] -> dw0[21:20]; the halves are NOT adjacent.
     enc = 0 if length_dw == 1024 else (length_dw & 0x3FF)
     v = (fmt & 7) << 5 | (typ & 0x1F)
     v |= (th & 1) << 8
-    v |= (attr & 1) << 10
+    v |= ((attr >> 2) & 1) << 10
     v |= (tc & 7) << 12
     v |= ((enc >> 8) & 3) << 16
     v |= (at & 3) << 18
-    v |= ((attr >> 1) & 3) << 20
+    v |= (attr & 3) << 20
     v |= (ep & 1) << 22
     v |= (td & 1) << 23
     v |= (enc & 0xFF) << 24

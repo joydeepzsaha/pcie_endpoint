@@ -63,11 +63,19 @@ module tlp_generator
     dw0[7:5]   = header_r.fmt;
     dw0[4:0]   = header_r.tlp_type;
     dw0[8]     = header_r.th;
-    dw0[10]    = header_r.attributes[0];
+    // Attr[2:0] is SPLIT across two header bytes and the halves are not
+    // adjacent -- PCIe Base 2.1 SS2.2.1 p.57 puts Attr[2] at bit 2 of byte 1 and
+    // Attr[1:0] at bits [5:4] of byte 2, and SS2.2.6.3 p.73 calls the split out
+    // explicitly ("attribute bit 2 is not adjacent to bits 1 and 0").  With
+    // byte N at dw0[8N+7:8N] -- the mapping every other field here uses -- that
+    // is Attr[2] (ID-Based Ordering) at dw0[10] and Attr[1:0] (Relaxed
+    // Ordering, No Snoop) at dw0[21:20].  Writing attributes[0] into dw0[10]
+    // looks natural and is wrong: it puts No Snoop where a receiver reads IDO.
+    dw0[10]    = header_r.attributes[2];
     dw0[14:12] = header_r.traffic_class;
     dw0[17:16] = encoded_length[9:8];
     dw0[19:18] = header_r.address_type;
-    dw0[21:20] = header_r.attributes[2:1];
+    dw0[21:20] = header_r.attributes[1:0];
     dw0[22]    = header_r.poisoned;
     dw0[23]    = header_r.digest_present;
     dw0[31:24] = encoded_length[7:0];
