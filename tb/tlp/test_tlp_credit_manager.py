@@ -565,3 +565,145 @@ async def error_never_fires_for_an_infinite_pool(dut):
             f"infinite pool raised error_o for a {credits}-credit request")
         assert int(dut.request_ready.value) == 1
     dut.request_valid.value = 0
+
+
+# ---------------------------------------------------------------------------
+# M-3a-1 -- qualified from origin/main (aca4780).
+#
+# main's rewrite of this file adds all_starvation_combinations_and_saturating_guards
+# and was never simulated (main's own src/tlp/README.md: "The associated changes
+# were not simulated when recorded").  The scenario is adopted, the numeric values
+# are not: main advertised every pool 7 and requested exactly 1 data credit, which
+# leaves the header and the data quantity numerically indistinguishable at every
+# assertion point, so a design that crossed the two passes it unchanged -- and that
+# is the very property the test claims to prove.  The values below are forced apart
+# and are taken from SPEC_PREDICTIONS_M3A1.md SSI.4, which pre-dates this test on
+# disk.
+#
+# The golden, per pool.  Requirement is 1 header unit for every TLP (Table 2-36
+# p.136) plus r data credits, one credit being 4 DW (SS2.6.1 p.135).  Transmission
+# is permitted iff, for each type,
+#
+#     (CREDIT_LIMIT - (CREDITS_CONSUMED + required)) mod 2^[Field Size]
+#         <= 2^[Field Size] / 2                            (SS2.6.1.1 p.140)
+#
+# and CREDITS_CONSUMED advances only "for each TLP the Transaction Layer allows to
+# pass the Flow Control gate for Transmission" (p.139).
+#
+#   block  advertise h,d  r  spec header          spec data              outcome
+#   a      1, 2           5  (1-1)=0    <= 128    (2-5)%4096=4093 > 2048  block
+#   b      0, 6           5  (0-1)%256=255 > 128  (6-5)=1         <= 2048 block
+#   c      1, 2           2  (1-1)=0    <= 128    (2-2)=0         <= 2048 grant
+#   d      -              2  (1-2)%256=255 > 128  (2-4)%4096=4094 > 2048  block
+#
+# Outstanding unused credit never exceeds 6, far inside the 127/2047 cap of
+# SS2.6.1 p.138, so the "remaining >= required" form the RTL uses is exactly
+# equivalent to the half-space test above (SPEC_PREDICTIONS_CREDIT.md SSJ).
+# ---------------------------------------------------------------------------
+
+
+async def _update_pool(dut, header_in, data_in, header, data):
+    """One UpdateFC strobe that changes only the pool under test's two fields."""
+    getattr(dut, header_in).value = header
+    getattr(dut, data_in).value = data
+    dut.fc_update_valid.value = 1
+    await RisingEdge(dut.clk_i)
+    dut.fc_update_valid.value = 0
+    await Timer(1, units="ps")
+
+
+@cocotb.test()
+async def all_starvation_combinations_and_saturating_guards(dut):
+    """Independent header/data blocking on all three pools, and the guard that a
+    blocked request cannot wrap either counter.
+
+    No other test in this file ever blocks a Non-Posted or a Completion request
+    against a finite pool: NP appears only as a granted control or as an infinite
+    pool, CPL only as a grant or as infinite.  The four branch outcomes
+    'nph/npd/cplh/cpld unavailable' at tlp_credit_manager.sv:161-174 are reached
+    here and nowhere else.
+
+    Every pool is initialised finite at 7 before any short-valued update.  A 0
+    delivered AT initialisation would latch that pool infinite (SS2.6.1 p.138,
+    footnote 33 p.137) and make every starvation case below vacuous.
+
+    A finite Completion advertisement is a conformance case, not merely a
+    defensive one: Table 2-37 p.137-138 requires infinite CPLH/CPLD only of a Root
+    Complex that does not support peer-to-peer traffic between all Root Ports, and
+    p.138 says one that does "may optionally advertise non-infinite Completion
+    credits".  An Endpoint below a Switch faces a finite advertiser.
+    """
+    await _reset_and_init(dut, 7, 7, 7, 7, 7, 7)
+
+    pools = [
+        (POSTED, "ph", "pd", "ph_av", "pd_av"),
+        (NON_POSTED, "nph", "npd", "nph_av", "npd_av"),
+        (COMPLETION, "cplh", "cpld", "cplh_av", "cpld_av"),
+    ]
+    for traffic_class, header_in, data_in, header_out, data_out in pools:
+        # Every pool re-advertised at 7, so only the pool under test is short and
+        # a crossed pool cannot coincidentally pass.
+        for name in ("ph", "nph", "cplh", "pd", "npd", "cpld"):
+            getattr(dut, name).value = 7
+
+        # -- Header available, data short.  Blocking is the data's doing alone.
+        await _update_pool(dut, header_in, data_in, 1, 2)
+        dut.request_class.value = traffic_class
+        dut.request_data_credits.value = 5
+        dut.request_valid.value = 1
+        await Timer(1, units="ps")
+        assert int(dut.request_ready.value) == 0, (
+            f"class {traffic_class}: 2 data credits must not satisfy a 5-credit "
+            "request while its header credit is available")
+        assert int(dut.blocked.value) == 1
+        assert int(getattr(dut, header_out).value) == 1, (
+            f"class {traffic_class}: header remainder should be 1")
+        assert int(getattr(dut, data_out).value) == 2, (
+            f"class {traffic_class}: data remainder should be 2")
+
+        # -- Data available, header absent.  Blocking is the header's doing alone,
+        #    and the requirement is unchanged at 5, which the data now covers.
+        await _update_pool(dut, header_in, data_in, 0, 6)
+        assert int(dut.request_ready.value) == 0, (
+            f"class {traffic_class}: an exhausted header pool must block even "
+            "with 6 data credits against a 5-credit request")
+        assert int(dut.blocked.value) == 1
+        assert int(getattr(dut, header_out).value) == 0
+        assert int(getattr(dut, data_out).value) == 6
+
+        # -- Both sufficient, and the data requirement met exactly.  One header
+        #    credit and exactly request_data_credits_i data credits are consumed,
+        #    once.  The data requirement exceeds the header remainder, so a design
+        #    that tested the two against each other's pool cannot pass here.
+        await _update_pool(dut, header_in, data_in, 1, 2)
+        dut.request_data_credits.value = 2
+        await Timer(1, units="ps")
+        assert int(dut.request_ready.value) == 1, (
+            f"class {traffic_class}: 1 header credit and exactly 2 of 2 data "
+            "credits are sufficient")
+        await RisingEdge(dut.clk_i)
+        dut.request_valid.value = 0
+        await Timer(1, units="ps")
+        assert int(getattr(dut, header_out).value) == 0, (
+            f"class {traffic_class}: exactly one header credit must be consumed")
+        assert int(getattr(dut, data_out).value) == 0, (
+            f"class {traffic_class}: exactly request_data_credits_i data credits "
+            "must be consumed, not one")
+
+        # -- A blocked request consumes nothing, so neither zero-valued counter
+        #    can wrap.  Held across several edges: a check-time consumption would
+        #    drive each remainder to its all-ones value, not leave it at 0.
+        dut.request_valid.value = 1
+        for _ in range(3):
+            await RisingEdge(dut.clk_i)
+            await Timer(1, units="ps")
+            assert int(dut.request_ready.value) == 0
+            assert int(dut.blocked.value) == 1
+            assert int(getattr(dut, header_out).value) == 0, (
+                f"class {traffic_class}: a blocked request wrapped the header "
+                "counter")
+            assert int(getattr(dut, data_out).value) == 0, (
+                f"class {traffic_class}: a blocked request wrapped the data "
+                "counter")
+        dut.request_valid.value = 0
+        await Timer(1, units="ps")
