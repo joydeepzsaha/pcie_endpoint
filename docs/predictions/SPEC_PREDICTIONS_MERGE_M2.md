@@ -165,7 +165,7 @@ This counterfactual will be **run and recorded**, on that single target, as the 
 that the goldens are spec-derived rather than DUT-mirrored.
 
 **P3b — actual gate delta after Commit 2 (RTL + standalone goldens together): EMPTY.**
-`M2_gate_fix.txt` is predicted **byte-identical** to `M2_gate_before.txt`, md5 and all.
+`docs/gates/M2_gate_fix.txt` is predicted **byte-identical** to `docs/gates/M2_gate_before.txt`, md5 and all.
 Attr placement is wiring, not timing: no sim time moves, no test changes status. The one
 test that observes attr is corrected in lockstep, and the other three standalone goldens
 are exercised only at `attr=0`, where both conventions produce the same zero bits.

@@ -132,7 +132,7 @@ message surface being a closed compile-time set, not a convenience.
 
 ## §3 P2 — the gate prediction
 
-**Claim: the post-merge gate is byte-identical to `M2_gate_anchor.txt`**
+**Claim: the post-merge gate is byte-identical to `docs/gates/M2_gate_anchor.txt`**
 (md5 `a411e2317a2a6dd954225523ce3c9652`), **42 targets / 307 tests / 349 rows**, all PASS,
 `verilate_tlp_cpl_timeout_off` and `verilate_tlp_request_tracker` both ending at
 **580.00 ns**, zero Verilator diagnostics.
@@ -149,7 +149,7 @@ Byte-identity is therefore predicted **because the policy takes `ours` on both**
 because `main` contributed nothing to the measured surface. The prediction and the
 reasoning are separable, and only the reasoning needed correcting.
 
-**Verdict command:** `diff M3_gate_after.txt M3_gate_before.txt && echo IDENTICAL`, plus
+**Verdict command:** `diff docs/gates/M3_gate_after.txt docs/gates/M3_gate_before.txt && echo IDENTICAL`, plus
 `md5sum` of both against `a411e2317a2a6dd954225523ce3c9652`.
 
 ---

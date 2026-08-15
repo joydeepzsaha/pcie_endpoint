@@ -297,7 +297,7 @@ is stop trigger 4 and ends the rung.
 
 ## 4. P4 — the gate delta
 
-Exactly two lines of `M3A1_gate_before.txt` move, both inside
+Exactly two lines of `docs/gates/M3A1_gate_before.txt` move, both inside
 `verilate_tlp_credit_manager`, and nothing else in the file changes:
 
 1. **One `T` row added**, immediately after
@@ -393,7 +393,7 @@ defect report about the RTL, not a bench decision.
 
 | # | trigger | fires if |
 | --- | --- | --- |
-| 1 | pre-gate not 42/307 all PASS, or md5 ≠ `a411e2317a2a6dd954225523ce3c9652`, or a build diagnostic | `M3A1_gate_before.txt` differs from `M3_gate_after.txt` in any byte |
+| 1 | pre-gate not 42/307 all PASS, or md5 ≠ `a411e2317a2a6dd954225523ce3c9652`, or a build diagnostic | `docs/gates/M3A1_gate_before.txt` differs from `docs/gates/M3_gate_after.txt` in any byte |
 | 2 | test depends on RTL absent here | **already answered no** — §0.2 |
 | 3 | derivation unsettleable from Base 2.1 | **already answered no** — §1.1 is verbatim normative text |
 | 4 | result contradicts P3 | any FAIL in either run of §3 |

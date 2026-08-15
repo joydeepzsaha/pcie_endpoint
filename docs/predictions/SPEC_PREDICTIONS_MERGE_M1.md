@@ -87,7 +87,7 @@ does not renumber, **no ordinal in 0–7 changes**.
 ## §1 P1 — the regression is byte-identical
 
 **Claim.** The normalised run record is **identical**, byte for byte, across both RTL
-commits: `M1_gate_before.txt` ≡ `M1_gate_widen.txt` ≡ `M1_gate_reserve.txt`.
+commits: `docs/gates/M1_gate_before.txt` ≡ `docs/gates/M1_gate_widen.txt` ≡ `docs/gates/M1_gate_reserve.txt`.
 
 **What is compared.** Per target, two record kinds:
 
@@ -138,8 +138,8 @@ awk '/TESTS=[0-9]+ PASS=[0-9]+ FAIL=[0-9]+ SKIP=[0-9]+/ \
 **The verdict command.**
 
 ```bash
-diff M1_gate_before.txt M1_gate_widen.txt   && echo IDENTICAL
-diff M1_gate_widen.txt  M1_gate_reserve.txt && echo IDENTICAL
+diff docs/gates/M1_gate_before.txt docs/gates/M1_gate_widen.txt   && echo IDENTICAL
+diff docs/gates/M1_gate_widen.txt  docs/gates/M1_gate_reserve.txt && echo IDENTICAL
 ```
 
 **Falsified by:** any non-empty `diff`.

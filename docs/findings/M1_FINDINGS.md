@@ -37,17 +37,17 @@ be the wrong target.
 **The verdict:**
 
 ```
-$ diff M1_gate_before.txt M1_gate_widen.txt   && echo IDENTICAL
+$ diff docs/gates/M1_gate_before.txt docs/gates/M1_gate_widen.txt   && echo IDENTICAL
 IDENTICAL
-$ diff M1_gate_widen.txt  M1_gate_reserve.txt && echo IDENTICAL
+$ diff docs/gates/M1_gate_widen.txt  docs/gates/M1_gate_reserve.txt && echo IDENTICAL
 IDENTICAL
-$ diff M1_gate_before.txt M1_gate_reserve.txt && echo IDENTICAL
+$ diff docs/gates/M1_gate_before.txt docs/gates/M1_gate_reserve.txt && echo IDENTICAL
 IDENTICAL
 
 $ md5sum M1_gate_*.txt
-6492c8ab8f7f0bd3ac533db6ddb3b0d3  M1_gate_before.txt
-6492c8ab8f7f0bd3ac533db6ddb3b0d3  M1_gate_reserve.txt
-6492c8ab8f7f0bd3ac533db6ddb3b0d3  M1_gate_widen.txt
+6492c8ab8f7f0bd3ac533db6ddb3b0d3  docs/gates/M1_gate_before.txt
+6492c8ab8f7f0bd3ac533db6ddb3b0d3  docs/gates/M1_gate_reserve.txt
+6492c8ab8f7f0bd3ac533db6ddb3b0d3  docs/gates/M1_gate_widen.txt
 ```
 
 **One md5 across all three.** 42 targets / 305 tests / 305 PASS / 0 FAIL / 0 SKIP in

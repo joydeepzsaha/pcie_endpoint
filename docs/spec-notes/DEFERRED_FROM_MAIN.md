@@ -120,7 +120,7 @@ Recover with `git checkout aca4780 -- tb/endpoint/` once §1.2 has landed.
 messages.** A competing rewrite of the same file: it hoists `_advertise` /
 `_reset_and_init` above the first test and adds
 `all_starvation_combinations_and_saturating_guards` — a 19th test on
-`verilate_tlp_credit_manager`, which `M2_gate_anchor.txt` records at 18.
+`verilate_tlp_credit_manager`, which `docs/gates/M2_gate_anchor.txt` records at 18.
 
 The new test walks all three pools proving independent header-vs-data blocking and that a
 blocked request cannot wrap either zero-valued counter. It initialises every pool at 7
