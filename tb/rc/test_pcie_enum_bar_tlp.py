@@ -7,7 +7,7 @@
 ⭐ E1 IS THE HEADLINE OF STAGE C: an NVMe-like endpoint -- a 64-bit prefetchable
 BAR0/1 pair, one probe answered CRS before SC -- enumerated end to end from flow
 control initialisation to enum_done_o, with every one of the seventeen emitted
-TLPs asserted on the wire against SPEC_PREDICTIONS_ENUM.md SSE.8, PAYLOAD DWORDS
+TLPs asserted on the wire against docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.8, PAYLOAD DWORDS
 INCLUDED, and every captured value against goldens pinned before the RTL existed.
 It runs twice: saturated credit, and under the Table 2-37 minimum drip.
 
@@ -35,7 +35,7 @@ RTL cited:
   timer runs from ALLOCATION ........ src/tlp/tlp_request_tracker.sv:39
   credit gate, downstream of it ..... src/tlp/tlp_layer.sv:280
   orphan-data report, once per Dword  src/rc/pcie_rc_if.sv:403-405
-Full derivation: SPEC_PREDICTIONS_ENUM.md SSE.
+Full derivation: docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.
 """
 
 import cocotb

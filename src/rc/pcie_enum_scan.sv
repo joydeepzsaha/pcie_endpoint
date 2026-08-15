@@ -289,7 +289,7 @@ module pcie_enum_scan
   //
   // The probe and header-type phases get their OWN response states rather than
   // sharing one with a phase flag, so that the phase-dependent policy of
-  // SPEC_PREDICTIONS_ENUM.md SSD.5 maps one-to-one onto the RTL and a reader can
+  // docs/predictions/SPEC_PREDICTIONS_ENUM.md SSD.5 maps one-to-one onto the RTL and a reader can
   // check the TXN_UR rows against the table by eye.
   // -------------------------------------------------------------------------
   typedef enum logic [2:0] {
@@ -356,7 +356,7 @@ module pcie_enum_scan
 
         S_PROBE_CMD: if (cmd_ready) state_r <= S_PROBE_RSP;
 
-        // ---- PROBE policy. SPEC_PREDICTIONS_ENUM.md SSD.5, left column. -----
+        // ---- PROBE policy. docs/predictions/SPEC_PREDICTIONS_ENUM.md SSD.5, left column. -----
         S_PROBE_RSP: begin
           if (rsp_valid) begin
             case (rsp_outcome)

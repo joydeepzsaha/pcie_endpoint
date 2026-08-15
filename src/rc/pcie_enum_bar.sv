@@ -184,7 +184,7 @@
 // SS ONE FAULT SSE DOES NOT NAME
 // ===========================================================================
 //
-// ENUM_ERR_BAR_ADDR32 is beyond SPEC_PREDICTIONS_ENUM.md SSE's named fault set,
+// ENUM_ERR_BAR_ADDR32 is beyond docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE's named fault set,
 // and is recorded here rather than left implicit. MEM_BAR_BASE is 64-bit, and
 // setting it above 4 GB is a legitimate parameterization for a device with only
 // 64-bit BARs. A 32-BIT BAR CANNOT HOLD SUCH AN ADDRESS. The alternative to

@@ -3,7 +3,7 @@
 **Written 2026-07-31, at `8c4e3f9`** (= `f49d73d` + D-0 recon + D-P predictions), on
 `kourosh/dev`. Doc-only.
 
-**Purpose.** `SPEC_PREDICTIONS_STAGE_D.md` was written spec-first and committed before
+**Purpose.** `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` was written spec-first and committed before
 this pass — deliberately, so that a practitioner text could not shape which spec
 passages got read. This document is the *"what did I miss"* pass: every claim, ordering
 rule, corner case or worked-example behaviour in the relevant MindShare chapters that
@@ -34,14 +34,14 @@ section, pp. 155–158, and *Base Address Registers*, pp. 126–135).
 ### ⚠️ Standing rule, restated
 
 **MindShare is background, never golden.** Nothing in this document becomes a constant,
-a golden, or a cited anchor. `SPEC_PREDICTIONS_STAGE_D.md` §0.1 already lists MindShare
+a golden, or a cited anchor. `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` §0.1 already lists MindShare
 under **Never golden**, and that is unchanged. Where an item below caused a prediction
 edit, the edit carries the **normative** anchor (`[BASE]` / `[PCI30]`) that this pass
 chased the claim back to — the MindShare page is recorded here only, as the thing that
 prompted the look.
 
 The tag `[MS]` is used below for MindShare page references. **`[MS]` is not a citation
-of record and must never appear in `SPEC_PREDICTIONS_STAGE_D.md` or in a test.**
+of record and must never appear in `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` or in a test.**
 
 **The title's "3.0" means PCIe Gen 3, not the PCI 3.0 spec.** These have been confused
 before in this project. `[MS]` and `[PCI30]` are unrelated documents.
@@ -204,7 +204,7 @@ not an RTL defect:** nothing in `src/rc/` or the TL consumes a completion's Comp
 load-bearing the moment a Stage D golden tries to use it as a routing discriminator —
 which is precisely what Trap B predicts someone will reach for.
 
-**Edit made:** new **P5.6** in `SPEC_PREDICTIONS_STAGE_D.md` §5, plus an amendment to
+**Edit made:** new **P5.6** in `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` §5, plus an amendment to
 §8.2 Trap B. Anchor cited: `[BASE]` §2.2.9 p.99.
 
 ### C7 — ⚠️ A Type 1 header has **two** BARs, not six → **PREDICTION EDIT**
@@ -233,7 +233,7 @@ Base-Limit registers.
 That failure is silent in the worst way: the corruption lands *after* the routing it
 breaks was already established, so the probe transactions that preceded it still passed.
 
-**Edit made:** new **P4.7** in `SPEC_PREDICTIONS_STAGE_D.md` §4, cross-referenced from
+**Edit made:** new **P4.7** in `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` §4, cross-referenced from
 §10. Anchor cited: `[BASE]` §7.5.3.1 p.493 vs §7.5.2.1.
 
 ### C8 — The provisional-Subordinate protocol: §5.4's single 18h write is not the general algorithm → **PREDICTION EDIT**
@@ -269,7 +269,7 @@ Two consequences:
    that the *transaction protocol* does not scale either: Stage E's depth-first walk needs
    the two-phase write, so §5.4's shape is Stage-D-specific in two independent ways.
 
-**Edit made:** new **P5.7** in `SPEC_PREDICTIONS_STAGE_D.md` §5, with §5.4's ordering
+**Edit made:** new **P5.7** in `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` §5, with §5.4's ordering
 claim marked as implementation-scoped. Anchor cited: `[BASE]` §7.3.3 p.481
 (implementation-specific assignment) — the same anchor P2.1 already uses.
 
@@ -461,7 +461,7 @@ bridge that stalls, this is the question that will have to be answered properly.
 
 Stated so the absence is visible rather than looking like an oversight.
 
-- **No constant, golden or anchor in `SPEC_PREDICTIONS_STAGE_D.md` derives from
+- **No constant, golden or anchor in `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` derives from
   MindShare.** The four edits (C6–C9) each carry a `[BASE]` anchor located during this
   pass; MindShare's role was to prompt the look, and that role is recorded here only.
 - **No `[MS]` citation was added to any prediction, test or RTL comment.**

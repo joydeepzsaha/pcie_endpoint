@@ -45,7 +45,7 @@ deliberate **control**, not as LTSSM coverage. It is the per-commit regression
 anchor (`RECON_commit2a.md:51-52`: *"the per-commit regression anchor cited in
 T12/U9/V4 (LTSSM layer; outside this commit's blast radius)"*), and it is
 counted as a separate line item in the total
-(`SPEC_PREDICTIONS_CPL_TIMEOUT.md:269-276`). The other 11 `tb_ltssm` targets and
+(`docs/predictions/SPEC_PREDICTIONS_CPL_TIMEOUT.md §G`). The other 11 `tb_ltssm` targets and
 the PHY targets remain out. **The first draft of this recon wrongly excluded the
 control** — see §1.1.
 
@@ -108,7 +108,7 @@ trusted baseline is 27 targets / 151 tests, not 152 … The '152' in the brief i
 bookkeeping slip of one"*. That reconciliation is internally consistent **for the
 TLP+RC set alone** and is not wrong about that set — but it mis-attributed the
 prior brief's 152, which was never 152-within-TLP+RC. It was 151 + the control,
-exactly as `SPEC_PREDICTIONS_CPL_TIMEOUT.md:269-276` tabulates it:
+exactly as `docs/predictions/SPEC_PREDICTIONS_CPL_TIMEOUT.md §G` tabulates it:
 
 ```
 | Total                     | 27 | 151 |
@@ -235,7 +235,7 @@ write flows and nothing ever blocks. A starvation test built on `NPD=0` would be
 a **vacuous pass**.
 
 The real starvation vector is a *finite* advertisement with no replenishment.
-See `SPEC_PREDICTIONS_ENUM.md` §0.1 and §2.4 (**P-NPD-INF** / **P-NPD1-STALL**),
+See `docs/predictions/SPEC_PREDICTIONS_ENUM.md` §0.1 and §2.4 (**P-NPD-INF** / **P-NPD1-STALL**),
 which supersede this paragraph. The spec-minimum credit vector, and the
 non-obvious requirement that the UpdateFC drip advertise a *cumulative*
 increasing count rather than a repeated `1`, are fixed there in §2.3.
@@ -465,7 +465,7 @@ the `.core` shape slightly and is easier to set up in 2b-1 than to retrofit.
    its own doc-fix commit ahead of any 2b-1 RTL, per the `32850a4` precedent, so
    the 2b-1 diff stays purely additive.
 
-Phase 1 output is `SPEC_PREDICTIONS_ENUM.md`.
+Phase 1 output is `docs/predictions/SPEC_PREDICTIONS_ENUM.md`.
 
 ---
 

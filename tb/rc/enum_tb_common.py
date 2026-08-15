@@ -46,7 +46,7 @@ Everything here is hand-derived from the specification:
   Config Space Type 0 header offsets .. PCIe Base 2.1 Figure 7-5 p.491
 
 Nothing here is read back from a DUT.  The 128-bit RQ descriptor values these
-builders produce are pinned independently in SPEC_PREDICTIONS_ENUM.md SS3.4,
+builders produce are pinned independently in docs/predictions/SPEC_PREDICTIONS_ENUM.md SS3.4,
 which was committed before any of this RTL existed; `assert_rq_descriptor`
 below is what ties the two together.
 """
@@ -61,7 +61,7 @@ RQ_CFG_WRITE0 = 0b1010
 # Stage D-2: the Type 1 pair.  Exactly one bit (bit 0) away from the Type 0
 # encodings -- _selftest_type1_one_bit() below pins that distance, because it
 # is what makes a mistyped golden actively wrong rather than merely different
-# (SPEC_PREDICTIONS_STAGE_D.md SS8.1, Trap A).
+# (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.1, Trap A).
 RQ_CFG_READ1 = 0b1001
 RQ_CFG_WRITE1 = 0b1011
 
@@ -381,7 +381,7 @@ def cfg_wire_dw0(write, length_dw=1, tc=0, attr=0, type1=False):
 
 
 def _selftest_type1_one_bit():
-    """Stage D-2 builder self-assert (SPEC_PREDICTIONS_STAGE_D.md SS8.1, Trap A).
+    """Stage D-2 builder self-assert (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.1, Trap A).
 
     The Type 0 and Type 1 goldens must sit EXACTLY one bit apart, at both
     levels -- descriptor req_type 1000/1010 vs 1001/1011, wire dw0[4:0] 00100
@@ -742,7 +742,7 @@ def err_name(value):
 
 # The shipped allocator geometry -- pcie_enum_bar's parameter defaults.  The
 # addresses every BAR test asserts derive from these, and they were pinned in
-# SPEC_PREDICTIONS_ENUM.md SSE.7.4 before the RTL existed.
+# docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.7.4 before the RTL existed.
 MEM_BAR_BASE = 0x0000_0000_8000_0000
 MEM_BAR_WINDOW = 0x0000_0000_1000_0000
 
@@ -957,7 +957,7 @@ def assert_cfg_tlp_on_wire(req, *, write, reg_num, first_be, tag, what="",
 
     Base 2.1 SS2.2.7 p.79 fixes Length to 1 Dword, Last DW BE to 0000b and
     TC/Attr/AT to zero for every Configuration Request; Figure 2-18 p.80 fixes
-    the third header Dword's BDF packing.  SPEC_PREDICTIONS_ENUM.md SS3.4,
+    the third header Dword's BDF packing.  docs/predictions/SPEC_PREDICTIONS_ENUM.md SS3.4,
     SSD.4 and SSE.8 pin the resulting values.
 
     require_device0 is opt-IN, not the default.  It is the SS7.3.1 p.479
@@ -966,7 +966,7 @@ def assert_cfg_tlp_on_wire(req, *, write, reg_num, first_be, tag, what="",
 
     type1 (Stage D) selects the CFG1 DW0 golden -- dw0[4:0] = 00101, one bit
     from Type 0, which is exactly why the DW0 compare here is the WHOLE Dword
-    (Trap A, SPEC_PREDICTIONS_STAGE_D.md SS8.1).  bus overrides the routing
+    (Trap A, docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.1).  bus overrides the routing
     Dword's bus field (default: the direct-attach BUS); Device/Function stay 0
     on every bus level by construction (P5.3).
     """
@@ -993,7 +993,7 @@ def assert_cfg_tlp_on_wire(req, *, write, reg_num, first_be, tag, what="",
 # The golden device the enumeration benches model, and its Type 0 header.
 #
 # One device description, not one per bench.  Commit D's acceptance test
-# enumerates this same device end to end (SPEC_PREDICTIONS_ENUM.md SSE.8), so
+# enumerates this same device end to end (docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.8), so
 # consolidating here is the "before a third copy" case the 2b-3 brief names.
 # ---------------------------------------------------------------------------
 SCAN_BUS = 0x01
@@ -1294,7 +1294,7 @@ def assert_sequence(observed, golden, what="", render=repr):
 # exists from the first line of this model, because at reset Secondary and
 # Subordinate are 00h and that arm is what makes Trap C self-detecting: a
 # wrongly-typed CfgWr1 for the bus-number write is answered UR automatically,
-# with no test having to anticipate the mistake (SPEC_PREDICTIONS_STAGE_D.md
+# with no test having to anticipate the mistake (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md
 # SS8.3).
 #
 # !! LATENCIES ARE NON-ZERO AND UNEQUAL (Trap D, SS8.4).  Stage D's headline

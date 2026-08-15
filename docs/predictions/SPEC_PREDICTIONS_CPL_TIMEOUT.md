@@ -5,7 +5,7 @@ Companion to `RECON_cpl_timeout.md`. Written **before** any RTL was edited and b
 was run. The "Actual" column was filled in afterwards; every falsification is called out in §F.
 
 Pattern note: the established convention in this repo is a repo-root `SPEC_PREDICTIONS_<AREA>.md`
-(cf. `SPEC_PREDICTIONS_RQ_RC.md`), not a file under `tb/tlp/`. This follows that.
+(cf. `docs/predictions/SPEC_PREDICTIONS_RQ_RC.md`), not a file under `tb/tlp/`. This follows that.
 
 ---
 
@@ -14,7 +14,7 @@ Pattern note: the established convention in this repo is a repo-root `SPEC_PREDI
 **All quotations below are read from the PDF on this server**, `~/openPCIE/0.doc/PCIE-base-spec.Rev2-1.pdf`
 (PCI Express Base Specification, Rev. 2.1 / "REV. 2.01" in the running header), extracted with
 `pdftotext -layout`. Page numbers are the spec's own printed page numbers. This is a **primary
-read**, not the off-server transcription discipline that `SPEC_PREDICTIONS_RQ_RC.md` had to use for
+read**, not the off-server transcription discipline that `docs/predictions/SPEC_PREDICTIONS_RQ_RC.md` had to use for
 PG213.
 
 ### A.1 §2.8 "Completion Timeout Mechanism", p. 152

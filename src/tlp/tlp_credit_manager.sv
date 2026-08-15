@@ -29,7 +29,7 @@
 // equivalent given the spec's own cap of 2047 data / 127 header outstanding
 // unused credits (SS2.6.1 p.138); the derivation, including the single boundary
 // where they would differ and why it is unreachable, is in
-// SPEC_PREDICTIONS_CREDIT.md SSJ.
+// docs/predictions/SPEC_PREDICTIONS_CREDIT.md SSJ.
 //
 // error_o -- IMPLEMENTATION-DEFINED, NOT A SPEC-CONFORMANCE SIGNAL.
 //
@@ -61,7 +61,7 @@
 // fc_update_valid_i is driven by (update_fc || fc_init_done)
 // (pcie_datalink_layer.sv:176) and the InitFC1/InitFC2 cases never assert
 // update_fc, so the first strobe after reset is the initial advertisement and
-// every later one is an update.  See SPEC_PREDICTIONS_CREDIT.md SSI.2.
+// every later one is an update.  See docs/predictions/SPEC_PREDICTIONS_CREDIT.md SSI.2.
 //
 module tlp_credit_manager
   import tlp_pkg::*;

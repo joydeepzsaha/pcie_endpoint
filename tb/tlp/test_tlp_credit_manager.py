@@ -50,7 +50,7 @@ async def exact_short_update_and_independent_pools(dut):
 #
 # The module tracks CREDIT_LIMIT (cumulative advertised, loaded from fc_*_i) and
 # CREDITS_CONSUMED (cumulative consumed) separately and gates on their
-# difference.  Everything below is new coverage; see SPEC_PREDICTIONS_CREDIT.md
+# difference.  Everything below is new coverage; see docs/predictions/SPEC_PREDICTIONS_CREDIT.md
 # SSI-SSK.  The first fc_update_valid strobe after reset is FC initialisation,
 # every later strobe is an UpdateFC (SSI.2).
 # ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ async def cumulative_counters_wrap_correctly(dut):
     Advertisements stay inside the spec's cap of 127 header / 2047 data
     outstanding unused credits (SS2.6.1 p.138), which is the precondition the
     simple 'remaining >= required' comparison relies on
-    (SPEC_PREDICTIONS_CREDIT.md SSJ)."""
+    (docs/predictions/SPEC_PREDICTIONS_CREDIT.md SSJ)."""
     raw_limit_ph, raw_limit_pd = 100, 1500
     raw_consumed_ph, raw_consumed_pd = 0, 0
     await _reset_and_init(dut, raw_limit_ph, raw_limit_pd, 200, 3000, 200, 3000)
@@ -577,7 +577,7 @@ async def error_never_fires_for_an_infinite_pool(dut):
 # leaves the header and the data quantity numerically indistinguishable at every
 # assertion point, so a design that crossed the two passes it unchanged -- and that
 # is the very property the test claims to prove.  The values below are forced apart
-# and are taken from SPEC_PREDICTIONS_M3A1.md SSI.4, which pre-dates this test on
+# and are taken from docs/predictions/SPEC_PREDICTIONS_M3A1.md SSI.4, which pre-dates this test on
 # disk.
 #
 # The golden, per pool.  Requirement is 1 header unit for every TLP (Table 2-36
@@ -598,7 +598,7 @@ async def error_never_fires_for_an_infinite_pool(dut):
 #
 # Outstanding unused credit never exceeds 6, far inside the 127/2047 cap of
 # SS2.6.1 p.138, so the "remaining >= required" form the RTL uses is exactly
-# equivalent to the half-space test above (SPEC_PREDICTIONS_CREDIT.md SSJ).
+# equivalent to the half-space test above (docs/predictions/SPEC_PREDICTIONS_CREDIT.md SSJ).
 # ---------------------------------------------------------------------------
 
 

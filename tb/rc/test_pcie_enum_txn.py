@@ -73,7 +73,7 @@ FIRST_TAG = 0x5A
 #   * Tags are non-zero and increment, so a completion can be aimed at the wrong
 #     tag and be seen to be ignored.
 #
-# Mutations SM-1, SM-2, SM-4 (SPEC_PREDICTIONS_ENUM.md SS7) are seeded into this
+# Mutations SM-1, SM-2, SM-4 (docs/predictions/SPEC_PREDICTIONS_ENUM.md SS7) are seeded into this
 # class during verification and each must fail at least one test below.  SM-3
 # (orphan-data burst omitted) is NOT expressible here -- the burst is
 # rc_protocol_error_o, a pcie_rq_rc_top output the primitive deliberately does
@@ -410,7 +410,7 @@ async def e2_config_write_successful_completion(dut):
 # ==========================================================================
 @cocotb.test()
 async def e3_descriptors_match_committed_goldens(dut):
-    """Every emitted descriptor equals the hex pinned in SPEC_PREDICTIONS_ENUM.md SS3.4.
+    """Every emitted descriptor equals the hex pinned in docs/predictions/SPEC_PREDICTIONS_ENUM.md SS3.4.
 
     Those literals were written and committed at 0d96a63, before pcie_cfg_txn
     existed.  Comparing against them, rather than against a builder that could
@@ -440,7 +440,7 @@ async def e3_descriptors_match_committed_goldens(dut):
         req = sock.requests[index]
         assert req.desc == predicted, (
             f"case {index} (reg {reg:#04x}, {'write' if write else 'read'}): "
-            f"descriptor 0x{req.desc:032X} != SPEC_PREDICTIONS_ENUM.md SS3.4 "
+            f"descriptor 0x{req.desc:032X} != docs/predictions/SPEC_PREDICTIONS_ENUM.md SS3.4 "
             f"golden 0x{predicted:032X}")
         await sock.complete(req, status=CPL_SC, data=0x1234_0000 | index)
         rsp = await recv_rsp(dut)
@@ -856,7 +856,7 @@ async def e14_completion_without_bit30_does_not_end_the_request(dut):
 #
 # Structurally non-falsifiable pre-change: a type1=1 test cannot RUN against
 # the pre-change RTL because the port does not exist, so the compile fails
-# before any assertion can.  Recorded per SPEC_PREDICTIONS_STAGE_D.md SS7.4;
+# before any assertion can.  Recorded per docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS7.4;
 # the mutation set (type1 ignored / type1 inverted) carries the proof weight
 # instead, and the kill map lives in the commit message.
 # ==========================================================================
@@ -868,7 +868,7 @@ async def e15_cfg1_whole_descriptor_goldens(dut):
     (Base 2.1 Table 2-3 p.58 on the wire; pcie_rq_rc_pkg.sv:63-79 at the
     descriptor level).  assert_rq_descriptor compares the WHOLE word: a
     field-subset check would pass identically for a DUT that ignored the
-    input (Trap A, SPEC_PREDICTIONS_STAGE_D.md SS8.1).
+    input (Trap A, docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.1).
     """
     sock = await init(dut)
 

@@ -13,7 +13,7 @@ plus the two architectural decisions (§11) this document builds on.
 
 ### §0.1 Citation tags
 
-Carried unchanged from `SPEC_PREDICTIONS_ENUM.md` §0.2, so a reader moving between the
+Carried unchanged from `docs/predictions/SPEC_PREDICTIONS_ENUM.md` §0.2, so a reader moving between the
 two documents does not have to re-learn them.
 
 | tag | meaning |
@@ -202,7 +202,7 @@ From `[BASE]` §7.5.3 **Figure 7-6 p.492**. Offset **18h**, one Dword:
 | `[7:0]` | Primary Bus Number | 8 |
 
 **P4.1 — one whole-Dword write, no read-modify-write.** All four fields live in one
-Dword, so the Stage C precedent (`SPEC_PREDICTIONS_ENUM.md`; whole-DW config writes,
+Dword, so the Stage C precedent (`docs/predictions/SPEC_PREDICTIONS_ENUM.md`; whole-DW config writes,
 `first_be = 1111b`) covers it exactly. No new byte-enable behaviour is introduced.
 This also sidesteps `[PCI30]` §6.1 p.214's read-modify-write requirement for *reserved*
 bits — there are no reserved bits in this Dword.

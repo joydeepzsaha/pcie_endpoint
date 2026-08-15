@@ -567,7 +567,7 @@ ATTR_WIRE_POSITION = ((2, 10, "IDO"), (1, 21, "RO"), (0, 20, "NS"))
 
 # Same reasoning as M2-I1: 0 and 7 are fixed points and prove nothing; 1, 2 and
 # 4 are one-hot and pin each bit independently.
-# See SPEC_PREDICTIONS_MERGE_M2.md SS7.
+# See docs/predictions/SPEC_PREDICTIONS_MERGE_M2.md SS7.
 ATTR_DRIVE_SET = (1, 2, 4, 5, 7)
 
 
@@ -590,7 +590,7 @@ async def m2i2_completion_attr_decodes_from_spec_wire_positions(dut):
     assigns it, and the RC descriptor's Attributes field is checked for the same
     bit.  Round-trip cannot do this job: tlp_parser is the exact inverse of
     tlp_generator under both placements, so a loopback is the identity however
-    the bits sit.  See SPEC_PREDICTIONS_MERGE_M2.md SS6.
+    the bits sit.  See docs/predictions/SPEC_PREDICTIONS_MERGE_M2.md SS6.
     """
     loop = await init(dut)
     seen = 0

@@ -1,6 +1,6 @@
 # SYNTH_FINDINGS_S1 — the first synthesis evidence for this stack
 
-Companion to `SYNTH_PREDICTIONS_S1.md`, which was committed at `681df9f` **before**
+Companion to `docs/predictions/SYNTH_PREDICTIONS_S1.md`, which was committed at `681df9f` **before**
 the first `synth_design` ran and has not been edited since. Where a prediction was
 wrong, this document says so; nothing was back-fitted.
 

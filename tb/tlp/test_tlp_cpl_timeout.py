@@ -5,7 +5,7 @@ default down to 64 so an expiry costs 64 cycles of simulation instead of 4096.
 The mechanism is identical at either value; verilate_tlp_cpl_timeout_default
 pins the real default separately.
 
-TIMING MODEL (predicted in SPEC_PREDICTIONS_CPL_TIMEOUT.md SSC, before any of
+TIMING MODEL (predicted in docs/predictions/SPEC_PREDICTIONS_CPL_TIMEOUT.md SSC, before any of
 this ran).  cycle_counter_r and scan_index_r both start at 0 on the first
 non-reset edge and increment every cycle, so scan_index_r == cycle_counter_r %
 TAG_COUNT.  With C = the cycle_counter_r value the tracker stamps into

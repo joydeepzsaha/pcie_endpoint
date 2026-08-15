@@ -527,7 +527,7 @@ async def i5_small_credit_drip(dut):
 async def i6_finite_npd_starves_writes_not_reads(dut):
     """A finite NPD with no replenishment stalls writes indefinitely, silently.
 
-    THE PREDICTED SIGNATURE (SPEC_PREDICTIONS_ENUM.md SS2.4, P-NPD1-STALL):
+    THE PREDICTED SIGNATURE (docs/predictions/SPEC_PREDICTIONS_ENUM.md SS2.4, P-NPD1-STALL):
     tx_fc_blocked_o held, ZERO error strobes anywhere, no TLP on the wire, and
     the primitive simply waiting.  It is indistinguishable from a hung FSM
     unless you know to look at tx_fc_blocked_o -- which is exactly why it is

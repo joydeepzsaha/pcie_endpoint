@@ -74,7 +74,7 @@ assertions below ran against an empty list" — see §5.
 
 **Vendor ID must not be `FFFFh`.** Absence is signalled by UR and by nothing
 else; a sentinel Vendor ID would let a silent-conversion bug pass unnoticed
-(§D of `SPEC_PREDICTIONS_ENUM.md`). The benches use `144Dh`/`A80Ah`.
+(§D of `docs/predictions/SPEC_PREDICTIONS_ENUM.md`). The benches use `144Dh`/`A80Ah`.
 
 > **This table is the Type 0 header, and only the Type 0 header.** Figure 7-5 is
 > the Type **00h** layout; a Function whose Header Type layout field reads `01h`
@@ -355,7 +355,7 @@ space, BARs, injection, observation, error surfaces, flow control, ordering — 
 a stage-shaped block would be the only stage-shaped thing in it. §11 extends §2,
 §12 extends §4.1, §14 extends §8.1, §15 extends §5, §17 extends §10.
 
-**Citation tags** are those of `SPEC_PREDICTIONS_STAGE_D.md` §0.1: `[BASE]` =
+**Citation tags** are those of `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` §0.1: `[BASE]` =
 PCI Express Base 2.1, `[PCI30]` = PCI Local Bus 3.0. Both are golden. MindShare
 is **never** golden and is cited nowhere below.
 
@@ -583,7 +583,7 @@ at 18h falls into **arm 3** and is answered UR — automatically, by a model
 written to the spec rather than to the expected trace. Nothing bespoke has to be
 asserted for the mutation to die.
 
-**Measured, not argued.** `SPEC_PREDICTIONS_STAGE_D.md` §7.4 records the Stage D
+**Measured, not argued.** `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` §7.4 records the Stage D
 integration mutation kill-set. Two of the four mutations died on the model's own
 physics rather than on an assertion written for them:
 
@@ -599,7 +599,7 @@ exactly as the paragraph above describes. Every one of these is the spec's own
 arm doing the work.
 
 > **Provenance.** The mutation *outcomes* are the measured column of
-> `SPEC_PREDICTIONS_STAGE_D.md` §7.4 — they cannot be re-derived by reading, only
+> `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` §7.4 — they cannot be re-derived by reading, only
 > by re-running the mutations. The *mechanism* each one died on is re-derivable
 > and anchored above: `enum_tb_common.py:1453-1469` (the dispatch),
 > `:1486-1504` (local claim), `:1303-1305` (the forced-apart bus numbers).
@@ -895,7 +895,7 @@ write has landed, so all seventeen take §12.1's arm 1. Derived by replaying
 `forward_unmodified_hits` and `device_type1_ur_hits` all **zero**, and
 `latency_byte_writes_ignored` at **one**.
 
-> ⚠️ **This corrects a recorded count.** `SPEC_PREDICTIONS_STAGE_D.md` §7.4's F3.1
+> ⚠️ **This corrects a recorded count.** `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` §7.4's F3.1
 > measured column says *"16 transforms"* alongside the correct *"twenty"* TLPs.
 > Those two cannot both hold: 20 emitted TLPs minus 3 Type 0 leaves 17 Type 1, and
 > every one is transformed. **17 is the derived value.** The acceptance test's own

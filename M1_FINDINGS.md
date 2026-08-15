@@ -4,7 +4,7 @@ Stage M-1, on `kourosh/dev` alone. Nothing from `origin/main` entered the tree.
 
 | commit | hash | content |
 |---|---|---|
-| predictions | `d26986a` | `SPEC_PREDICTIONS_MERGE_M1.md`, written before any RTL edit existed |
+| predictions | `d26986a` | `docs/predictions/SPEC_PREDICTIONS_MERGE_M1.md`, written before any RTL edit existed |
 | widen | `c2ff977` | `tlp_cmd_e` → `logic [3:0]`, member set unchanged at eight |
 | reserve | `d8df135` | `TLP_CMD_MSG` = 8, `TLP_CMD_MSG_DATA` = 9, declared not decoded |
 | findings | *this* | this file and the three gate records |

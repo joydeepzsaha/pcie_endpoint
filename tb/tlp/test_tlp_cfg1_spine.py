@@ -12,7 +12,7 @@ pre-change, tag_expects_data_o omits CFG_READ1, the CplD's payload trips the
 tracker's !expects_data && payload != 0 guard (tlp_request_tracker.sv:334-340),
 unexpected_completion_o goes high and no result ever fires.
 
-TRAP A (SPEC_PREDICTIONS_STAGE_D.md SS8.1): both spine tests compare the WHOLE
+TRAP A (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.1): both spine tests compare the WHOLE
 DW0 -- a Type 0 emission differs from Type 1 in exactly dw0[4:0] bit 0 and
 would slip past any field-subset assertion.
 

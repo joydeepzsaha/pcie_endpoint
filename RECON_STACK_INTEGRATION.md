@@ -432,7 +432,7 @@ itself, which is why `STACK_INVENTORY.md:684-686` reports Verilator printing
 future `.core`: `tb/dllp/tb_dllp.core:41-43`, `tb_dllp_receive.core:38,50` and
 `tb_dllp_transmit.core:36` all carry `--trace-fst`, so a new target that copies one
 of them *and* ends up with `COCOTB_SIM` defined would recreate the 66 MB dump.
-**Omit `--trace-fst`.** `SPEC_PREDICTIONS_ENUM.md:2092` already records this lesson
+**Omit `--trace-fst`.** `docs/predictions/SPEC_PREDICTIONS_ENUM.md §E.11` already records this lesson
 from the tb/rc side, and `tb/rc/tb_rc.core:393-397` states that `--trace-fst` was
 removed from every functional target and survives only in the two opt-in `_trace`
 targets, which are not part of the regression gate.

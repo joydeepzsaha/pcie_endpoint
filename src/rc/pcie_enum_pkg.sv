@@ -24,7 +24,7 @@
 // ===========================================================================
 //
 // Every value here carries one of the tags established in
-// SPEC_PREDICTIONS_ENUM.md SS0.2:
+// docs/predictions/SPEC_PREDICTIONS_ENUM.md SS0.2:
 //
 //   [BASE]      PCI Express Base Specification Rev 2.1, section + page. Golden.
 //   [PCI3]      PCI Local Bus Specification 3.0, section + page + line. Golden
@@ -53,7 +53,7 @@
 // 2.1 SS7.5.2.1 p.491-492 gives only usage policy and the 128-byte minimum.
 //
 // Those constants were deliberately NOT added ahead of the acquisition decision
-// recorded in SPEC_PREDICTIONS_ENUM.md SS9. They arrived with Commit 2b-3, by
+// recorded in docs/predictions/SPEC_PREDICTIONS_ENUM.md SS9. They arrived with Commit 2b-3, by
 // which time PCI 3.0 was on the shelf. Adding them earlier would have put
 // uncited numbers in the tree for an increment that did not use them.
 //
@@ -149,7 +149,7 @@ package pcie_enum_pkg;
   // that is Stage-H work.
   //
   // !! THE RELATIONSHIP IS THE REAL CONSTRAINT, NOT EITHER NUMBER.
-  // P-CRS-BUDGET (SPEC_PREDICTIONS_ENUM.md SS5.2):
+  // P-CRS-BUDGET (docs/predictions/SPEC_PREDICTIONS_ENUM.md SS5.2):
   //     CRS_RETRY_MAX * CRS_BACKOFF_CYCLES < CPL_TIMEOUT_CYCLES
   // If a retry storm can outlast the completion timeout, a device that is
   // merely slow to initialise becomes indistinguishable from a dead one.
@@ -183,7 +183,7 @@ package pcie_enum_pkg;
   // termination logic becomes relevant only when a switch can sit below the
   // port, which is Commits 3/4.
   //
-  // Full derivation: SPEC_PREDICTIONS_ENUM.md SSD.1.
+  // Full derivation: docs/predictions/SPEC_PREDICTIONS_ENUM.md SSD.1.
   localparam int unsigned DEVICES_TO_SCAN = 1;
 
   // Header Type lives in byte 2 of register 3 -- byte offset 0Eh.
@@ -200,7 +200,7 @@ package pcie_enum_pkg;
   // and every constant below carries a section + page + line anchor. The full
   // anchor table, and the page-numbering correction it needed (page markers in
   // this extraction are FOOTERS, so content after marker N is on page N+1), are
-  // in SPEC_PREDICTIONS_ENUM.md SSE.0.
+  // in docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.0.
   //
   // Base 2.1 DOES independently establish what the two layouts MEAN, which is
   // what actually justifies the FSM's behaviour: SS7.5.2 p.491 titles the Type 0
@@ -215,7 +215,7 @@ package pcie_enum_pkg;
   // SS BAR SIZING, ASSIGNMENT AND ENABLE (Commit 2b-3)
   //
   // Every constant in this section is [PCI3], cited to section + page + line.
-  // Derivations in SPEC_PREDICTIONS_ENUM.md SSE.1-SSE.7.
+  // Derivations in docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.1-SSE.7.
   // -------------------------------------------------------------------------
 
   // The candidate register window. A Type 0 header has SIX Base Address
@@ -289,7 +289,7 @@ package pcie_enum_pkg;
   // 32-bit BAR that is ~FFFFFFF0 + 1 = 16 bytes -- precisely PCI 3.0's minimum,
   // which is precisely what PCIe forbids. So a 64-bit pair mis-decoded as two
   // independent 32-bit BARs trips this floor BY SPEC rather than because a test
-  // happened to look. SPEC_PREDICTIONS_ENUM.md SSE.4.1.
+  // happened to look. docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.4.1.
   localparam logic [63:0] BAR_MEM_MIN_BYTES = 64'd128;
 
   // Command register bits -- [PCI3] SS6.2.2 Table 6-1 p.218.
@@ -320,7 +320,7 @@ package pcie_enum_pkg;
   // the map of record for Switch and Root Complex virtual PCI Bridges (its
   // SS7.5.3 p.493 scope note).  NOT PCI 3.0: SS6.1 p.214 defers Header Type
   // 01h to the PCI-to-PCI Bridge Architecture Specification, which is not on
-  // the shelf.  Settled in SPEC_PREDICTIONS_STAGE_D.md SS0.2 -- do not
+  // the shelf.  Settled in docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS0.2 -- do not
   // re-derive.
   // -------------------------------------------------------------------------
 
@@ -335,7 +335,7 @@ package pcie_enum_pkg;
   // must never be pointed at a Type 1 Function in Stage D.
   localparam logic [5:0] CFG_REG_BUS_NUMBER = 6'h06;
 
-  // The values, forced pairwise-apart per SPEC_PREDICTIONS_STAGE_D.md P5.2:
+  // The values, forced pairwise-apart per docs/predictions/SPEC_PREDICTIONS_STAGE_D.md P5.2:
   // Secondary is non-zero, != primary, and NOT primary+1 (so off-by-one from
   // the parent is distinguishable from correct); Subordinate != Secondary (so
   // writing the same value into both fields is caught by the whole-Dword

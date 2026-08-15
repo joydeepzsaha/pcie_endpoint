@@ -7,7 +7,7 @@ commands (NOT inherited from the CFG0 matrix in test_tlp_conf_cfgbe), and
 the anti-segmentation proof that an over-length CFG1 request is rejected
 outright rather than split on command_limit.
 
-TRAP A (SPEC_PREDICTIONS_STAGE_D.md SS8.1): CfgRd1 differs from CfgRd0 in
+TRAP A (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.1): CfgRd1 differs from CfgRd0 in
 exactly ONE bit -- dw0[4:0] is 0b00101 vs 0b00100 (PCIe Base 2.1 Table 2-3
 p.58).  Fmt, DW1, DW2, byte enables, length and payload are all identical
 between the two types (SS2.2.7 p.79 constrains Configuration Requests as a

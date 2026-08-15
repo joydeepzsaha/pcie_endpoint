@@ -19,29 +19,29 @@ Re-derived from the tree at `99b7501`, not copied from `RECON_MERGE.md` §R1.
 
 ### 0.1 Declaration and literal-width sites
 
-One declaration: [tlp_pkg.sv:43](src/tlp/tlp_pkg.sv#L43) `typedef enum logic [2:0]`.
+One declaration: [tlp_pkg.sv:43](../../src/tlp/tlp_pkg.sv#L43) `typedef enum logic [2:0]`.
 
 Twelve sites name the type and therefore widen automatically: ports at
-[tlp_layer.sv:58](src/tlp/tlp_layer.sv#L58),
-[tlp_requester.sv:17](src/tlp/tlp_requester.sv#L17),
-[pcie_rq_if.sv:211](src/rc/pcie_rq_if.sv#L211),
-[pcie_endpoint_top.sv:55](src/pcie_endpoint/pcie_endpoint_top.sv#L55); signals at
-[pcie_rq_if.sv:255](src/rc/pcie_rq_if.sv#L255),
-[pcie_rq_if.sv:380](src/rc/pcie_rq_if.sv#L380),
-[pcie_rq_rc_top.sv:369](src/rc/pcie_rq_rc_top.sv#L369),
-[tlp_requester.sv:55](src/tlp/tlp_requester.sv#L55),
-[tb_pcie_rq_if_tlp.sv:84](tb/rc/tb_pcie_rq_if_tlp.sv#L84),
-[tb_pcie_rc_if_tlp.sv:124](tb/rc/tb_pcie_rc_if_tlp.sv#L124),
-[tb_pcie_endpoint_top.sv:39](tb/endpoint/tb_pcie_endpoint_top.sv#L39); plus six
-function arguments at [tlp_requester.sv:82-114](src/tlp/tlp_requester.sv#L82-L114).
+[tlp_layer.sv:58](../../src/tlp/tlp_layer.sv#L58),
+[tlp_requester.sv:17](../../src/tlp/tlp_requester.sv#L17),
+[pcie_rq_if.sv:211](../../src/rc/pcie_rq_if.sv#L211),
+[pcie_endpoint_top.sv:55](../../src/pcie_endpoint/pcie_endpoint_top.sv#L55); signals at
+[pcie_rq_if.sv:255](../../src/rc/pcie_rq_if.sv#L255),
+[pcie_rq_if.sv:380](../../src/rc/pcie_rq_if.sv#L380),
+[pcie_rq_rc_top.sv:369](../../src/rc/pcie_rq_rc_top.sv#L369),
+[tlp_requester.sv:55](../../src/tlp/tlp_requester.sv#L55),
+[tb_pcie_rq_if_tlp.sv:84](../../tb/rc/tb_pcie_rq_if_tlp.sv#L84),
+[tb_pcie_rc_if_tlp.sv:124](../../tb/rc/tb_pcie_rc_if_tlp.sv#L124),
+[tb_pcie_endpoint_top.sv:39](../../tb/endpoint/tb_pcie_endpoint_top.sv#L39); plus six
+function arguments at [tlp_requester.sv:82-114](../../src/tlp/tlp_requester.sv#L82-L114).
 
 **⚠️ Two sites carry a command signal at a hard-coded width and are invisible to a
 `tlp_cmd_e` grep — `RECON_MERGE.md` §R1 lists neither:**
 
 | site | declaration | connected to |
 |---|---|---|
-| [tb/rc/tb_pcie_rq_if.sv:37](tb/rc/tb_pcie_rq_if.sv#L37) | `logic [2:0] command_o;` | `pcie_rq_if.command_o` (`tlp_cmd_e`), at [:77](tb/rc/tb_pcie_rq_if.sv#L77) |
-| [tb/tlp/tb_tlp_requester.sv:11](tb/tlp/tb_tlp_requester.sv#L11) | `logic [2:0] command;` | `tlp_requester.command_i` (`tlp_cmd_e`), at [:65](tb/tlp/tb_tlp_requester.sv#L65) |
+| [tb/rc/tb_pcie_rq_if.sv:37](../../tb/rc/tb_pcie_rq_if.sv#L37) | `logic [2:0] command_o;` | `pcie_rq_if.command_o` (`tlp_cmd_e`), at [:77](../../tb/rc/tb_pcie_rq_if.sv#L77) |
+| [tb/tlp/tb_tlp_requester.sv:11](../../tb/tlp/tb_tlp_requester.sv#L11) | `logic [2:0] command;` | `tlp_requester.command_i` (`tlp_cmd_e`), at [:65](../../tb/tlp/tb_tlp_requester.sv#L65) |
 
 These are the complete set: every `.command_i(` / `.command_o(` port connection in the
 tree was enumerated, and every connected signal's declaration resolved. Six signals
@@ -56,9 +56,9 @@ bit-slice of any command signal exists anywhere in the tree.
 
 | struct | contains `tlp_cmd_e`? | note |
 |---|---|---|
-| [tlp_header_t](src/tlp/tlp_pkg.sv#L78) (`tlp_pkg.sv:78-101`) | **no** | carries `fmt[2:0]` + `tlp_type[4:0]`, wire fields — not a command |
-| [rq_descriptor_t](src/rc/pcie_rq_rc_pkg.sv#L43) (`pcie_rq_rc_pkg.sv:43-55`) | **no** | carries `req_type` as `logic [3:0]` at `[78:75]`, cast to `rq_req_type_e` at [pcie_rq_if.sv:252](src/rc/pcie_rq_if.sv#L252) |
-| [rc_descriptor_t](src/rc/pcie_rq_rc_pkg.sv#L117) (`pcie_rq_rc_pkg.sv:117-135`) | **no** | completion side; no command field |
+| [tlp_header_t](../../src/tlp/tlp_pkg.sv#L78) (`tlp_pkg.sv:78-101`) | **no** | carries `fmt[2:0]` + `tlp_type[4:0]`, wire fields — not a command |
+| [rq_descriptor_t](../../src/rc/pcie_rq_rc_pkg.sv#L43) (`pcie_rq_rc_pkg.sv:43-55`) | **no** | carries `req_type` as `logic [3:0]` at `[78:75]`, cast to `rq_req_type_e` at [pcie_rq_if.sv:252](../../src/rc/pcie_rq_if.sv#L252) |
+| [rc_descriptor_t](../../src/rc/pcie_rq_rc_pkg.sv#L117) (`pcie_rq_rc_pkg.sv:117-135`) | **no** | completion side; no command field |
 
 `tlp_cmd_e` travels only as a standalone port or signal. It is never a struct member,
 never flattened onto a bus, never stored, never compared as part of a wider aggregate.
@@ -66,10 +66,10 @@ never flattened onto a bus, never stored, never compared as part of a wider aggr
 ### 0.3 `case` / `casez` / `unique case` selectors of type `tlp_cmd_e`
 
 **None.** All 78 case statements in `src/` were enumerated and their selectors resolved.
-The nearest miss is [pcie_rq_if.sv:263](src/rc/pcie_rq_if.sv#L263)
+The nearest miss is [pcie_rq_if.sv:263](../../src/rc/pcie_rq_if.sv#L263)
 `unique case (desc_type)`, whose selector is `rq_req_type_e` (a separate 4-bit enum,
 10 of 16 encodings named) **and which already has a `default` arm** at
-[:277](src/rc/pcie_rq_if.sv#L277). Every other selector is an FSM state, a `tlp_type`,
+[:277](../../src/rc/pcie_rq_if.sv#L277). Every other selector is an FSM state, a `tlp_type`,
 a credit class, a `tkeep`, or an enum-scan outcome.
 
 Command membership is tested exclusively by `==` chains inside the six
@@ -170,11 +170,11 @@ a `tlp_cmd_e` field** (§0.2).
 **Does any consumer index those bits by literal?** Yes — `rq_descriptor_t` and
 `rc_descriptor_t` are flattened onto 128-bit AXIS descriptor words and indexed by
 literal bit position in both RTL and the Python benches
-([enum_tb_common.py:160,188](tb/rc/enum_tb_common.py#L160),
-[:278,297](tb/rc/enum_tb_common.py#L278)). **This is exactly the hazard §8.3 names as a
+([enum_tb_common.py:160,188](../../tb/rc/enum_tb_common.py#L160),
+[:278,297](../../tb/rc/enum_tb_common.py#L278)). **This is exactly the hazard §8.3 names as a
 stop trigger — and it does not fire, because the field those consumers index is
 `req_type`, which is not `tlp_cmd_e` and does not widen.** The mapping from `req_type`
-to `tlp_cmd_e` happens *inside* `pcie_rq_if` at [:263-277](src/rc/pcie_rq_if.sv#L263),
+to `tlp_cmd_e` happens *inside* `pcie_rq_if` at [:263-277](../../src/rc/pcie_rq_if.sv#L263),
 after the descriptor has been unpacked. The two encodings are decoupled by that case
 statement, and M-1 touches neither side of it.
 
@@ -210,15 +210,15 @@ by simulation.
 
 | function | site | returns for `TLP_CMD_MSG` / `TLP_CMD_MSG_DATA` | where that `0` is produced |
 |---|---|---|---|
-| `command_is_config` | [tlp_requester.sv:82](src/tlp/tlp_requester.sv#L82) | **0** | 4-term `==` OR-chain, no term matches; `\|\|` of four false |
-| `command_is_config1` | [:92](src/tlp/tlp_requester.sv#L92) | **0** | 2-term `==` OR-chain, neither matches |
-| `command_is_io` | [:96](src/tlp/tlp_requester.sv#L96) | **0** | 2-term `==` OR-chain, neither matches |
-| `command_is_config_or_io` | [:100](src/tlp/tlp_requester.sv#L100) | **0** | `0 \|\| 0` from the two above |
-| `command_is_read` | [:104](src/tlp/tlp_requester.sv#L104) | **0** | 4-term `==` OR-chain, no term matches |
-| `command_is_write` | [:109](src/tlp/tlp_requester.sv#L109) | **0** | 4-term `==` OR-chain, no term matches |
+| `command_is_config` | [tlp_requester.sv:82](../../src/tlp/tlp_requester.sv#L82) | **0** | 4-term `==` OR-chain, no term matches; `\|\|` of four false |
+| `command_is_config1` | [:92](../../src/tlp/tlp_requester.sv#L92) | **0** | 2-term `==` OR-chain, neither matches |
+| `command_is_io` | [:96](../../src/tlp/tlp_requester.sv#L96) | **0** | 2-term `==` OR-chain, neither matches |
+| `command_is_config_or_io` | [:100](../../src/tlp/tlp_requester.sv#L100) | **0** | `0 \|\| 0` from the two above |
+| `command_is_read` | [:104](../../src/tlp/tlp_requester.sv#L104) | **0** | 4-term `==` OR-chain, no term matches |
+| `command_is_write` | [:109](../../src/tlp/tlp_requester.sv#L109) | **0** | 4-term `==` OR-chain, no term matches |
 
 Each is an explicit member list, so an unlisted member yields `0` by construction — the
-property [tlp_requester.sv:88-90](src/tlp/tlp_requester.sv#L88-L90) already relies on
+property [tlp_requester.sv:88-90](../../src/tlp/tlp_requester.sv#L88-L90) already relies on
 deliberately ("deriving it from `command_r[0]` would tie correctness to the enum's
 positional encoding").
 
@@ -227,12 +227,12 @@ cannot claim a clean sweep it did not earn:**
 
 | derived signal | site | value for a reserved member | correct for a real message? |
 |---|---|---|---|
-| `command_has_data` | [:141](src/tlp/tlp_requester.sv#L141) `= command_is_write(command_r)` | **0** | wrong for `MSG_DATA` |
-| `command_non_posted` | [:142](src/tlp/tlp_requester.sv#L142) `= command_r != TLP_CMD_MEM_WRITE` | **1** | **wrong — messages are posted** |
-| `command_limit` | [:114](src/tlp/tlp_requester.sv#L114) | **`max_payload_bytes_i == 0 ? 128 : max_payload_bytes_i`** | incidental |
-| `header_c.tlp_type` | [:152-159](src/tlp/tlp_requester.sv#L152-L159) | falls through to **`TLP_TYPE_MEM`** | **wrong — emits a well-formed Memory Read** |
+| `command_has_data` | [:141](../../src/tlp/tlp_requester.sv#L141) `= command_is_write(command_r)` | **0** | wrong for `MSG_DATA` |
+| `command_non_posted` | [:142](../../src/tlp/tlp_requester.sv#L142) `= command_r != TLP_CMD_MEM_WRITE` | **1** | **wrong — messages are posted** |
+| `command_limit` | [:114](../../src/tlp/tlp_requester.sv#L114) | **`max_payload_bytes_i == 0 ? 128 : max_payload_bytes_i`** | incidental |
+| `header_c.tlp_type` | [:152-159](../../src/tlp/tlp_requester.sv#L152-L159) | falls through to **`TLP_TYPE_MEM`** | **wrong — emits a well-formed Memory Read** |
 
-That last row is the fail-open behaviour [tlp_requester.sv:84-86](src/tlp/tlp_requester.sv#L84-L86)
+That last row is the fail-open behaviour [tlp_requester.sv:84-86](../../src/tlp/tlp_requester.sv#L84-L86)
 documents: *"a command missing from its list was emitted as a well-formed Memory Read."*
 
 **This is pre-existing behaviour for an out-of-range command, not a defect M-1

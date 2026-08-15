@@ -613,7 +613,7 @@ encoding remap. (1 of 11 tests; the other 10 pass.)
 The RTL now drives `command_error_valid_o` + `command_error_code_o` (`tlp_error_e`), not the
 single `command_error_o`. Places still referencing the old name:
 - **`RECON_commit2a.md:61,72`** (§A.1 port table + §A.2) — stale; must be updated to the split pair.
-- **`SPEC_PREDICTIONS_RQ_RC.md`** — §F "Early `tlast`" row + any "`command_error_o` pulse count == 0"
+- **`docs/predictions/SPEC_PREDICTIONS_RQ_RC.md`** — §F "Early `tlast`" row + any "`command_error_o` pulse count == 0"
   T-plan assertion for Commit 2a-0 must map to `command_error_valid_o`.
 - **`tb/tlp/test_tlp_conf_datalast.py`** (docstrings only, ~20 refs) — cosmetic; the code already
   reads the new signal via the updated `tb_tlp_requester.sv:80-81`.
@@ -634,7 +634,7 @@ pins = test-side; restore the end-of-request `last` comparison + investigate the
 
 **Tree:** `kourosh/dev` @ `50542d1` (merge `b0d3971` + six fixes). **Mode:** READ-ONLY.
 `src/` and `tb/` unmodified this session; the only writes are to this file and
-`SPEC_PREDICTIONS_RQ_RC.md`. Evidence method: every finding re-opened in the *current* file and
+`docs/predictions/SPEC_PREDICTIONS_RQ_RC.md`. Evidence method: every finding re-opened in the *current* file and
 quoted; B1 additionally verified by direct Verilator simulation of the merged `tlp_requester`
 from a scratchpad-only harness.
 

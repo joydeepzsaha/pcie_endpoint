@@ -31,7 +31,7 @@
 // does not: the bus-number write targets the BRIDGE ITSELF, which sits on
 // the bus directly behind the port, and [PCI3] SS3.2.2.3.x p.49 compels
 // Type 1 only for a target on ANOTHER bus.  So cmd_type1_o is a hard 0 here
-// (Trap C, SPEC_PREDICTIONS_STAGE_D.md SS8.3).  Everything from the first
+// (Trap C, docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.3).  Everything from the first
 // secondary-bus probe onward is Type 1 -- and that traffic is the second
 // scan/BAR pair's, selected by the widened handoff mux, never this module's.
 //
@@ -65,7 +65,7 @@
 //    downstream scan/BAR pair.  DEVICES_TO_SCAN = 1 applies on the secondary
 //    link unchanged: it too is point-to-point, so the SS7.3.1 p.479 Device-0
 //    association holds below the bridge exactly as it does above
-//    (SPEC_PREDICTIONS_STAGE_D.md P5.3).
+//    (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md P5.3).
 //
 //  * !! THIS SHAPE DOES NOT ITERATE (RECON_stageD.md SS11.2).  A tree walk
 //    needs iteration and the two-phase provisional-Subordinate protocol

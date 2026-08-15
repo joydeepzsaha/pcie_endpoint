@@ -34,14 +34,14 @@ unanimously and none of which M-2 touches:
 
 | field | spec position (p.57) | this design | implies |
 |---|---|---|---|
-| `Fmt` | byte 0 bits 7:5 | `dw0[7:5]` ([tlp_generator.sv:63](src/tlp/tlp_generator.sv#L63)) | byte 0 = `dw0[7:0]` |
-| `Type` | byte 0 bits 4:0 | `dw0[4:0]` ([:64](src/tlp/tlp_generator.sv#L64)) | byte 0 = `dw0[7:0]` |
-| `TH` | byte 1 bit 0 | `dw0[8]` ([:65](src/tlp/tlp_generator.sv#L65)) | byte 1 = `dw0[15:8]` |
-| `TC` | byte 1 bits 6:4 | `dw0[14:12]` ([:67](src/tlp/tlp_generator.sv#L67)) | byte 1 = `dw0[15:8]` |
-| `Length[9:8]` | byte 2 bits 1:0 | `dw0[17:16]` ([:68](src/tlp/tlp_generator.sv#L68)) | byte 2 = `dw0[23:16]` |
-| `EP` | byte 2 bit 6 | `dw0[22]` ([:71](src/tlp/tlp_generator.sv#L71)) | byte 2 = `dw0[23:16]` |
-| `TD` | byte 2 bit 7 | `dw0[23]` ([:72](src/tlp/tlp_generator.sv#L72)) | byte 2 = `dw0[23:16]` |
-| `Length[7:0]` | byte 3 bits 7:0 | `dw0[31:24]` ([:73](src/tlp/tlp_generator.sv#L73)) | byte 3 = `dw0[31:24]` |
+| `Fmt` | byte 0 bits 7:5 | `dw0[7:5]` ([tlp_generator.sv:63](../../src/tlp/tlp_generator.sv#L63)) | byte 0 = `dw0[7:0]` |
+| `Type` | byte 0 bits 4:0 | `dw0[4:0]` ([:64](../../src/tlp/tlp_generator.sv#L64)) | byte 0 = `dw0[7:0]` |
+| `TH` | byte 1 bit 0 | `dw0[8]` ([:65](../../src/tlp/tlp_generator.sv#L65)) | byte 1 = `dw0[15:8]` |
+| `TC` | byte 1 bits 6:4 | `dw0[14:12]` ([:67](../../src/tlp/tlp_generator.sv#L67)) | byte 1 = `dw0[15:8]` |
+| `Length[9:8]` | byte 2 bits 1:0 | `dw0[17:16]` ([:68](../../src/tlp/tlp_generator.sv#L68)) | byte 2 = `dw0[23:16]` |
+| `EP` | byte 2 bit 6 | `dw0[22]` ([:71](../../src/tlp/tlp_generator.sv#L71)) | byte 2 = `dw0[23:16]` |
+| `TD` | byte 2 bit 7 | `dw0[23]` ([:72](../../src/tlp/tlp_generator.sv#L72)) | byte 2 = `dw0[23:16]` |
+| `Length[7:0]` | byte 3 bits 7:0 | `dw0[31:24]` ([:73](../../src/tlp/tlp_generator.sv#L73)) | byte 3 = `dw0[31:24]` |
 
 **Convention: header byte *N* occupies `dw0[8N+7 : 8N]`** — little-endian byte order
 within the word. Eight fields, zero dissent.
@@ -66,7 +66,7 @@ Decode form: `attr <= {tdata[10], tdata[21:20]};`
 | | `dw0[10]` | `dw0[21]` | `dw0[20]` | matches §1.3? |
 |---|---|---|---|---|
 | **normative** | `attr[2]` | `attr[1]` | `attr[0]` | — |
-| `kourosh/dev` HEAD ([tlp_generator.sv:66,70](src/tlp/tlp_generator.sv#L66)) | `attributes[0]` | `attributes[2]` | `attributes[1]` | **no** |
+| `kourosh/dev` HEAD ([tlp_generator.sv:66,70](../../src/tlp/tlp_generator.sv#L66)) | `attributes[0]` | `attributes[2]` | `attributes[1]` | **no** |
 | `origin/main` (`tlp_generator.sv:68,72`) | `attributes[2]` | `attributes[1]` | `attributes[0]` | **yes** |
 
 **Prediction: `origin/main` is spec-faithful and `kourosh/dev` is not.** M-0 asserted
@@ -74,7 +74,7 @@ this; §1 derives it independently from Base 2.1, and the derivation — not M-0
 authority.
 
 **Both branches are internally self-consistent.** `dev`'s parser decodes
-`{tdata[21:20], tdata[10]}` ([tlp_parser.sv:125,146](src/tlp/tlp_parser.sv#L125)),
+`{tdata[21:20], tdata[10]}` ([tlp_parser.sv:125,146](../../src/tlp/tlp_parser.sv#L125)),
 which is the exact inverse of its encoder. So `dev` round-trips perfectly while being
 wrong on the wire. **A branch that is self-consistent but wrong passes every round-trip
 test ever written** — that is the situation here, and P5 is about it.
@@ -109,10 +109,10 @@ reaches the wire ([pg213 line 3122](/home/kourosh/openPCIE/0.doc/pg213-pcie4-ult
 i.e. `rq_descriptor_t.attr[2:0]` = {IDO, RO, NS} = PCIe `Attr[2:0]`. That value flows to
 DW0 **unmodified** through five hops, none of which permutes it:
 
-`desc.attr` → [pcie_rq_if.sv:472](src/rc/pcie_rq_if.sv#L472) `command_attr_o` →
-[pcie_rq_rc_top.sv:447,516](src/rc/pcie_rq_rc_top.sv#L447) →
-[tlp_layer.sv:354](src/tlp/tlp_layer.sv#L354) →
-[tlp_requester.sv:239](src/tlp/tlp_requester.sv#L239) `attr_r` → `header_c.attributes` →
+`desc.attr` → [pcie_rq_if.sv:472](../../src/rc/pcie_rq_if.sv#L472) `command_attr_o` →
+[pcie_rq_rc_top.sv:447,516](../../src/rc/pcie_rq_rc_top.sv#L447) →
+[tlp_layer.sv:354](../../src/tlp/tlp_layer.sv#L354) →
+[tlp_requester.sv:239](../../src/tlp/tlp_requester.sv#L239) `attr_r` → `header_c.attributes` →
 generator DW0.
 
 **So a PG213-conformant descriptor produces a non-conformant TLP today**, and all three
@@ -142,21 +142,21 @@ Ten sites encode a DW0 attr placement. **All ten carry the `dev` convention**
 
 | file | lines | class |
 |---|---|---|
-| [test_tlp_generator.py](tb/tlp/test_tlp_generator.py#L66) | 66-67 | standalone |
-| [test_tlp_parser.py](tb/tlp/test_tlp_parser.py#L10) | 10-11 | standalone |
-| [test_tlp_conf_requester.py](tb/tlp/test_tlp_conf_requester.py#L62) | 62,65 | standalone |
-| [test_tlp_conf_parser.py](tb/tlp/test_tlp_conf_parser.py#L43) | 43,47 | standalone |
-| [enum_tb_common.py](tb/rc/enum_tb_common.py#L368) | 368,370 (`cfg_wire_dw0`), 423,425 (`cpl_dw0`) | RC shared model |
-| [test_pcie_rq_if_tlp.py](tb/rc/test_pcie_rq_if_tlp.py#L65) | 65,68 | integration |
-| [test_pcie_rc_if_tlp.py](tb/rc/test_pcie_rc_if_tlp.py#L111) | 111,113 | integration |
-| [test_pcie_rq_rc_top.py](tb/rc/test_pcie_rq_rc_top.py#L139) | 139,141 | integration |
-| [test_tlp_end_to_end.py](tb/tlp/test_tlp_end_to_end.py#L143) | 143 (decode) | **orphan — in no target** |
+| [test_tlp_generator.py](../../tb/tlp/test_tlp_generator.py#L66) | 66-67 | standalone |
+| [test_tlp_parser.py](../../tb/tlp/test_tlp_parser.py#L10) | 10-11 | standalone |
+| [test_tlp_conf_requester.py](../../tb/tlp/test_tlp_conf_requester.py#L62) | 62,65 | standalone |
+| [test_tlp_conf_parser.py](../../tb/tlp/test_tlp_conf_parser.py#L43) | 43,47 | standalone |
+| [enum_tb_common.py](../../tb/rc/enum_tb_common.py#L368) | 368,370 (`cfg_wire_dw0`), 423,425 (`cpl_dw0`) | RC shared model |
+| [test_pcie_rq_if_tlp.py](../../tb/rc/test_pcie_rq_if_tlp.py#L65) | 65,68 | integration |
+| [test_pcie_rc_if_tlp.py](../../tb/rc/test_pcie_rc_if_tlp.py#L111) | 111,113 | integration |
+| [test_pcie_rq_rc_top.py](../../tb/rc/test_pcie_rq_rc_top.py#L139) | 139,141 | integration |
+| [test_tlp_end_to_end.py](../../tb/tlp/test_tlp_end_to_end.py#L143) | 143 (decode) | **orphan — in no target** |
 
 **P3a — counterfactual red list (RTL changed, goldens left alone).** Exactly **one test
 in one target**:
 
 - `verilate_tlp_generator` :: `request_headers_prefix_payload_digest_and_stalls`
-- Failure mode: [test_tlp_generator.py:89](tb/tlp/test_tlp_generator.py#L89) asserts
+- Failure mode: [test_tlp_generator.py:89](../../tb/tlp/test_tlp_generator.py#L89) asserts
   `result[1] == (expected_dw0(2, 0, 2, 3, 5, 1), 0xF, 0)`. With `attr=5` (`3'b101`) the
   corrected RTL emits `dw0[21:20] = 2'b01`, the stale golden expects `2'b10`. **DW0
   mismatch, `0x00A2_...` vs `0x0022_...` in bits 21:20 only.**
@@ -182,13 +182,13 @@ different value:
 
 | target(s) | why blind | fixable by driving non-zero attr? |
 |---|---|---|
-| `verilate_rq_if` | attr is an **RQ-descriptor field** at `[126:124]`, passed through by [pcie_rq_if.sv:472](src/rc/pcie_rq_if.sv#L472); no generator in the DUT. Drives `attr=1,3,5`. | **no** — no DW0 exists in this DUT |
-| `verilate_rc_if` | [tb_pcie_rc_if.sv:4](tb/rc/tb_pcie_rc_if.sv#L4) states "No Transaction Layer in the loop"; [:55](tb/rc/tb_pcie_rc_if.sv#L55) drives `received_completion_header.attributes` **as a struct field**. Drives `attr=2,4` and `randrange(0,8)`. | **no** — no parser in the DUT |
+| `verilate_rq_if` | attr is an **RQ-descriptor field** at `[126:124]`, passed through by [pcie_rq_if.sv:472](../../src/rc/pcie_rq_if.sv#L472); no generator in the DUT. Drives `attr=1,3,5`. | **no** — no DW0 exists in this DUT |
+| `verilate_rc_if` | [tb_pcie_rc_if.sv:4](../../tb/rc/tb_pcie_rc_if.sv#L4) states "No Transaction Layer in the loop"; [:55](../../tb/rc/tb_pcie_rc_if.sv#L55) drives `received_completion_header.attributes` **as a struct field**. Drives `attr=2,4` and `randrange(0,8)`. | **no** — no parser in the DUT |
 | `verilate_tlp_completion_gen` | DUT is `tlp_completion_generator` + `tlp_control`; no `tlp_generator`. Drives `request_attr=5`. | **no** |
 | **`verilate_rq_if_tlp`, `verilate_rc_if_tlp`, `verilate_rq_rc_top`** | **real `tlp_layer` in the loop**, golden carries the `dev` convention, **every call site uses `attr=0`** | **YES — this is what Commit 3 fixes** |
 | `verilate_tlp_parser`, `verilate_tlp_conf_parser`, `verilate_tlp_conf_requester` | goldens carry `dev` convention but every caller uses the default `attr=0` | yes, but standalone; Commit 2 corrects the goldens |
 | all `verilate_enum_*` | `cfg_wire_dw0` / `cpl_dw0` called with default `attr=0` throughout | Commit 3 corrects the model |
-| `verilate_tlp_end_to_end` | **does not exist** — [test_tlp_end_to_end.py](tb/tlp/test_tlp_end_to_end.py) is in no `.core` target on either branch, despite holding the tree's most thorough attr sweep | n/a |
+| `verilate_tlp_end_to_end` | **does not exist** — [test_tlp_end_to_end.py](../../tb/tlp/test_tlp_end_to_end.py) is in no `.core` target on either branch, despite holding the tree's most thorough attr sweep | n/a |
 
 ---
 

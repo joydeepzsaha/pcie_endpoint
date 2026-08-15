@@ -27,11 +27,11 @@ Four things worth reading before Commit A:
    duplicated is precisely four helpers; §4 names them and flags the one that
    carries a real sim-time risk (`Mon`'s differing default `cycles`) together
    with the resolution that removes the risk.
-4. **`SPEC_PREDICTIONS_ENUM.md` §4 already covers BAR sizing** under the
+4. **`docs/predictions/SPEC_PREDICTIONS_ENUM.md` §4 already covers BAR sizing** under the
    `[PCI3-REF]` tag, and **it does not conflict with the brief's §E** — §E
    extends it and discharges its citations. Checked claim by claim in §6. One
    pre-existing decision (§E.4's ERROR-vs-warning question) is **already
-   committed to ERROR** at `SPEC_PREDICTIONS_ENUM.md:329`; §E should carry that
+   committed to ERROR** at `docs/predictions/SPEC_PREDICTIONS_ENUM.md:329`; §E should carry that
    forward, not re-open it.
 
 ---
@@ -333,7 +333,7 @@ not the uncorrected one).
 
 ---
 
-## 6. Conflict check against `SPEC_PREDICTIONS_ENUM.md` @ HEAD
+## 6. Conflict check against `docs/predictions/SPEC_PREDICTIONS_ENUM.md` @ HEAD
 
 The golden doc **already has a §4 "BAR sizing and assignment"** (lines 307-399),
 written under `[PCI3-REF]`. Brief §12 makes a conflict with the golden doc a
@@ -354,7 +354,7 @@ stop-and-report trigger, so I checked §E's claims against it one by one.
 
 Three notes for Commit A:
 
-1. **§E.4's "decide and commit" is already decided.** `SPEC_PREDICTIONS_ENUM.md:329`
+1. **§E.4's "decide and commit" is already decided.** `docs/predictions/SPEC_PREDICTIONS_ENUM.md:329`
    states "the FSM should treat a sub-128-byte decode as an enumeration fault" —
    i.e. **ERROR**, not warning-and-continue. §E should record this as *carried
    forward with its citation now discharged*, not re-opened as an open question.
@@ -367,7 +367,7 @@ Three notes for Commit A:
 ### 6.1 `[PCI3-REF]` discharge inventory
 
 **11 occurrences on 11 distinct lines** to replace with real citations, at
-`SPEC_PREDICTIONS_ENUM.md` lines **71, 73, 309, 313, 332, 360, 656, 667, 685,
+`docs/predictions/SPEC_PREDICTIONS_ENUM.md` lines **71, 73, 309, 313, 332, 360, 656, 667, 685,
 815, 826** (line 71 is the legend row defining the tag; 656/667/685 are the §9
 "what I need to close this" and §10 stop-and-report entries, which become
 *closed* rather than merely re-cited). Lines 815/826 are the Header Type bit-field
@@ -416,7 +416,7 @@ elaboration in the existing style (packages first: `pcie_rq_rc_pkg.sv`,
 
 | brief §12 trigger | status |
 |---|---|
-| Conflict with `SPEC_PREDICTIONS_ENUM.md` | **none** — §6 |
+| Conflict with `docs/predictions/SPEC_PREDICTIONS_ENUM.md` | **none** — §6 |
 | Hoist requiring a behavioral edit | **none** — §3.1 |
 | Consolidation moving any sim end time | **avoidable by construction** — §4.3 |
 | Any on-wire DW differing from §E.8 | n/a (Part 2) |

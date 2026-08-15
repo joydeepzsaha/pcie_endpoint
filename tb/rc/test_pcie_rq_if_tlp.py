@@ -602,7 +602,7 @@ async def test_t20_tag_exhaustion_strobe(dut):
 
 
 # ==========================================================================
-# Stage D-2 -- CFG1 on the wire (SPEC_PREDICTIONS_STAGE_D.md SS7.3 / SS8.1)
+# Stage D-2 -- CFG1 on the wire (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS7.3 / SS8.1)
 # ==========================================================================
 @cocotb.test()
 async def test_d2i1_cfgrd1_on_wire(dut):
@@ -707,7 +707,7 @@ ATTR_DW0_MASK = (1 << 10) | (1 << 21) | (1 << 20)
 # attr[0] == attr[2] there leaves dw0[10] identical under both placements.
 # 1, 2 and 4 are one-hot: each isolates a single source bit, so the DW0 position
 # that lights up IS that bit's destination, and the three together determine the
-# map with no residual ambiguity.  See SPEC_PREDICTIONS_MERGE_M2.md SS7.
+# map with no residual ambiguity.  See docs/predictions/SPEC_PREDICTIONS_MERGE_M2.md SS7.
 ATTR_DRIVE_SET = (1, 2, 4, 5, 7)
 
 
@@ -720,7 +720,7 @@ async def test_m2i1_attr_bits_land_at_spec_wire_positions(dut):
     holds however the bits are physically arranged and a loopback has zero
     discriminating power -- which is why a misplacement survived three
     integration targets that each carry a real tlp_layer.  See
-    SPEC_PREDICTIONS_MERGE_M2.md SS6.
+    docs/predictions/SPEC_PREDICTIONS_MERGE_M2.md SS6.
     """
     tx = await init(dut)
     base_dw0 = golden_dw0(FMT_3DW_DATA, TYPE_MEM, 1)

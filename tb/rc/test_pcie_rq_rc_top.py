@@ -1048,7 +1048,7 @@ async def v10_cfg1_round_trip(dut):
     """F2.5: a CfgRd1's CplD and a CfgWr1's Cpl correlate by tag and decode
     identically to the Type 0 path.
 
-    Recorded in SPEC_PREDICTIONS_STAGE_D.md SS7.3 as a NON-FALSIFIABLE row:
+    Recorded in docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS7.3 as a NON-FALSIFIABLE row:
     nothing emitted CFG1 through this surface before D-2, so there is no
     meaningful pre-change run -- this test exists post-change only.  The
     request side asserts the whole DW0 (Trap A: dw0[4:0] = 00101 is the only

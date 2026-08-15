@@ -152,7 +152,7 @@ module pcie_cfg_txn
     // primitive still does not know who is asking or why, exactly as it does
     // not know why cmd_reg_num_i is 0x06. Because it is latched once at accept
     // and the descriptor is a pure function of the latch, a CRS reissue
-    // repeats the type by construction (SPEC_PREDICTIONS_STAGE_D.md P6.3 --
+    // repeats the type by construction (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md P6.3 --
     // the retry must not decay to Type 0).
     input  logic                        cmd_type1_i,
     // The target BDF. This becomes the descriptor's Completer ID, which is what
@@ -216,7 +216,7 @@ module pcie_cfg_txn
     if (CRS_BACKOFF_CYCLES < 1)
       $warning("pcie_cfg_txn: CRS_BACKOFF_CYCLES=%0d -- retries are not paced and will be reissued back to back.",
                CRS_BACKOFF_CYCLES);
-    // P-CRS-BUDGET, SPEC_PREDICTIONS_ENUM.md SS5.2. If a full CRS retry storm can
+    // P-CRS-BUDGET, docs/predictions/SPEC_PREDICTIONS_ENUM.md SS5.2. If a full CRS retry storm can
     // outlast the completion timeout, a device that is merely slow to
     // initialise becomes indistinguishable from a dead one.
     if (CPL_TIMEOUT_CYCLES != 0 &&
@@ -264,7 +264,7 @@ module pcie_cfg_txn
   // -------------------------------------------------------------------------
   // RQ descriptor -- PG213 Table 61 (:3711,:3720,:3728,:3735), Configuration
   // form. Every field is derived from the latched command; the goldens for the
-  // exact 128-bit values are in SPEC_PREDICTIONS_ENUM.md SS3.4 and were written
+  // exact 128-bit values are in docs/predictions/SPEC_PREDICTIONS_ENUM.md SS3.4 and were written
   // before this module existed.
   //
   // Fields deliberately zero:

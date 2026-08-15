@@ -5,7 +5,7 @@
     ... against the spec-golden bridge + device pair, every emitted TLP
     asserted IN ORDER against goldens pinned before this RTL ran.
 
-The predicted sequence is SPEC_PREDICTIONS_STAGE_D.md SS5.4: transactions
+The predicted sequence is docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS5.4: transactions
 1-3 are Type 0 (the bridge is on the local bus -- including the 18h write,
 Trap C), everything from the first secondary-bus probe on is Type 1.  The
 ordering claim (F3.2, the 18h write precedes the first CFG1) is asserted

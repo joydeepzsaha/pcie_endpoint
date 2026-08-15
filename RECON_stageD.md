@@ -430,7 +430,7 @@ and both anchors are on the shelf:
   by the Secondary Bus Number register and the Subordinate Bus Number register."*
 
 **Recorded for D-P:** this substitution must be written into
-`SPEC_PREDICTIONS_STAGE_D.md` as the source-of-record decision, with the PCI 3.0
+`docs/predictions/SPEC_PREDICTIONS_STAGE_D.md` as the source-of-record decision, with the PCI 3.0
 deferral quoted, so no later session re-derives it or reaches for MindShare/Southwell.
 
 ### 8.1 Bonus: the routing anchors D-P needs, located
@@ -483,7 +483,7 @@ Matches the brief's baseline of record, in decomposed form:
 **One correction to the brief's decomposition** (the total is unaffected). The brief
 gives `verilate_enum_bar` 29 and `verilate_enum_bar_tlp` 10. Measured:
 **`verilate_enum_bar` 32 and `verilate_enum_bar_tlp` 7** — same sum, 39, different
-split. The project's own `SPEC_PREDICTIONS_ENUM.md` §E.10 table also records 32 and 7,
+split. The project's own `docs/predictions/SPEC_PREDICTIONS_ENUM.md` §E.10 table also records 32 and 7,
 so the measurement and the Stage C record agree and the brief's figure is the outlier.
 Use 32/7 as the per-target gate; a later session diffing against 29/10 would chase a
 phantom.
@@ -496,7 +496,7 @@ for every later increment.
 
 The two `_trace` targets (`verilate_enum_bar_trace`, `verilate_enum_bar_tlp_trace`)
 exist for debugging and are deliberately outside the gate, as established in
-`SPEC_PREDICTIONS_ENUM.md` §E.10.
+`docs/predictions/SPEC_PREDICTIONS_ENUM.md` §E.10.
 
 ### 9.1 Per-target record
 
@@ -630,7 +630,7 @@ needs its own commit and its own regression argument under the append-only/posit
 
 ---
 
-## 12. State of `SPEC_PREDICTIONS_STAGE_D.md`
+## 12. State of `docs/predictions/SPEC_PREDICTIONS_STAGE_D.md`
 
 **Not written.** Decisions A and B are now settled, so it is unblocked: prediction
 item 5 (bus-number assignment order) and item 7 (per-increment failure predictions)

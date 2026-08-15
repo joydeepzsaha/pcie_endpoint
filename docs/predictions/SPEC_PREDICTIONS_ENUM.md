@@ -123,7 +123,7 @@ Written decomposed, deliberately. This off-by-one has now occurred three times โ
 bookkeeping slip, and `RECON_commit2b.md` inherited that exclusion. The control
 is a **separate line item** and is neither folded into the TLP+RC subtotal nor
 dropped from the grand total. Prior art: `RECON_commit2a.md:51-52`,
-`SPEC_PREDICTIONS_CPL_TIMEOUT.md:269-276`.
+`docs/predictions/SPEC_PREDICTIONS_CPL_TIMEOUT.md ยงG`.
 
 Measured at `33ba088`, all `rc=0`: subtotal `29/171`, control `1/1`
 (6010.00 ns), **`TARGETS=30 TESTS=172 PASS=172 FAIL=0`**. Per-target sim times in

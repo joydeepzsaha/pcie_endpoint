@@ -429,7 +429,7 @@ async def k4_small_credit_drip(dut):
 async def k5_credit_starvation_fabricates_a_timeout(dut):
     """Credit starvation past CPL_TIMEOUT_CYCLES ends the scan as a TIMEOUT.
 
-    THE FINDING-2 SIGNATURE (SPEC_PREDICTIONS_ENUM.md SSD.6), asserted exactly.
+    THE FINDING-2 SIGNATURE (docs/predictions/SPEC_PREDICTIONS_ENUM.md SSD.6), asserted exactly.
 
     tlp_request_tracker measures per-tag age from ALLOCATION (:39) and
     allocation sits upstream of the credit gate (tlp_requester.sv:138 vs

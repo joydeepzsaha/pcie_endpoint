@@ -58,20 +58,20 @@ git diff HEAD     aca4780 --stat -- tb/tlp/tb_tlp_credit_manager.sv → empty
 
 `main` never touched the DUT or its SV wrapper. The target's whole closure is
 `filesets: [rtl, bench_credit_manager, cocotb_credit_manager]`
-([tb_tlp.core:532](tb/tlp/tb_tlp.core#L532)) where `rtl` is `::tlp_core:1.0.0` —
+([tb_tlp.core:532](../../tb/tlp/tb_tlp.core#L532)) where `rtl` is `::tlp_core:1.0.0` —
 `src/tlp/*.sv` only. `src/dllp/` is not in it.
 
 M-3's policy, quoted:
 
 - `tb/tlp/test_tlp_credit_manager.py` → **`ours`** — *"The one non-message thing `main`
-  contributes to the measured surface."* (`SPEC_PREDICTIONS_MERGE_M3.md:100`)
+  contributes to the measured surface."* (`docs/predictions/SPEC_PREDICTIONS_MERGE_M3.md §C`)
 - `src/dllp/dllp2tlp.sv`, `tlp2dllp.sv`, `README.md` → **`theirs`** — *"0 message refs;
   `dllp_*.core` not in the gate closure."* (`:118`)
 
 So the only credit-path file `main` changed at all is already in the tree under `theirs`,
 and it is outside this target's closure regardless. Every signal the test names
 (`ph`/`pd`/`nph`/`npd`/`cplh`/`cpld`, the six `*_av`, `request_*`, `blocked`, `error`,
-`fc_*`) is declared in [tb_tlp_credit_manager.sv](tb/tlp/tb_tlp_credit_manager.sv) as it
+`fc_*`) is declared in [tb_tlp_credit_manager.sv](../../tb/tlp/tb_tlp_credit_manager.sv) as it
 stands. **No RTL qualification is implied. Proceed.**
 
 ---
@@ -121,7 +121,7 @@ Derived from the specification before `main`'s assertions were judged.
 
   ⚠️ This makes a **finite CPL advertisement legal**, so exercising the CPL pool as finite
   is a conformance case, not a defensive-only one. It also means
-  [tlp_credit_manager.sv:116-118](src/tlp/tlp_credit_manager.sv#L116) (*"Table 2-37 p.137-138
+  [tlp_credit_manager.sv:116-118](../../src/tlp/tlp_credit_manager.sv#L116) (*"Table 2-37 p.137-138
   makes infinite CPLH/CPLD mandatory for the Root Complex an Endpoint faces"*) and the
   docstring of `infinite_completion_credit_never_throttles` overstate the rule: mandatory
   only for a non-p2p RC, and an Endpoint below a Switch faces a finite CPL advertiser. A
@@ -135,7 +135,7 @@ side is `(R − required) mod 2^N`, so the two forms agree whenever `R ≤ 2^N/2
 (guaranteed by the p.138 cap: `127 = 2^8/2 − 1`, `2047 = 2^12/2 − 1`) and
 `required ≤ 2^N/2 − 1` (headers always 1; data `n ≤ 256`). They diverge at exactly one
 point, `required − R = 2^N/2`, which those bounds exclude. Independently re-derived here
-from the p.140 text; it agrees with `SPEC_PREDICTIONS_CREDIT.md §J`.
+from the p.140 text; it agrees with `docs/predictions/SPEC_PREDICTIONS_CREDIT.md §J`.
 
 **Every stimulus in the test under qualification keeps `R ≤ 7` and `required ≤ 5`, so the
 divergence point is nowhere near.** The spec equation and the RTL comparison give the same
@@ -193,7 +193,7 @@ Every expected value in `main`'s test is computable from §2.6.1.1 p.140's gatin
 plus p.139's consumption rule plus Table 2-36 p.136, without running anything — §1.4's first
 table is that computation, and it reproduces all 36 assertions. The test asserts no
 implementation-defined quantity: it never touches `error_o`, whose contract
-([tlp_credit_manager.sv:34-55](src/tlp/tlp_credit_manager.sv#L34)) is explicitly
+([tlp_credit_manager.sv:34-55](../../src/tlp/tlp_credit_manager.sv#L34)) is explicitly
 *"IMPLEMENTATION-DEFINED, NOT A SPEC-CONFORMANCE SIGNAL"*. The six `*_available_o` ports it
 does read carry `(CREDIT_LIMIT − CREDITS_CONSUMED) mod 2^N`, a difference of two
 spec-defined registers.
@@ -221,7 +221,7 @@ Completion request against a finite pool. Enumerated:
 | `infinite_*`, `error_never_fires_for_an_infinite_pool` | — | CPL **infinite** → grant path only |
 | the other 12 | POSTED only | POSTED only |
 
-So in [tlp_credit_manager.sv:161-174](src/tlp/tlp_credit_manager.sv#L161) the four branch
+So in [tlp_credit_manager.sv:161-174](../../src/tlp/tlp_credit_manager.sv#L161) the four branch
 *outcomes* `nph_available != 0` **false**, `npd_available >= req` **false**,
 `cplh_available != 0` **false**, `cpld_available >= req` **false** are, on this branch
 today, **unreached with `fc_initialized_i` high**. The added test reaches all four, with
@@ -344,8 +344,8 @@ survival is the predicted, intended outcome; it does not fire stop trigger 5.
 
 | id | mutation | against | prediction |
 | --- | --- | --- | --- |
-| **M4′** | [:169-171](src/tlp/tlp_credit_manager.sv#L169) NP arm, header and data sources crossed: `selected_header_available = nph_infinite_r \|\| (npd_available != 0)` and `selected_data_available = npd_infinite_r \|\| (nph_available >= request_data_credits_i)` | `main`'s test + the existing 18 | **SURVIVES both.** Block a: crossed header reads `npd_av=0` → false → still blocked. Block b: crossed header reads `npd_av=1` → true, crossed data reads `nph_av=0 >= 1` → false → still blocked. Block c: `1≠0` true and `1>=1` true → still granted. Block d: both 0 → still blocked. Of the existing 18, `header_exhaustion_…` probes NP with `nph_av=8`, `npd_av=4000` → both crossed terms still true → ready==1 holds; every other NP contact is an infinite pool, short-circuited before the comparison. |
-| **M5′** | [:280](src/tlp/tlp_credit_manager.sv#L280) `npd_consumed_r <= npd_consumed_r + request_data_credits_i` → `+ 1'b1` | `main`'s test + the existing 18 | **SURVIVES both.** `main` requests exactly 1 data credit, so `+req` and `+1` are the same write. No existing test consumes NP data on a finite pool at all. |
+| **M4′** | [:169-171](../../src/tlp/tlp_credit_manager.sv#L169) NP arm, header and data sources crossed: `selected_header_available = nph_infinite_r \|\| (npd_available != 0)` and `selected_data_available = npd_infinite_r \|\| (nph_available >= request_data_credits_i)` | `main`'s test + the existing 18 | **SURVIVES both.** Block a: crossed header reads `npd_av=0` → false → still blocked. Block b: crossed header reads `npd_av=1` → true, crossed data reads `nph_av=0 >= 1` → false → still blocked. Block c: `1≠0` true and `1>=1` true → still granted. Block d: both 0 → still blocked. Of the existing 18, `header_exhaustion_…` probes NP with `nph_av=8`, `npd_av=4000` → both crossed terms still true → ready==1 holds; every other NP contact is an infinite pool, short-circuited before the comparison. |
+| **M5′** | [:280](../../src/tlp/tlp_credit_manager.sv#L280) `npd_consumed_r <= npd_consumed_r + request_data_credits_i` → `+ 1'b1` | `main`'s test + the existing 18 | **SURVIVES both.** `main` requests exactly 1 data credit, so `+req` and `+1` are the same write. No existing test consumes NP data on a finite pool at all. |
 
 If either is *killed*, P2's evidential basis is gone — see P6.
 
@@ -356,9 +356,9 @@ bit-identical before the next.
 
 | id | mutation | site | predicted killer | predicted assertion | killed by existing 18 too? |
 | --- | --- | --- | --- | --- | --- |
-| **M1** | credit-check comparison `>=` → `>` | [:171](src/tlp/tlp_credit_manager.sv#L171) `npd_available >= request_data_credits_i` | new test, **NP** block c | `assert int(dut.request_ready.value)` — `npd_av=2`, `req=2`, `2 > 2` false → not ready | **no** — `header_exhaustion_…` probes NP at `npd_av=4000 > 1`, still true; all other NP contacts are infinite |
-| **M2** | consumption point: check-time instead of handshake-time | [:268](src/tlp/tlp_credit_manager.sv#L268) `else if (request_valid_i && request_ready_o)` → `else if (request_valid_i)` | new test, **P** block b | `assert int(getattr(dut, header_out).value) == 0` — the block-b update edge is taken with `valid=1, ready=0`, so `ph_consumed` becomes 1 and `ph_av = 0−1 = 255` | **yes** — `blocked_requests_consume_no_credit` was written for exactly this |
-| **M3** | counter update direction | [:279](src/tlp/tlp_credit_manager.sv#L279) `nph_consumed_r <= nph_consumed_r + 1'b1` → `- 1'b1` | new test, **NP** block c | `assert int(getattr(dut, header_out).value) == 0` after the grant edge — `nph_consumed = 0−1 = 255`, `nph_av = 1−255 = 2` | **no** — no existing test reads `nph_av` after an NP grant |
+| **M1** | credit-check comparison `>=` → `>` | [:171](../../src/tlp/tlp_credit_manager.sv#L171) `npd_available >= request_data_credits_i` | new test, **NP** block c | `assert int(dut.request_ready.value)` — `npd_av=2`, `req=2`, `2 > 2` false → not ready | **no** — `header_exhaustion_…` probes NP at `npd_av=4000 > 1`, still true; all other NP contacts are infinite |
+| **M2** | consumption point: check-time instead of handshake-time | [:268](../../src/tlp/tlp_credit_manager.sv#L268) `else if (request_valid_i && request_ready_o)` → `else if (request_valid_i)` | new test, **P** block b | `assert int(getattr(dut, header_out).value) == 0` — the block-b update edge is taken with `valid=1, ready=0`, so `ph_consumed` becomes 1 and `ph_av = 0−1 = 255` | **yes** — `blocked_requests_consume_no_credit` was written for exactly this |
+| **M3** | counter update direction | [:279](../../src/tlp/tlp_credit_manager.sv#L279) `nph_consumed_r <= nph_consumed_r + 1'b1` → `- 1'b1` | new test, **NP** block c | `assert int(getattr(dut, header_out).value) == 0` after the grant edge — `nph_consumed = 0−1 = 255`, `nph_av = 1−255 = 2` | **no** — no existing test reads `nph_av` after an NP grant |
 | **M4** | the M4′ cross, on the rewritten test | as M4′ | new test, **NP** block c | `assert int(dut.request_ready.value)` — crossed data term reads `nph_av=1 >= 2` → false → not ready | **no** |
 | **M5** | the M5′ magnitude, on the rewritten test | as M5′ | new test, **NP** block c | `assert int(getattr(dut, data_out).value) == 0` after the grant edge — `npd_consumed = 1`, `npd_av = 2−1 = 1` | **no** |
 

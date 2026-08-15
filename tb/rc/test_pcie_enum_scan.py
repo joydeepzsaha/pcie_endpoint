@@ -24,7 +24,7 @@ Spec cited (read, not assumed):
   Completion timeout is an error .... PCIe Base 2.1 SS2.8 p.152
   Type 0 header layout / offsets .... PCIe Base 2.1 Figure 7-5 p.491
   Header Type bit fields ............ [PCI3-REF] PCI 3.0 SS6.1 -- see SSD.3
-Full derivation: SPEC_PREDICTIONS_ENUM.md SSD.
+Full derivation: docs/predictions/SPEC_PREDICTIONS_ENUM.md SSD.
 """
 
 import cocotb
@@ -320,7 +320,7 @@ async def s6_crs_exhausted_is_a_fault(dut):
 async def s7_timeout_during_the_probe_is_a_fault_not_absence(dut):
     """A completion timeout on the probe is an ERROR, never "device absent".
 
-    THE PHASE-1 DERIVATION (SPEC_PREDICTIONS_ENUM.md SS5.3), made falsifiable.
+    THE PHASE-1 DERIVATION (docs/predictions/SPEC_PREDICTIONS_ENUM.md SS5.3), made falsifiable.
     Base 2.1 assigns the two events to different mechanisms and the FSM must not
     merge them:
 
@@ -466,7 +466,7 @@ async def s11_error_is_sticky(dut):
 async def s12_vendor_id_ffff_on_success_is_present(dut):
     """A Successful Completion carrying FFFFFFFF reports a PRESENT device.
 
-    SPEC_PREDICTIONS_ENUM.md SSD.5.1.  Base 2.1 SS2.3.2 Implementation Note p.122
+    docs/predictions/SPEC_PREDICTIONS_ENUM.md SSD.5.1.  Base 2.1 SS2.3.2 Implementation Note p.122
     has a Root Complex synthesise an all-1s read value "when UR Completion
     Status is returned", FOR SOFTWARE ABOVE IT.  This FSM sits where that
     synthesis would be performed, not consumed -- it sees the UR directly, as
@@ -536,7 +536,7 @@ async def s13_arbitrary_stalls_resume_correctly(dut):
 # ==========================================================================
 # S14 / S15 -- the credit annotation, and the proof it is only an annotation
 #
-# SPEC_PREDICTIONS_ENUM.md SSD.6.  err_credit_blocked_o records tx_fc_blocked_i at
+# docs/predictions/SPEC_PREDICTIONS_ENUM.md SSD.6.  err_credit_blocked_o records tx_fc_blocked_i at
 # the moment a TXN_TIMEOUT is reported; it must never steer.  Master brief SS4.1
 # forbids a credit signal gating control flow, and these two tests are what make
 # that falsifiable.
