@@ -89,8 +89,8 @@ command at a **hard-coded width** and are invisible to that method:
 
 | site | before | after | connects to |
 |---|---|---|---|
-| [tb/rc/tb_pcie_rq_if.sv:37](tb/rc/tb_pcie_rq_if.sv#L37) | `logic [2:0]  command_o;` | `logic [3:0]` | `pcie_rq_if.command_o` (`tlp_cmd_e`) at [:77](tb/rc/tb_pcie_rq_if.sv#L77) |
-| [tb/tlp/tb_tlp_requester.sv:11](tb/tlp/tb_tlp_requester.sv#L11) | `logic [2:0] command;` | `logic [3:0]` | `tlp_requester.command_i` (`tlp_cmd_e`) at [:65](tb/tlp/tb_tlp_requester.sv#L65) |
+| [tb/rc/tb_pcie_rq_if.sv:37](../../tb/rc/tb_pcie_rq_if.sv#L37) | `logic [2:0]  command_o;` | `logic [3:0]` | `pcie_rq_if.command_o` (`tlp_cmd_e`) at [:77](../../tb/rc/tb_pcie_rq_if.sv#L77) |
+| [tb/tlp/tb_tlp_requester.sv:11](../../tb/tlp/tb_tlp_requester.sv#L11) | `logic [2:0] command;` | `logic [3:0]` | `tlp_requester.command_i` (`tlp_cmd_e`) at [:65](../../tb/tlp/tb_tlp_requester.sv#L65) |
 
 **The class: a signal declared by raw width that connects to an enum-typed port.** A
 type-name grep cannot see it, because the type name never appears.
@@ -111,18 +111,18 @@ Every packed struct in `src/tlp/` and `src/rc/` was enumerated:
 
 | struct | width before | width after | contains `tlp_cmd_e`? |
 |---|---|---|---|
-| [tlp_header_t](src/tlp/tlp_pkg.sv#L102) | unchanged | unchanged | no — carries wire fields `fmt[2:0]`, `tlp_type[4:0]` |
-| [rq_descriptor_t](src/rc/pcie_rq_rc_pkg.sv#L43) | 128 | **128** | no — carries `req_type` as `logic [3:0]` at `[78:75]` |
-| [rc_descriptor_t](src/rc/pcie_rq_rc_pkg.sv#L117) | unchanged | unchanged | no |
+| [tlp_header_t](../../src/tlp/tlp_pkg.sv#L102) | unchanged | unchanged | no — carries wire fields `fmt[2:0]`, `tlp_type[4:0]` |
+| [rq_descriptor_t](../../src/rc/pcie_rq_rc_pkg.sv#L43) | 128 | **128** | no — carries `req_type` as `logic [3:0]` at `[78:75]` |
+| [rc_descriptor_t](../../src/rc/pcie_rq_rc_pkg.sv#L117) | unchanged | unchanged | no |
 
 **Do consumers index those bits by literal? Yes — and it does not matter.** Both
 descriptor structs are flattened onto 128-bit AXIS words and indexed by literal position
-in RTL and in Python ([enum_tb_common.py:160,188](tb/rc/enum_tb_common.py#L160),
-[:278,297](tb/rc/enum_tb_common.py#L278)). Stop trigger §8.3 exists for exactly this
+in RTL and in Python ([enum_tb_common.py:160,188](../../tb/rc/enum_tb_common.py#L160),
+[:278,297](../../tb/rc/enum_tb_common.py#L278)). Stop trigger §8.3 exists for exactly this
 shape and **could not fire**, because the field those consumers index is `req_type` — a
 separate 4-bit enum (`rq_req_type_e`) that was already four bits wide — and it is
 decoupled from `tlp_cmd_e` by the mapping case at
-[pcie_rq_if.sv:263-277](src/rc/pcie_rq_if.sv#L263). The wire encoding and the internal
+[pcie_rq_if.sv:263-277](../../src/rc/pcie_rq_if.sv#L263). The wire encoding and the internal
 command encoding are two different alphabets joined by a lookup, which is why widening
 one cannot move the other.
 
@@ -133,9 +133,9 @@ widening a package-local change rather than a wire-format change.
 
 All 78 `case` / `casez` / `unique case` statements in `src/` were enumerated and their
 selectors resolved. **None selects on a `tlp_cmd_e`.** The nearest is
-[pcie_rq_if.sv:263](src/rc/pcie_rq_if.sv#L263) `unique case (desc_type)`, whose selector
+[pcie_rq_if.sv:263](../../src/rc/pcie_rq_if.sv#L263) `unique case (desc_type)`, whose selector
 is `rq_req_type_e` — and which already carries a `default` at
-[:277](src/rc/pcie_rq_if.sv#L277).
+[:277](../../src/rc/pcie_rq_if.sv#L277).
 
 Command membership is tested **exclusively** by `==` chains inside the six
 `command_is_*` functions. That is why adding two members produced no diagnostic
@@ -147,9 +147,9 @@ anywhere: there is no exhaustiveness obligation to violate.
 Because M-1 **appends**, every one is still correct. Three files bind the two ordinals
 that the alternative numbering would have taken:
 
-- [test_pcie_rq_if.py:59-60](tb/rc/test_pcie_rq_if.py#L59-L60)
-- [test_tlp_cfg1_spine.py:39-40](tb/tlp/test_tlp_cfg1_spine.py#L39-L40)
-- [test_tlp_conf_cfg1.py:45-46](tb/tlp/test_tlp_conf_cfg1.py#L45-L46)
+- [test_pcie_rq_if.py:59-60](../../tb/rc/test_pcie_rq_if.py#L59-L60)
+- [test_tlp_cfg1_spine.py:39-40](../../tb/tlp/test_tlp_cfg1_spine.py#L39-L40)
+- [test_tlp_conf_cfg1.py:45-46](../../tb/tlp/test_tlp_conf_cfg1.py#L45-L46)
 
 ---
 
@@ -162,32 +162,32 @@ names a reserved member (`grep` for a predicate naming `MSG` returns nothing):
 
 | function | site | value for `TLP_CMD_MSG` / `TLP_CMD_MSG_DATA` |
 |---|---|---|
-| `command_is_config` | [tlp_requester.sv:82](src/tlp/tlp_requester.sv#L82) | 0 |
-| `command_is_config1` | [:92](src/tlp/tlp_requester.sv#L92) | 0 |
-| `command_is_io` | [:96](src/tlp/tlp_requester.sv#L96) | 0 |
-| `command_is_config_or_io` | [:100](src/tlp/tlp_requester.sv#L100) | 0 |
-| `command_is_read` | [:104](src/tlp/tlp_requester.sv#L104) | 0 |
-| `command_is_write` | [:109](src/tlp/tlp_requester.sv#L109) | 0 |
+| `command_is_config` | [tlp_requester.sv:82](../../src/tlp/tlp_requester.sv#L82) | 0 |
+| `command_is_config1` | [:92](../../src/tlp/tlp_requester.sv#L92) | 0 |
+| `command_is_io` | [:96](../../src/tlp/tlp_requester.sv#L96) | 0 |
+| `command_is_config_or_io` | [:100](../../src/tlp/tlp_requester.sv#L100) | 0 |
+| `command_is_read` | [:104](../../src/tlp/tlp_requester.sv#L104) | 0 |
+| `command_is_write` | [:109](../../src/tlp/tlp_requester.sv#L109) | 0 |
 
 **⚠️ Three derived outcomes are not 0, exactly as predicted:**
 
 | derived | site | value | correct for a real message? |
 |---|---|---|---|
-| `command_has_data` | [:142](src/tlp/tlp_requester.sv#L142) | 0 | **wrong** for `MSG_DATA` |
-| `command_non_posted` | [:143](src/tlp/tlp_requester.sv#L143) | **1** | **wrong — messages are posted** |
-| `command_limit` | [:114](src/tlp/tlp_requester.sv#L114) | `max_payload_bytes_i == 0 ? 128 : max_payload_bytes_i` | incidental |
-| `header_c.tlp_type` | [:152-160](src/tlp/tlp_requester.sv#L152-L160) | **`TLP_TYPE_MEM`** — no message arm exists | **wrong — emits a well-formed Memory Read** |
+| `command_has_data` | [:142](../../src/tlp/tlp_requester.sv#L142) | 0 | **wrong** for `MSG_DATA` |
+| `command_non_posted` | [:143](../../src/tlp/tlp_requester.sv#L143) | **1** | **wrong — messages are posted** |
+| `command_limit` | [:114](../../src/tlp/tlp_requester.sv#L114) | `max_payload_bytes_i == 0 ? 128 : max_payload_bytes_i` | incidental |
+| `header_c.tlp_type` | [:152-160](../../src/tlp/tlp_requester.sv#L152-L160) | **`TLP_TYPE_MEM`** — no message arm exists | **wrong — emits a well-formed Memory Read** |
 
 **The requester fails open on the reserved members.** This is not a defect M-1
 introduced: it is the pre-existing behaviour for any command outside the predicate lists,
-and [tlp_requester.sv:84-86](src/tlp/tlp_requester.sv#L84-L86) already documents it
+and [tlp_requester.sv:84-86](../../src/tlp/tlp_requester.sv#L84-L86) already documents it
 ("a command missing from its list was emitted as a well-formed Memory Read").
 
 What M-1 changed is **reachability**: the fail-open was previously reachable only by an
 illegal encoding, and is now reachable by a legal enum value. It remains inert solely
 because nothing drives ordinal 8 or 9 — not because the requester would cope. That
 warning is written at the declaration in
-[tlp_pkg.sv:52-75](src/tlp/tlp_pkg.sv#L52-L75), not left to this document, because the
+[tlp_pkg.sv:52-75](../../src/tlp/tlp_pkg.sv#L52-L75), not left to this document, because the
 person who needs it will be reading the enum.
 
 ---
@@ -235,9 +235,9 @@ started:**
 
 | citation | says | was already stale at `99b7501` |
 |---|---|---|
-| [test_tlp_cfg0_spine.py:12](tb/tlp/test_tlp_cfg0_spine.py#L12), [:24](tb/tlp/test_tlp_cfg0_spine.py#L24) | `tlp_pkg.sv:43-50` | **yes** |
-| [test_tlp_conf_cfgbe.py:47](tb/tlp/test_tlp_conf_cfgbe.py#L47) | `tlp_pkg.sv:43-50` | **yes** |
-| [test_tlp_conf_requester.py:28](tb/tlp/test_tlp_conf_requester.py#L28) | `tlp_pkg.sv:43-50` | **yes** |
+| [test_tlp_cfg0_spine.py:12](../../tb/tlp/test_tlp_cfg0_spine.py#L12), [:24](../../tb/tlp/test_tlp_cfg0_spine.py#L24) | `tlp_pkg.sv:43-50` | **yes** |
+| [test_tlp_conf_cfgbe.py:47](../../tb/tlp/test_tlp_conf_cfgbe.py#L47) | `tlp_pkg.sv:43-50` | **yes** |
+| [test_tlp_conf_requester.py:28](../../tb/tlp/test_tlp_conf_requester.py#L28) | `tlp_pkg.sv:43-50` | **yes** |
 | `test_pcie_rq_if.py:52`, `test_tlp_cfg1_spine.py:28,38`, `test_tlp_conf_cfg1.py:32,43` | `tlp_pkg.sv:43-52` | no — correct until now |
 
 D-1b (`1c4056d`) appended the CFG1 pair and moved the close brace from 50 to 52, and did
@@ -261,7 +261,7 @@ number.** The reserved-member comment names `RECON_MERGE.md` §R1 for that reaso
   source; nothing in the 42/305 gate exercises ordinal 8 or 9, and no test can construct
   one. Their correctness is unmeasured, and §4 records that the requester would in fact
   handle them wrongly.
-- **Nothing here was synthesized.** `SYNTH_FINDINGS_S1.md` and `SYNTH_FINDINGS_S2.md`
+- **Nothing here was synthesized.** `docs/findings/SYNTH_FINDINGS_S1.md` and `docs/findings/SYNTH_FINDINGS_S2.md`
   describe a netlist that both RTL commits supersede. Their area and timing numbers are
   now **labels on a superseded netlist** and must not be quoted as current. M-1 does not
   re-measure them; the widening is one bit on a signal that is not in the reported

@@ -2,7 +2,7 @@
 
 Written and committed **before any RTL edit exists**, at `99b7501`, on `kourosh/dev`.
 Every statement below is falsifiable and carries its observation method. A falsified
-prediction is the useful outcome and will be recorded as such in `M1_FINDINGS.md`.
+prediction is the useful outcome and will be recorded as such in `docs/findings/M1_FINDINGS.md`.
 
 The change M-1 makes, in two commits:
 
@@ -244,7 +244,7 @@ reservation is inert, and it is inert only because the members are undriven, not
 the requester would handle them.**
 
 **Falsified by:** any of the six returning non-zero, or any derived value differing from
-the table, when read back in `M1_FINDINGS.md` against the post-change source.
+the table, when read back in `docs/findings/M1_FINDINGS.md` against the post-change source.
 
 ## §6 P6 — the falsifier
 
@@ -270,7 +270,7 @@ not mistaken for success:
    `WIDTH`, `WIDTHEXPAND` **and** `WIDTHTRUNC`. A 3-bit bench wire left on a 4-bit port
    would therefore produce **no diagnostic at all**, and — because only ordinals 0–7 are
    ever driven — **no test failure either**. The gate is structurally blind to it. It
-   must be fixed by inspection in Commit 1, and `M1_FINDINGS.md` must state that the
+   must be fixed by inspection in Commit 1, and `docs/findings/M1_FINDINGS.md` must state that the
    evidence for it is the edit, not the gate.
 2. **A `PINMISSING` or elaboration error** would show as `rc≠0` in the `A|` row, which
    *is* in the diff — noted only to distinguish it from case 1.
@@ -282,7 +282,7 @@ not mistaken for success:
 - The reserved members have **no decode path and no test**. P5 is a reading of the
   source, not a simulation result; nothing in the 42/305 gate exercises ordinal 8 or 9.
 - **Nothing here is synthesized.** The S-1/S-2 area and timing numbers
-  (`SYNTH_FINDINGS_S1.md`, `SYNTH_FINDINGS_S2.md`) describe a netlist this change
+  (`docs/findings/SYNTH_FINDINGS_S1.md`, `docs/findings/SYNTH_FINDINGS_S2.md`) describe a netlist this change
   supersedes, and M-1 does not re-measure them.
 - The message *behaviour* on `origin/main` — the requester rules, the generator's DW1/2/3
   packing, the parser's decode, the classifier's POSTED arm — remains **unreviewed and

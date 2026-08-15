@@ -2,7 +2,7 @@
 
 **Written at HEAD `1fb2c5c`, BEFORE any `synth_design` has been run on this repo.**
 This file is committed first and **is never edited afterwards**. Every falsification is
-recorded in `SYNTH_FINDINGS_S1.md`, not repaired here.
+recorded in `docs/findings/SYNTH_FINDINGS_S1.md`, not repaired here.
 
 **Tool:** Vivado 2023.2 ML Standard (`v2023.2`, SW Build 4029153, 2023-10-13).
 **Part:** `xczu7ev-ffvc1156-2-e` — see §0.3.
