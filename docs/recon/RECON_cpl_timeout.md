@@ -1,7 +1,7 @@
 # RECON — Completion Timeout in `tlp_request_tracker` (Phase 0, read-only)
 
 **Branch:** `kourosh/dev` · **Anchor:** `cc1e194` · **Date:** 2026-07-28
-**Tree state at start:** clean (`git status --porcelain` empty). `RECON_commit2a.md` was NOT dirty
+**Tree state at start:** clean (`git status --porcelain` empty). `docs/recon/RECON_commit2a.md` was NOT dirty
 this session.
 
 Read-only. No RTL was edited before this document existed.

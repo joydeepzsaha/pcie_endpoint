@@ -55,7 +55,7 @@ latches `npd_infinite_r` at init and never re-evaluates it. So driving
 `tx_fc_blocked_o` never asserts. A "credit starvation" test built on `NPD=0`
 would be a **vacuous pass**: the exact failure mode brief §10 exists to prevent.
 
-My own `RECON_commit2b.md` §2.3 asserted the same wrong thing. **Both are
+My own `docs/recon/RECON_commit2b.md` §2.3 asserted the same wrong thing. **Both are
 corrected here**; the recon's §2.3 is superseded by §2 below.
 
 The real starvation vector is a **finite** advertisement with no replenishment —
@@ -120,9 +120,9 @@ state.**
 
 Written decomposed, deliberately. This off-by-one has now occurred three times —
 `STACK_INVENTORY.md` §0.1/§2.1 mis-attributed the +1 and declared a prior "152" a
-bookkeeping slip, and `RECON_commit2b.md` inherited that exclusion. The control
+bookkeeping slip, and `docs/recon/RECON_commit2b.md` inherited that exclusion. The control
 is a **separate line item** and is neither folded into the TLP+RC subtotal nor
-dropped from the grand total. Prior art: `RECON_commit2a.md:51-52`,
+dropped from the grand total. Prior art: `docs/recon/RECON_commit2a.md §G`,
 `docs/predictions/SPEC_PREDICTIONS_CPL_TIMEOUT.md §G`.
 
 Measured at `33ba088`, all `rc=0`: subtotal `29/171`, control `1/1`
@@ -148,7 +148,7 @@ Derivation, read not assumed:
   A read has no data → **0 data credits**.
 - `tlp_pkg.sv:121-125` — `tlp_data_credits(1) = ceil(4 bytes / 16) = 1`.
 
-**Correction to `RECON_commit2b.md` §2.3 and brief §3.** Brief §3's *"config
+**Correction to `docs/recon/RECON_commit2b.md` §2.3 and brief §3.** Brief §3's *"config
 consumes NPH+NPD"* holds only for **writes**. Brief §4.2's *"Config reads consume
 NPH"* is the precise statement.
 
@@ -611,7 +611,7 @@ count**, V9-style (`test_pcie_rq_rc_top.py:1007-1015`) — not merely "no failur
 
 The 2b-1 standalone socket model is bench code that behaves like RTL, and a
 socket model that is *too polite* hides exactly the bugs the standalone target
-exists to catch (`RECON_commit2b.md` §5.2.6). Each mutation below is seeded into
+exists to catch (`docs/recon/RECON_commit2b.md` §5.2.6). Each mutation below is seeded into
 the socket model and **must fail at least one standalone test** before 2b-1 is
 accepted.
 
@@ -1139,7 +1139,7 @@ document: a later disagreement is a DUT bug or a prediction bug, never a golden
 fitted to observed behaviour.
 
 **Baseline this section is written against:** 34 targets / 219 tests, all PASS,
-reproduced at `ffea7a4` (`RECON_commit2b3.md` §1).
+reproduced at `ffea7a4` (`docs/recon/RECON_commit2b3.md` §1).
 
 ---
 
@@ -1784,7 +1784,7 @@ Two genuinely cold builds (`rm -rf build/`) back to back, before any new work:
 
 | | targets | tests | PASS | FAIL | sim end times | wall |
 |---|---:|---:|---:|---:|---|---:|
-| with `--trace-fst` | 34 | 219 | 219 | 0 | all match `RECON_commit2b3.md` §1 | 1131 s |
+| with `--trace-fst` | 34 | 219 | 219 | 0 | all match `docs/recon/RECON_commit2b3.md` §1 | 1131 s |
 | without | 34 | 219 | 219 | 0 | **byte-identical**, diffed mechanically | 834 s |
 
 The `activate.d` CPATH hook works: a cold `--trace-fst` build compiled

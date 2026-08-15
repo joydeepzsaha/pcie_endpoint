@@ -598,7 +598,7 @@ async def i7_zero_advertisement_means_infinite(dut):
     THIS TEST EXISTS TO PREVENT A TEST.  The obvious way to write a credit
     starvation case -- advertise zero and watch the writes wedge -- produces
     the exact opposite behaviour and passes while proving nothing.  Both the
-    Commit-2b brief and RECON_commit2b.md SS2.3 predicted the wedge before this
+    Commit-2b brief and docs/recon/RECON_commit2b.md SS2.3 predicted the wedge before this
     was checked against the RTL.  I6 is the real starvation; this is the vacuum,
     pinned so nobody rebuilds the inverted version.
     """

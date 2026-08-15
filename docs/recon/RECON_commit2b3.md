@@ -39,12 +39,12 @@ Four things worth reading before Commit A:
 ## 1. Measured baseline at `ffea7a4`
 
 Run sequentially, one FuseSoC target at a time (parallel Verilator builds
-SIGSEGV — inherited constraint, `RECON_commit2b.md:46`). All 34 exited `rc=0`.
+SIGSEGV — inherited constraint, `docs/recon/RECON_commit2b.md §1`). All 34 exited `rc=0`.
 
 Target enumeration is authoritative, from `fusesoc core show`: `tb_tlp` 23,
 `tb_rc` 10, `tb_ltssm_conformance` 1 (`verilate_conformance` only — the
 deliberate regression control; the other three `tb_ltssm_conformance` targets
-and all `tb_ltssm`/PHY targets stay out, per `RECON_commit2b.md:43-51`).
+and all `tb_ltssm`/PHY targets stay out, per `docs/recon/RECON_commit2b.md §1`).
 
 | target | TESTS | PASS | FAIL | sim ns |
 |---|---:|---:|---:|---:|

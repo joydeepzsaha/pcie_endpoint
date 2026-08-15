@@ -7,12 +7,12 @@
 | anchor | value |
 | --- | --- |
 | `HEAD` = `origin/kourosh/dev` | `969ee80faa907b9531108ed466d0e2ba29530e02` |
-| `origin/main` | `aca47806b115cc4c4e842814d949527473285a0c` — unmoved since `RECON_MERGE.md` |
+| `origin/main` | `aca47806b115cc4c4e842814d949527473285a0c` — unmoved since `docs/recon/RECON_MERGE.md` |
 | merge base | `2de9afe3edc6e458799afadaf5c3a77456d6635d` (Stage D closure) |
 
 `origin/main` changes **132 paths** against the merge base; this branch changes **58**.
 Everything below is derived from `git diff <base> origin/main`, `git merge-tree`, and the
-`.core` dependency closure — not from `RECON_MERGE.md` §R6.
+`.core` dependency closure — not from `docs/recon/RECON_MERGE.md` §R6.
 
 ---
 

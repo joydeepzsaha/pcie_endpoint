@@ -1224,7 +1224,7 @@ class ConfigDevice:
 # SS ⭐ THE EMPTY-SET GUARD
 #
 # "A green diff, an empty finding list, and a passing assertion over an empty
-# set are the same bug" -- RECON_commit2b3.md SS2, where it fired on the recon
+# set are the same bug" -- docs/recon/RECON_commit2b3.md SS2, where it fired on the recon
 # itself.  Brief SS3.2 trap 3 makes the guard mandatory for every on-wire
 # assertion in Commits D and E, and for any helper that iterates a collected
 # list.
@@ -1285,7 +1285,7 @@ def assert_sequence(observed, golden, what="", render=repr):
 # SS ⭐ THE BRIDGED TOPOLOGY (Stage D increment 2)
 #
 # One virtual PCI bridge (Type 1 header) at 01:00.0 with one endpoint behind
-# it at 05:00.0.  Three pieces, per RECON_stageD.md SS7: the Type 1 bridge
+# it at 05:00.0.  Three pieces, per docs/recon/RECON_stageD.md SS7: the Type 1 bridge
 # config space, the routing/transform core, and a BDF-routing completer that
 # dispatches on the wire instead of answering everything.
 #

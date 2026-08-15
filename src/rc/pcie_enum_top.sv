@@ -67,7 +67,7 @@
 // boundary, monotonically, with no arbiter and no registered state of its
 // own. (The recon sized this as "4-way"; it is five arms because pcie_enum_bus
 // owns the port for its one write between bar1 and scan2 -- same shape,
-// one more stop.) !! Per RECON_stageD.md SS11.2 this widened mux is NOT
+// one more stop.) !! Per docs/recon/RECON_stageD.md SS11.2 this widened mux is NOT
 // load-bearing architecture: it does not iterate, and the sequencing layer is
 // expected to be redesigned for the Stage E tree walk.
 //
@@ -436,7 +436,7 @@ module pcie_enum_top
   // -------------------------------------------------------------------------
   // Stage D: the bridge path -- sequencer, then a SECOND scan/BAR pair for
   // the secondary bus. The existing stages are never re-armed (decision B,
-  // RECON_stageD.md SS11.2): each instance below is single-shot exactly like
+  // docs/recon/RECON_stageD.md SS11.2): each instance below is single-shot exactly like
   // its level-1 twin, and "one bridge level, no recursion" is structural.
   // Both library modules instantiate AS-IS -- no parameter, no port differs
   // from the level-1 instances except the wiring.

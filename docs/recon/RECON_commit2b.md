@@ -42,7 +42,7 @@ neither is in the Verilator baseline.
 
 ⚠️ **The LTSSM `verilate_conformance` target IS in the baseline** — as a
 deliberate **control**, not as LTSSM coverage. It is the per-commit regression
-anchor (`RECON_commit2a.md:51-52`: *"the per-commit regression anchor cited in
+anchor (`docs/recon/RECON_commit2a.md §G`: *"the per-commit regression anchor cited in
 T12/U9/V4 (LTSSM layer; outside this commit's blast radius)"*), and it is
 counted as a separate line item in the total
 (`docs/predictions/SPEC_PREDICTIONS_CPL_TIMEOUT.md §G`). The other 11 `tb_ltssm` targets and

@@ -223,7 +223,7 @@ holding the bus numbers — i.e. exactly where Type 0's BAR2 would be.
 
 **Why it binds Stage D.** Predictions §5.4 runs BAR sizing against the *device* at
 `05:00.0`, which has a Type 0 header and six BARs — that is correct and unaffected. But
-the doc never records the bridge's BAR count anywhere, and `RECON_stageD.md` §11.2's
+the doc never records the bridge's BAR count anywhere, and `docs/recon/RECON_stageD.md` §11.2's
 decision gives Stage D a **second, per-level BAR instance**. A BAR stage pointed at the
 bridge, sweeping the six offsets a Type 0 header has, would write all-1s into **18h** —
 destroying the bus-number assignment made at transaction #3 — and then into 1Ch, 20h and
@@ -264,7 +264,7 @@ Two consequences:
    correct depth-first implementation** that wrote a provisional Subordinate, probed, and
    rewrote. The assertion is sound as a check on *this* sequencer; it is not a spec check,
    and the document should not let a later reader mistake it for one.
-2. **`RECON_stageD.md` §11.2's Stage E caveat gains a second concrete instance.** That
+2. **`docs/recon/RECON_stageD.md` §11.2's Stage E caveat gains a second concrete instance.** That
    caveat already says the per-level-instance shape does not scale to a tree walk. C8 adds
    that the *transaction protocol* does not scale either: Stage E's depth-first walk needs
    the two-phase write, so §5.4's shape is Stage-D-specific in two independent ways.

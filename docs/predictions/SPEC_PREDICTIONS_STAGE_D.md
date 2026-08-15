@@ -4,7 +4,7 @@
 any Stage D RTL exists and before any new test has been run against any DUT. Brief
 §2.5: predictions are committed *first*; falsification is **measured**, not asserted.
 
-**Companion:** `RECON_stageD.md` — read-only recon, `file:line` evidence at `f49d73d`,
+**Companion:** `docs/recon/RECON_stageD.md` — read-only recon, `file:line` evidence at `f49d73d`,
 plus the two architectural decisions (§11) this document builds on.
 
 ---
@@ -39,7 +39,7 @@ layout. **It is not a source for it.** `[PCI30]` §6.1 p.214 (`:10546-10549`):
 
 Figure 6-1 (p.215) is the Type **00h** header; at offset 18h it shows *Base Address
 Registers*. The PCI-to-PCI Bridge Architecture Specification is **not on the shelf**
-(full recursive listing of `/home/kourosh/openPCIE/0.doc` in `RECON_stageD.md` §8).
+(full recursive listing of `/home/kourosh/openPCIE/0.doc` in `docs/recon/RECON_stageD.md` §8).
 
 **The map used here is `[BASE]` §7.5.3 Figure 7-6 p.492**, which defines the Type 1
 Configuration Space Header for "Switch and Root Complex virtual PCI Bridges" — exactly
@@ -96,7 +96,7 @@ Register Number, R}` — again with no Type 0/1 variation.
 from `header.address[31:2]` and never reads `completer_id`; DW0's type field is
 `dw0[4:0] = header_r.tlp_type` (`:64`). So in this implementation the *only* thing that
 can differ is `dw0[4:0]` — the RTL cannot express a second difference even if one
-existed. (`RECON_stageD.md` §4.)
+existed. (`docs/recon/RECON_stageD.md` §4.)
 
 > **This is trap 8a's foundation.** Because exactly one bit distinguishes the two, an
 > on-wire assertion that omits `dw0[4:0]` — or that compares DW1/DW2/payload only —
@@ -180,7 +180,7 @@ With one bridge level there is exactly one bus behind it, so Secondary == Subord
 and case 2 has no satisfying bus number. The model should implement it and the tests
 should **not** claim to cover it. Writing a test that "exercises" it by setting
 Subordinate > Secondary with no device there would assert model behaviour, not DUT
-behaviour — `RECON_stageD.md` §11.2's Stage E caveat applies.
+behaviour — `docs/recon/RECON_stageD.md` §11.2's Stage E caveat applies.
 
 **P3.3 — Type 1 requests must NOT be answered by a non-bridge.** `[BASE]` §7.3.3 p.480,
 for Endpoints: *"If Configuration Request Type is 1, follow the rules for handling
@@ -268,7 +268,7 @@ holding the bus numbers**, i.e. exactly where Type 0's BAR2 would sit.
 
 > **Consequence, and the trap it creates.** §5.4 runs BAR sizing against the *device* at
 > `05:00.0`, which has a Type 0 header and six BARs — correct and unaffected. But
-> `RECON_stageD.md` §11.2 gives Stage D a **second, per-level BAR instance**, and a BAR
+> `docs/recon/RECON_stageD.md` §11.2 gives Stage D a **second, per-level BAR instance**, and a BAR
 > stage pointed at the *bridge* would sweep six offsets against a two-BAR header. The
 > first casualty is **18h**: an all-1s sizing write there **destroys the bus-number
 > assignment made at transaction #3**, after which 1Ch, 20h and 24h take the Secondary
@@ -420,7 +420,7 @@ leaves bus-number assignment *"implementation specific"* (already recorded at P2
    **not a spec check** — a correct depth-first enumerator that wrote a provisional
    Subordinate, probed, then rewrote would violate it. The acceptance test must say
    which of the two it is asserting.
-2. **`RECON_stageD.md` §11.2's Stage E caveat gains a second instance.** That caveat
+2. **`docs/recon/RECON_stageD.md` §11.2's Stage E caveat gains a second instance.** That caveat
    already says the per-level-instance *structure* does not scale to a tree walk. P5.7
    adds that the *transaction protocol* does not either: Stage E's depth-first walk needs
    the two-phase write. P5.4's shape is Stage-D-specific in two independent ways.
@@ -494,10 +494,10 @@ prevent.
 
 | id | prediction | measured |
 |---|---|---|
-| **F1a.1** | **No test changes state.** All 36 targets / 258 tests PASS, and **every sim end time is identical** to `RECON_stageD_baseline.txt`. This is the whole gate. | |
+| **F1a.1** | **No test changes state.** All 36 targets / 258 tests PASS, and **every sim end time is identical** to `docs/recon/RECON_stageD_baseline.txt`. This is the whole gate. | |
 | **F1a.2** | No new test is added in D-1a. Adding one would confound the inertness argument — a new test passing proves nothing about whether old observations moved. | |
 
-**The inertness argument, stated for the record** (decision A, `RECON_stageD.md` §11.1).
+**The inertness argument, stated for the record** (decision A, `docs/recon/RECON_stageD.md` §11.1).
 `tlp_requester.sv` has no parameter gating it off, so "byte-identical where gated off"
 cannot apply. Instead: every test in the suite asserts against **spec goldens**, so an
 unchanged PASS set *with identical sim end times* **is** an unchanged set of observed
@@ -523,7 +523,7 @@ members present. That isolates the behaviour from the compile.
 | **F1b.4** | CfgRd1 completion correlates to the right tag and status | **FAIL.** `tag_expects_data_o` (`:142-143`) omits `CFG_READ1`, so the read's completion is not expected and the tracker mismatches. | **FAIL as predicted** (2026-07-31): CplD payload tripped the tracker's `!expects_data && payload != 0` guard (`tlp_request_tracker.sv:334-340`) — `unexpected_completion_o` pulsed, no result ever fired. |
 | **F1b.5** | CFG1 segment limit is 4 bytes | **FAIL.** `command_limit()` (`:76-77`) omits the new members and returns `max_payload_bytes_i` (`:81`). | **FAIL as predicted** (2026-07-31): CfgRd1 bc=16 **admitted** and emitted as ONE TLP with `len=4, first_be=0xF, last_be=0xF` — direct evidence the limit in force was `max_read_bytes_i` (128), not 4 (a 4-byte limit would have split it). |
 
-> Five rows because there are five sites (`RECON_stageD.md` §3) — **but after D-1a they
+> Five rows because there are five sites (`docs/recon/RECON_stageD.md` §3) — **but after D-1a they
 > are one predicate.** Predicted: post-D-1a, a single mutation (removing the new members
 > from `is_cfg()`) kills all five rows at once. **If it does not — if some row survives
 > a mutation that should kill it — the refactor missed a site**, and that is the
@@ -553,10 +553,10 @@ members present. That isolates the behaviour from the compile.
 
 > **M2.4 is not contrived — it is the current state of the code.** `pcie_rq_if.sv:286`
 > is written per-command while every other config check on that path is class-shaped
-> (`RECON_stageD.md` §5). Adding `RQ_CFG_WRITE1` without touching `:286` is the natural
+> (`docs/recon/RECON_stageD.md` §5). Adding `RQ_CFG_WRITE1` without touching `:286` is the natural
 > mistake. Added to the brief's D-2 mutation list, which did not name it.
 
-> **M2.5 — a THIRD per-command site, found 2026-07-31.** `RECON_stageD.md` §5's "two
+> **M2.5 — a THIRD per-command site, found 2026-07-31.** `docs/recon/RECON_stageD.md` §5's "two
 > arms" survey (and the D-2 brief's "two arms + `bad_poison`, nothing else") missed
 > `desc_has_data` (`pcie_rq_if.sv:251-253`): per-command membership, the RQ-level
 > analogue of `tlp_requester`'s `command_has_data` (D-1b site F1b.2). Without
@@ -577,14 +577,14 @@ members present. That isolates the behaviour from the compile.
 
 **Regression (2026-07-31, cold build, sequential):** **38 targets / 274 tests, all
 PASS.** The 33 untouched baseline targets bit-identical to
-`RECON_stageD_baseline.txt` in verdict and sim end time; the two D-1b targets
+`docs/recon/RECON_stageD_baseline.txt` in verdict and sim end time; the two D-1b targets
 identical to their Session-3 record (`verilate_tlp_conf_cfg1` 5/9250.00,
 `verilate_tlp_cfg1_spine` 3/820.00); growth only by the extended targets —
 `verilate_rq_if` 11→16 (D2-S1..S5), `verilate_rq_if_tlp` 9→11 (D2-I1/I2),
 `verilate_rq_rc_top` 9→10 (V10). Decomposed: tb_tlp 25/124, RC surface 6/63,
 enum 6/86, conformance 1/1. 580.00 ns invariant holds
 (`verilate_tlp_cpl_timeout_off` == `verilate_tlp_request_tracker` == 580.00).
-Per-target lines recorded in the dated addendum of `RECON_stageD_baseline.txt`.
+Per-target lines recorded in the dated addendum of `docs/recon/RECON_stageD_baseline.txt`.
 
 ### §7.4 D-3 — the bridge sequencer
 
@@ -614,7 +614,7 @@ and sim end time; growth only by named targets — `verilate_enum_txn` 14→17
 (E15..E17), `verilate_enum_txn_tlp` 9→11 (I10/I11), new `verilate_enum_bus`
 (N1..N10, 2480.01) and `verilate_enum_bridge_tlp` (B1..B5, 17800.01).
 Decomposed: tb_tlp 25/124, RC surface 6/63, enum 8/106, conformance 1/1.
-580.00 ns invariant holds. Per-target lines in `RECON_stageD_baseline.txt`'s
+580.00 ns invariant holds. Per-target lines in `docs/recon/RECON_stageD_baseline.txt`'s
 D-3 addendum.
 
 ---
@@ -646,7 +646,7 @@ field subset.
 
 **Self-test for the trap itself:** point a CFG1 test at a CFG0 golden and confirm it
 **fails**. A guard that has never been seen to fire is not known to work
-(`RECON_stageD.md` §11 / brief §2.11).
+(`docs/recon/RECON_stageD.md` §11 / brief §2.11).
 
 > **Performed 2026-07-31, before any D-2 test was written.** A CFG1-built descriptor
 > asserted against the `type1=False` golden failed with field diff exactly
@@ -730,14 +730,14 @@ the run which actually discriminates.
 
 ## §9. Baseline and invariants this stage must not move
 
-From `RECON_stageD_baseline.txt`, measured cold at `f49d73d`:
+From `docs/recon/RECON_stageD_baseline.txt`, measured cold at `f49d73d`:
 
 - **36 targets / 258 tests, all PASS**, every `fusesoc` exit code 0.
 - **Sim-time invariant:** `verilate_tlp_cpl_timeout_off` and
   `verilate_tlp_request_tracker` both end at **580.00 ns**, checked after every commit.
 - Per-target counts and end times diffed **mechanically**, not eyeballed.
 - Note the corrected split: `verilate_enum_bar` **32**, `verilate_enum_bar_tlp` **7**
-  (the brief says 29/10; total 258 is unaffected — `RECON_stageD.md` §9).
+  (the brief says 29/10; total 258 is unaffected — `docs/recon/RECON_stageD.md` §9).
 - The two `_trace` targets are outside the gate.
 
 Growth is by named new targets only, stated in decomposed form (brief §9).
@@ -754,14 +754,14 @@ Recorded so their absence is visible rather than looking like an oversight.
 2. **Bridge memory/IO base-limit window programming.** Deferred (brief §8.2). Config
    traffic routes by bus number, so Stage D is unaffected; memory TLPs cannot reach
    behind the bridge until Stage E/F programs the windows.
-3. **Recursion beyond one bridge level.** Stage E. Per `RECON_stageD.md` §11.2, the
+3. **Recursion beyond one bridge level.** Stage E. Per `docs/recon/RECON_stageD.md` §11.2, the
    per-level-instance shape does **not** scale to a tree walk and must not be treated
    as load-bearing architecture.
 4. **The RC's own target-side Type 1 register file.** Out of scope; CQ/CC stay tied
    off. `tlp_config_decoder.sv:15` already exposes `type_one_o` for whenever it lands.
 5. **CRS Software Visibility** (§6.4) — no Root Control register exists.
 6. **`tlp_cmd_e` widening** — D-1b fills it to 8 of 8 exactly; do **not** widen during
-   Stage D (`RECON_stageD.md` §11.5).
+   Stage D (`docs/recon/RECON_stageD.md` §11.5).
 7. **BAR sizing of the bridge's own two BARs** (10h/14h, P4.7). Not needed — the bridge
    requests no memory resources in this topology, and the memory/IO base-limit windows
    are already deferred (item 2). Recorded here because P4.7's trap is the *opposite*

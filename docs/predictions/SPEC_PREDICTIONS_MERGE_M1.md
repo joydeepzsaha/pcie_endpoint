@@ -15,7 +15,7 @@ The change M-1 makes, in two commits:
 
 ## §0 The census these predictions rest on
 
-Re-derived from the tree at `99b7501`, not copied from `RECON_MERGE.md` §R1.
+Re-derived from the tree at `99b7501`, not copied from `docs/recon/RECON_MERGE.md` §R1.
 
 ### 0.1 Declaration and literal-width sites
 
@@ -36,7 +36,7 @@ Twelve sites name the type and therefore widen automatically: ports at
 function arguments at [tlp_requester.sv:82-114](../../src/tlp/tlp_requester.sv#L82-L114).
 
 **⚠️ Two sites carry a command signal at a hard-coded width and are invisible to a
-`tlp_cmd_e` grep — `RECON_MERGE.md` §R1 lists neither:**
+`tlp_cmd_e` grep — `docs/recon/RECON_MERGE.md` §R1 lists neither:**
 
 | site | declaration | connected to |
 |---|---|---|
@@ -153,7 +153,7 @@ diff M1_gate_widen.txt  M1_gate_reserve.txt && echo IDENTICAL
 
 **Falsified by:** either value moving off 580.00 in any gate. Subsumed by P1, but stated
 separately because it is the invariant carried forward from
-`RECON_MERGE_baseline.txt` and every prior stage, and it should be checkable without
+`docs/recon/RECON_MERGE_baseline.txt` and every prior stage, and it should be checkable without
 running a diff.
 
 ## §3 P3 — per-struct width predictions
@@ -286,7 +286,7 @@ not mistaken for success:
   supersedes, and M-1 does not re-measure them.
 - The message *behaviour* on `origin/main` — the requester rules, the generator's DW1/2/3
   packing, the parser's decode, the classifier's POSTED arm — remains **unreviewed and
-  unexecuted**, exactly as `RECON_MERGE.md` §4.1 found. M-1 reserves two encodings; it
+  unexecuted**, exactly as `docs/recon/RECON_MERGE.md` §4.1 found. M-1 reserves two encodings; it
   does not adopt, port, or validate any of that.
 - P1 identity is evidence of behavioural inertness at the 305 tests that exist. It is not
   evidence of coverage. Anything those tests do not reach is unmeasured before and after

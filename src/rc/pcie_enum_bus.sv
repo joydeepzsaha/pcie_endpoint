@@ -21,7 +21,7 @@
 // touches a tag.  This module also deliberately duplicates NO scan policy:
 // probing the secondary bus is the second pcie_enum_scan instance's job, and
 // this module's whole output is "the bridge now routes bus SEC_BUS_NUMBER --
-// go" (RECON_stageD.md SS6.4, decision (c) rejected).
+// go" (docs/recon/RECON_stageD.md SS6.4, decision (c) rejected).
 //
 // ===========================================================================
 // SS THE WRITE IS TYPE 0.  THAT IS THE POINT, NOT A DETAIL.
@@ -67,7 +67,7 @@
 //    association holds below the bridge exactly as it does above
 //    (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md P5.3).
 //
-//  * !! THIS SHAPE DOES NOT ITERATE (RECON_stageD.md SS11.2).  A tree walk
+//  * !! THIS SHAPE DOES NOT ITERATE (docs/recon/RECON_stageD.md SS11.2).  A tree walk
 //    needs iteration and the two-phase provisional-Subordinate protocol
 //    (P5.7); per-level instances and this single-shot FSM provide neither.
 //    The sequencing layer above pcie_cfg_txn is EXPECTED to be redesigned at

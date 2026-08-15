@@ -42,12 +42,12 @@ independent input to the merge. Only two branches are actually in play.
 
 Cold: `rm -rf build/` (2.7 GB removed) before the first target. Sequential, one
 `fusesoc run` per target. Full per-target census with the exact commands in
-`RECON_MERGE_baseline.txt`.
+`docs/recon/RECON_MERGE_baseline.txt`.
 
 The 42 is composed as `[stack-inventory / gearbox-contract]` records: 27 `verilate_*`
 in `tb/tlp/tb_tlp.core`, plus 14 of the 16 in `tb/rc/tb_rc.core` (excluding
 `verilate_enum_bar_trace` and `verilate_enum_bar_tlp_trace`, which
-[tb_rc.core:397](tb/rc/tb_rc.core#L397) declares out of the gate), plus
+[tb_rc.core:397](../../tb/rc/tb_rc.core#L397) declares out of the gate), plus
 `verilate_conformance` from `tb/ltssm_conformance/tb_ltssm_conformance.core`. Counting
 all 16 RC targets gives 44, not 42 — the exclusion is load-bearing and is re-derived
 mechanically by the sweep script, not asserted.
@@ -80,7 +80,7 @@ re-run after and is **empty** — the tree is clean.
 Both branches declare `typedef enum logic [2:0]`, 8 members, positional (no explicit
 values), so each member takes its ordinal.
 
-| pos | `origin/kourosh/dev` [tlp_pkg.sv:43-52](src/tlp/tlp_pkg.sv#L43-L52) | `origin/main` `src/tlp/tlp_pkg.sv:49-58` |
+| pos | `origin/kourosh/dev` [tlp_pkg.sv:43-52](../../src/tlp/tlp_pkg.sv#L43-L52) | `origin/main` `src/tlp/tlp_pkg.sv:49-58` |
 |---|---|---|
 | 0 | `TLP_CMD_MEM_READ` | `TLP_CMD_MEM_READ` |
 | 1 | `TLP_CMD_MEM_WRITE` | `TLP_CMD_MEM_WRITE` |
@@ -150,18 +150,18 @@ standalone port or signal. Twelve sites, of which **four cross a module boundary
 
 | site | kind | crosses boundary |
 |---|---|---|
-| [tlp_layer.sv:58](src/tlp/tlp_layer.sv#L58) `command_i` | input port | **yes** |
-| [tlp_requester.sv:17](src/tlp/tlp_requester.sv#L17) `command_i` | input port | **yes** |
-| [pcie_rq_if.sv:211](src/rc/pcie_rq_if.sv#L211) `command_o` | output port | **yes** |
-| [pcie_endpoint_top.sv:55](src/pcie_endpoint/pcie_endpoint_top.sv#L55) `command_i` | input port | **yes** |
-| [pcie_rq_if.sv:255](src/rc/pcie_rq_if.sv#L255) `desc_cmd` | internal | no |
-| [pcie_rq_if.sv:380](src/rc/pcie_rq_if.sv#L380) `cmd_r` | internal | no |
-| [pcie_rq_rc_top.sv:369](src/rc/pcie_rq_rc_top.sv#L369) `command` | wire between the two above | **yes** (both ends widen together) |
-| [tlp_requester.sv:55](src/tlp/tlp_requester.sv#L55) `command_r` | internal | no |
-| [tb_pcie_rq_if_tlp.sv:84](tb/rc/tb_pcie_rq_if_tlp.sv#L84) `command` | bench wire | **yes** |
-| [tb_pcie_rc_if_tlp.sv:124](tb/rc/tb_pcie_rc_if_tlp.sv#L124) `command` | bench wire | **yes** |
-| [tb_pcie_endpoint_top.sv:39](tb/endpoint/tb_pcie_endpoint_top.sv#L39) `command_i` | bench wire | **yes** |
-| [tlp_requester.sv:82-114](src/tlp/tlp_requester.sv#L82-L114) | 6 function args | no |
+| [tlp_layer.sv:58](../../src/tlp/tlp_layer.sv#L58) `command_i` | input port | **yes** |
+| [tlp_requester.sv:17](../../src/tlp/tlp_requester.sv#L17) `command_i` | input port | **yes** |
+| [pcie_rq_if.sv:211](../../src/rc/pcie_rq_if.sv#L211) `command_o` | output port | **yes** |
+| [pcie_endpoint_top.sv:55](../../src/pcie_endpoint/pcie_endpoint_top.sv#L55) `command_i` | input port | **yes** |
+| [pcie_rq_if.sv:255](../../src/rc/pcie_rq_if.sv#L255) `desc_cmd` | internal | no |
+| [pcie_rq_if.sv:380](../../src/rc/pcie_rq_if.sv#L380) `cmd_r` | internal | no |
+| [pcie_rq_rc_top.sv:369](../../src/rc/pcie_rq_rc_top.sv#L369) `command` | wire between the two above | **yes** (both ends widen together) |
+| [tlp_requester.sv:55](../../src/tlp/tlp_requester.sv#L55) `command_r` | internal | no |
+| [tb_pcie_rq_if_tlp.sv:84](../../tb/rc/tb_pcie_rq_if_tlp.sv#L84) `command` | bench wire | **yes** |
+| [tb_pcie_rc_if_tlp.sv:124](../../tb/rc/tb_pcie_rc_if_tlp.sv#L124) `command` | bench wire | **yes** |
+| [tb_pcie_endpoint_top.sv:39](../../tb/endpoint/tb_pcie_endpoint_top.sv#L39) `command_i` | bench wire | **yes** |
+| [tlp_requester.sv:82-114](../../src/tlp/tlp_requester.sv#L82-L114) | 6 function args | no |
 
 Because every one of these is spelled `tlp_cmd_e` and never `logic [2:0]`, the RTL side
 of the widening is genuinely mechanical: one edit to the typedef.
@@ -173,7 +173,7 @@ of the widening is genuinely mechanical: one edit to the typedef.
 *RTL: clean.* No comparison against an integer literal, no cast, no bit-slice of a
 command signal anywhere in either tree. `pcie_rq_if.sv:264-275` maps the 4-bit `RQ_*`
 descriptor `req_type` to `tlp_cmd_e` through an explicit `case`, not arithmetic.
-[tlp_requester.sv:88-90](src/tlp/tlp_requester.sv#L88-L90) even carries a comment
+[tlp_requester.sv:88-90](../../src/tlp/tlp_requester.sv#L88-L90) even carries a comment
 saying the choice was deliberate: *"deriving it from `command_r[0]` would tie
 correctness to the enum's positional encoding."*
 
@@ -182,17 +182,17 @@ correctness to the enum's positional encoding."*
 
 | file | constants |
 |---|---|
-| [tb/rc/test_pcie_rq_if.py:53-60](tb/rc/test_pcie_rq_if.py#L53-L60) | all 8, `CMD_MEM_READ=0` … **`CMD_CFG_READ1=6`, `CMD_CFG_WRITE1=7`** |
-| [tb/tlp/test_tlp_cfg1_spine.py:39-40](tb/tlp/test_tlp_cfg1_spine.py#L39-L40) | **`CMD_CFG_READ1=6`, `CMD_CFG_WRITE1=7`** |
-| [tb/tlp/test_tlp_conf_cfg1.py:45-46](tb/tlp/test_tlp_conf_cfg1.py#L45-L46) | **`CMD_CFG_READ1=6`, `CMD_CFG_WRITE1=7`** |
-| [tb/tlp/test_tlp_conf_requester.py:29-34](tb/tlp/test_tlp_conf_requester.py#L29-L34) | 0–5 |
-| [tb/tlp/test_tlp_conf_cfgbe.py:48-52](tb/tlp/test_tlp_conf_cfgbe.py#L48-L52) | 1–5 |
-| [tb/tlp/test_tlp_cfg0_spine.py:25-26](tb/tlp/test_tlp_cfg0_spine.py#L25-L26) | 2, 3 |
-| [tb/tlp/test_tlp_conf_tracker.py:26](tb/tlp/test_tlp_conf_tracker.py#L26) | 0 |
-| [tb/tlp/test_tlp_conf_datalast.py:33](tb/tlp/test_tlp_conf_datalast.py#L33) | 1 |
-| [tb/tlp/test_tlp_credit_integration.py:17](tb/tlp/test_tlp_credit_integration.py#L17) | 0 |
-| [tb/endpoint/test_pcie_endpoint_top.py:19-20](tb/endpoint/test_pcie_endpoint_top.py#L19-L20) | 0, 1 |
-| [tb/tlp/test_tlp_end_to_end.py:6-11](tb/tlp/test_tlp_end_to_end.py#L6-L11) | 0–5 (orphan file, see §3) |
+| [tb/rc/test_pcie_rq_if.py:53-60](../../tb/rc/test_pcie_rq_if.py#L53-L60) | all 8, `CMD_MEM_READ=0` … **`CMD_CFG_READ1=6`, `CMD_CFG_WRITE1=7`** |
+| [tb/tlp/test_tlp_cfg1_spine.py:39-40](../../tb/tlp/test_tlp_cfg1_spine.py#L39-L40) | **`CMD_CFG_READ1=6`, `CMD_CFG_WRITE1=7`** |
+| [tb/tlp/test_tlp_conf_cfg1.py:45-46](../../tb/tlp/test_tlp_conf_cfg1.py#L45-L46) | **`CMD_CFG_READ1=6`, `CMD_CFG_WRITE1=7`** |
+| [tb/tlp/test_tlp_conf_requester.py:29-34](../../tb/tlp/test_tlp_conf_requester.py#L29-L34) | 0–5 |
+| [tb/tlp/test_tlp_conf_cfgbe.py:48-52](../../tb/tlp/test_tlp_conf_cfgbe.py#L48-L52) | 1–5 |
+| [tb/tlp/test_tlp_cfg0_spine.py:25-26](../../tb/tlp/test_tlp_cfg0_spine.py#L25-L26) | 2, 3 |
+| [tb/tlp/test_tlp_conf_tracker.py:26](../../tb/tlp/test_tlp_conf_tracker.py#L26) | 0 |
+| [tb/tlp/test_tlp_conf_datalast.py:33](../../tb/tlp/test_tlp_conf_datalast.py#L33) | 1 |
+| [tb/tlp/test_tlp_credit_integration.py:17](../../tb/tlp/test_tlp_credit_integration.py#L17) | 0 |
+| [tb/endpoint/test_pcie_endpoint_top.py:19-20](../../tb/endpoint/test_pcie_endpoint_top.py#L19-L20) | 0, 1 |
+| [tb/tlp/test_tlp_end_to_end.py:6-11](../../tb/tlp/test_tlp_end_to_end.py#L6-L11) | 0–5 (orphan file, see §3) |
 | `origin/main:tb/endpoint/test_pcie_endpoint_line_rate.py:32-33` | **`CMD_MSG=6`, `CMD_MSG_DATA=7`** |
 
 The last row is the collision made concrete: `main` pins `CMD_MSG=6`/`CMD_MSG_DATA=7`
@@ -216,7 +216,7 @@ relative to the wire**.
 
 | | `dev` generator | `dev` parser | `main` generator | `main` parser |
 |---|---|---|---|---|
-| | [tlp_generator.sv:66,70](src/tlp/tlp_generator.sv#L66) | [tlp_parser.sv:125,146](src/tlp/tlp_parser.sv#L125) | `tlp_generator.sv:68,72` | `tlp_parser.sv:125,148` |
+| | [tlp_generator.sv:66,70](../../src/tlp/tlp_generator.sv#L66) | [tlp_parser.sv:125,146](../../src/tlp/tlp_parser.sv#L125) | `tlp_generator.sv:68,72` | `tlp_parser.sv:125,148` |
 | dw0[10] | `attributes[0]` | → `attributes[0]` | `attributes[2]` | → `attributes[2]` |
 | dw0[21:20] | `attributes[2:1]` | → `attributes[2:1]` | `attributes[1:0]` | → `attributes[1:0]` |
 
@@ -240,28 +240,28 @@ rotates; today dev's `command_attr_i` semantics are rotated end-to-end.
 
 **Exactly one target, one test.**
 
-- **`verilate_tlp_generator`** — [test_tlp_generator.py:84](tb/tlp/test_tlp_generator.py#L84)
+- **`verilate_tlp_generator`** — [test_tlp_generator.py:84](../../tb/tlp/test_tlp_generator.py#L84)
   drives `attr=5` and asserts against
-  [`expected_dw0`:66-67](tb/tlp/test_tlp_generator.py#L66-L67), which encodes the dev
+  [`expected_dw0`:66-67](../../tb/tlp/test_tlp_generator.py#L66-L67), which encodes the dev
   convention `((attr&1)<<10) | (((attr>>1)&3)<<20)`. With `attr=5` (`3'b101`): dev's
   RTL and the bench both produce `dw0[21:20]=2'b10`; main's RTL produces `2'b01`. The
-  assertion at [:89](tb/tlp/test_tlp_generator.py#L89) fails on DW0.
+  assertion at [:89](../../tb/tlp/test_tlp_generator.py#L89) fails on DW0.
 
 #### Tests that are structurally blind
 
 Every other attr site. Three distinct reasons:
 
 1. **Rotation-invariant path (no packing).** `verilate_rc_if` drives `attr=2`, `4` and
-   `randrange(0,8)` ([test_pcie_rc_if.py:827,830,886](tb/rc/test_pcie_rc_if.py#L827)),
-   but [tb_pcie_rc_if.sv:4](tb/rc/tb_pcie_rc_if.sv#L4) states *"No Transaction Layer in
-   the loop"* and [:55](tb/rc/tb_pcie_rc_if.sv#L55) assigns
+   `randrange(0,8)` ([test_pcie_rc_if.py:827,830,886](../../tb/rc/test_pcie_rc_if.py#L827)),
+   but [tb_pcie_rc_if.sv:4](../../tb/rc/tb_pcie_rc_if.sv#L4) states *"No Transaction Layer in
+   the loop"* and [:55](../../tb/rc/tb_pcie_rc_if.sv#L55) assigns
    `received_completion_header.attributes = hdr_attr_i` **directly as a struct field**.
    The value never crosses a parser. Same for `verilate_rq_if`
-   ([test_pcie_rq_if.py:325,628,751,766,780](tb/rc/test_pcie_rq_if.py#L325)) — attr is
+   ([test_pcie_rq_if.py:325,628,751,766,780](../../tb/rc/test_pcie_rq_if.py#L325)) — attr is
    an RQ-descriptor field at `[126:124]`, and
-   [pcie_rq_if.sv:472](src/rc/pcie_rq_if.sv#L472) passes it through unmodified. And for
+   [pcie_rq_if.sv:472](../../src/rc/pcie_rq_if.sv#L472) passes it through unmodified. And for
    `verilate_tlp_completion_gen`
-   ([test_tlp_completion_control.py:34](tb/tlp/test_tlp_completion_control.py#L34),
+   ([test_tlp_completion_control.py:34](../../tb/tlp/test_tlp_completion_control.py#L34),
    `request_attr=5`) — that DUT is `tlp_completion_generator` + `tlp_control`, no
    `tlp_generator`.
 
@@ -269,18 +269,18 @@ Every other attr site. Three distinct reasons:
    `verilate_rc_if_tlp` and `verilate_rq_rc_top` each put a **real `tlp_layer`**
    (generator *and* parser) in the loop, and each hardcodes the **dev** convention in
    its own DW0 helper —
-   [test_pcie_rq_if_tlp.py:65,68](tb/rc/test_pcie_rq_if_tlp.py#L65),
-   [test_pcie_rc_if_tlp.py:111,113](tb/rc/test_pcie_rc_if_tlp.py#L111),
-   [test_pcie_rq_rc_top.py:139,141](tb/rc/test_pcie_rq_rc_top.py#L139). **Every call
+   [test_pcie_rq_if_tlp.py:65,68](../../tb/rc/test_pcie_rq_if_tlp.py#L65),
+   [test_pcie_rc_if_tlp.py:111,113](../../tb/rc/test_pcie_rc_if_tlp.py#L111),
+   [test_pcie_rq_rc_top.py:139,141](../../tb/rc/test_pcie_rq_rc_top.py#L139). **Every call
    site uses the default `attr=0`.** So three integration targets carry the wrong
    convention in their golden model and cannot detect it.
 
 3. **Same for the TL conformance helpers** —
-   [enum_tb_common.py:368,370](tb/rc/enum_tb_common.py#L368) (`cfg_wire_dw0`),
-   [:423,425](tb/rc/enum_tb_common.py#L423) (`cpl_dw0`),
-   [test_tlp_conf_requester.py:62,65](tb/tlp/test_tlp_conf_requester.py#L62),
-   [test_tlp_conf_parser.py:43,47](tb/tlp/test_tlp_conf_parser.py#L43),
-   [test_tlp_parser.py:10-11](tb/tlp/test_tlp_parser.py#L10-L11). All dev convention,
+   [enum_tb_common.py:368,370](../../tb/rc/enum_tb_common.py#L368) (`cfg_wire_dw0`),
+   [:423,425](../../tb/rc/enum_tb_common.py#L423) (`cpl_dw0`),
+   [test_tlp_conf_requester.py:62,65](../../tb/tlp/test_tlp_conf_requester.py#L62),
+   [test_tlp_conf_parser.py:43,47](../../tb/tlp/test_tlp_conf_parser.py#L43),
+   [test_tlp_parser.py:10-11](../../tb/tlp/test_tlp_parser.py#L10-L11). All dev convention,
    all called with `attr=0` only.
 
 #### Does the blind list contain an integration target? Yes — three
@@ -322,8 +322,8 @@ and the same six, verbatim, to `pcie_endpoint_top`.
 |---|---|
 | `origin/main:src/pcie_endpoint/pcie_endpoint_top.sv:191` | **yes**, all six |
 | `origin/main:src/rc/pcie_rq_rc_top.sv:461` | **no — none** |
-| [tb/rc/tb_pcie_rq_if_tlp.sv:145](tb/rc/tb_pcie_rq_if_tlp.sv#L145) (identical on both branches) | **no — none** |
-| [tb/rc/tb_pcie_rc_if_tlp.sv:202](tb/rc/tb_pcie_rc_if_tlp.sv#L202) (identical on both branches) | **no — none** |
+| [tb/rc/tb_pcie_rq_if_tlp.sv:145](../../tb/rc/tb_pcie_rq_if_tlp.sv#L145) (identical on both branches) | **no — none** |
+| [tb/rc/tb_pcie_rc_if_tlp.sv:202](../../tb/rc/tb_pcie_rc_if_tlp.sv#L202) (identical on both branches) | **no — none** |
 
 `main` changed `pcie_rq_rc_top.sv` only in comments; its port list is byte-identical to
 the base. The two RC benches `main` never touched at all.
@@ -337,7 +337,7 @@ But:
 
 #### ⚠️ It never gets that far — `PINMISSING` is fatal under this repo's own waivers
 
-[lint/waiver.vlt](lint/waiver.vlt) waives `PINCONNECTEMPTY` (an explicitly empty
+[lint/waiver.vlt](../../lint/waiver.vlt) waives `PINCONNECTEMPTY` (an explicitly empty
 `.port()`) but **not `PINMISSING`** (a port omitted from the list). The `tlp`/`rc`
 targets pass `waiver.vlt` with no `-Wno-fatal`. Measured on a two-module synthetic case
 with this repo's actual waiver file:
@@ -356,7 +356,7 @@ not.)
 
 #### `pcie_endpoint_top` — two instantiation sites, both fine, and *why* they are
 
-[src/pcie_endpoint/pcie_endpoint_top.sv:5](src/pcie_endpoint/pcie_endpoint_top.sv#L5)
+[src/pcie_endpoint/pcie_endpoint_top.sv:5](../../src/pcie_endpoint/pcie_endpoint_top.sv#L5)
 is the module. Instantiations: `origin/main:tb/endpoint/tb_pcie_endpoint_top.sv:248`
 and `origin/main:tb/endpoint/tb_pcie_endpoint_line_rate.sv:281`.
 
@@ -378,8 +378,8 @@ attach automatically — `main` declares matching signals at `:44-45` and `:64-6
 `.*` instantiation **cannot** raise `PINMISSING`.
 
 The three RC sites use **explicit named connections** with no `.*` —
-[tb_pcie_rq_if_tlp.sv:148ff](tb/rc/tb_pcie_rq_if_tlp.sv#L148),
-[tb_pcie_rc_if_tlp.sv:202ff](tb/rc/tb_pcie_rc_if_tlp.sv#L202),
+[tb_pcie_rq_if_tlp.sv:148ff](../../tb/rc/tb_pcie_rq_if_tlp.sv#L148),
+[tb_pcie_rc_if_tlp.sv:202ff](../../tb/rc/tb_pcie_rc_if_tlp.sv#L202),
 `origin/main:src/rc/pcie_rq_rc_top.sv:461ff`. Every added port must be listed by hand or
 the build fails. **The endpoint island is internally consistent on `main` because of
 `.*`; the RC island is not because it is explicit.** That also means the endpoint side
@@ -482,9 +482,9 @@ The routing predicate, base/dev → main:
 +  if (tlp_dw0.byte0 inside {CfgRd0, CfgWr0})
 ```
 
-[pcie_tlp_pkg.sv:5-8](src/packages/pcie_tlp_pkg.sv#L5-L8) declares `byte0` as
+[pcie_tlp_pkg.sv:5-8](../../src/packages/pcie_tlp_pkg.sv#L5-L8) declares `byte0` as
 `{Fmt[7:5], Type[4:0]}`, so `byte0.Type` is **5 bits**, while
-[pcie_datalink_pkg.sv:83-105](src/packages/pcie_datalink_pkg.sv#L83-L105) declares the
+[pcie_datalink_pkg.sv:83-105](../../src/packages/pcie_datalink_pkg.sv#L83-L105) declares the
 constants as **8 bits**. The old comparison zero-extends the 5-bit field to 8, so:
 
 | constant | value | matched a 5-bit `Type`? |
@@ -569,8 +569,8 @@ not alter any existing credit arithmetic.
 
 `git grep` for `tlp2dllp|dllp2tlp|pcie_datalink` across `src/rc/` and `tb/rc/` returns
 **nothing**. The only instantiations in either tree are
-[dllp_transmit.sv:163](src/dllp/dllp_transmit.sv#L163) (`tlp2dllp`) and
-[dllp_receive.sv:246](src/dllp/dllp_receive.sv#L246) (`dllp2tlp`), reachable only
+[dllp_transmit.sv:163](../../src/dllp/dllp_transmit.sv#L163) (`tlp2dllp`) and
+[dllp_receive.sv:246](../../src/dllp/dllp_receive.sv#L246) (`dllp2tlp`), reachable only
 through the DLL/EP island. **All 488 changed lines in `dllp2tlp.sv`, and all 208 in
 `tlp2dllp.sv`, are EP-only.** This confirms the three-disjoint-islands picture in
 [stack-integration-recon] at the current anchors.
@@ -634,7 +634,7 @@ runnable dependency-wise, though not enum-wise (R1).
 
 `tb/endpoint/tb_pcie_endpoint_top.core` gains `- fusesoc:pcie:phy_scrambler:1.0.0`.
 That core name exists on dev already
-([scrambler.core:2](src/scrambler/scrambler.core#L2)), and `main` adds
+([scrambler.core:2](../../src/scrambler/scrambler.core#L2)), and `main` adds
 `encode_8b10b.sv` / `decode_8b10b.sv` to its fileset — **both files already exist on
 dev** in `src/scrambler/`. So this dependency resolves cleanly post-merge.
 
@@ -804,8 +804,8 @@ free only at the repo migration.
    tlp_credit_manager.sv:53-54, 66-83.)` for the flow-control gate. On `main`,
    `tlp_layer.sv:249` is `(parsed_config && !target_config_hit_o)`. The gate is at
    `main`'s `tlp_layer.sv:290`. **The citation is wrong on `main`.** Dev's equivalent,
-   [pcie_rq_rc_top.sv:40](src/rc/pcie_rq_rc_top.sv#L40), cites `tlp_layer.sv:280` and is
-   **right** — [tlp_layer.sv:280](src/tlp/tlp_layer.sv#L280) is exactly
+   [pcie_rq_rc_top.sv:40](../../src/rc/pcie_rq_rc_top.sv#L40), cites `tlp_layer.sv:280` and is
+   **right** — [tlp_layer.sv:280](../../src/tlp/tlp_layer.sv#L280) is exactly
    `vc_packet_ready = credit_request_ready && transmit_enable_i && link_up_i`.
 
 7. **`origin/main:src/rc/pcie_rq_rc_top.sv:47`** — the same commit renumbered the
@@ -816,15 +816,15 @@ free only at the repo migration.
 
 8. **`origin/main:src/rc/pcie_rq_rc_top.sv`** deletes the entire `SPEC ANCHORS` block
    (PG213 v1.3 Table 60/61/65, PCIe Base 2.1 §2.6) that dev's version carries from
-   [:16](src/rc/pcie_rq_rc_top.sv#L16). Pure doc regression in a file `main` otherwise
+   [:16](../../src/rc/pcie_rq_rc_top.sv#L16). Pure doc regression in a file `main` otherwise
    did not functionally change at all — its port list and logic are byte-identical to
    the base (R3).
 
-9. **[tb/tlp/test_tlp_end_to_end.py](tb/tlp/test_tlp_end_to_end.py) is an orphan.**
+9. **[tb/tlp/test_tlp_end_to_end.py](../../tb/tlp/test_tlp_end_to_end.py) is an orphan.**
    `grep end_to_end tb/tlp/tb_tlp.core tb/rc/tb_rc.core` returns nothing on either
    branch. It has the most thorough attr coverage in the tree —
-   [:275](tb/tlp/test_tlp_end_to_end.py#L275) sweeps `attr=(number ^ 3) & 7` and
-   [:283](tb/tlp/test_tlp_end_to_end.py#L283) asserts the decode — **and none of it
+   [:275](../../tb/tlp/test_tlp_end_to_end.py#L275) sweeps `attr=(number ^ 3) & 7` and
+   [:283](../../tb/tlp/test_tlp_end_to_end.py#L283) asserts the decode — **and none of it
    runs.** `main` modifies this file (75 lines) as though it were live.
 
 10. **`lint/waiver.vlt` does not waive `PINMISSING`** although it waives
@@ -909,7 +909,7 @@ On `kourosh/dev` alone. Final member order: dev's 0–7 unchanged, then
 format, and it must be provably behaviour-neutral before anything else moves.
 Appending honours the `tlp_pkg` append-only rule; preserving 0–7 keeps all six
 in-gate Python constants (R1.4) valid, so the 42/305 gate must come back **byte-identical
-to `RECON_MERGE_baseline.txt`, every target to 0.01 ns** — the same equivalence standard
+to `docs/recon/RECON_MERGE_baseline.txt`, every target to 0.01 ns** — the same equivalence standard
 S-2 met. If any sim end time moves, the widening was not neutral. The two members are
 dead on arrival (nothing generates them yet), which is the point: they cost nothing to
 carry and they remove the collision before the merge can express it.
@@ -940,7 +940,7 @@ Now genuinely one commit, in this order internally:
    inputs need real ties. **Without this the merge does not build even with the enum
    fixed.**
 3. **Attr convention** — adopt `main`'s spec-faithful rotation, and update dev's five
-   golden helpers ([test_tlp_generator.py:66-67](tb/tlp/test_tlp_generator.py#L66-L67),
+   golden helpers ([test_tlp_generator.py:66-67](../../tb/tlp/test_tlp_generator.py#L66-L67),
    `test_tlp_conf_requester.py:62,65`, `test_tlp_conf_parser.py:43,47`,
    `test_tlp_parser.py:10-11`, `enum_tb_common.py:368,370,423,425`) plus the three `_tlp`
    bench helpers. M-2's tests are the check that this was done everywhere.

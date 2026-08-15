@@ -1,7 +1,7 @@
 # SPEC_PREDICTIONS_RQ_RC.md — Phase 1 spec predictions for Commit 2a
 
 **Branch:** `kourosh/dev` @ `f3160d0` · **Mode:** documentation only, no RTL, no commit.
-Companion to `RECON_commit2a.md`. This is the golden reference the RTL and tbs are checked against.
+Companion to `docs/recon/RECON_commit2a.md`. This is the golden reference the RTL and tbs are checked against.
 
 > 🔁 **RE-ANCHORED 2026-07-28 (Phase B) against `50542d1`** — post Joy PR#3 merge (`b0d3971`) plus
 > the six reconciliation fixes. Every RTL `file:line` citation below was written against the
@@ -13,7 +13,7 @@ Companion to `RECON_commit2a.md`. This is the golden reference the RTL and tbs a
 >    `command_error_valid_o` + `command_error_code_o` (`tlp_requester.sv:49-50`), and
 >    `command_digest_valid_i`/`command_digest_i` → `command_ecrc_enable_i` (`:25`).
 >
-> Full status table and the new §4.5 constraints: `RECON_commit2a.md` **§P** and **§Q**.
+> Full status table and the new §4.5 constraints: `docs/recon/RECON_commit2a.md` **§P** and **§Q**.
 > **PG213-sourced constants are untouched by this pass** — they still await the PDF.
 
 > ✅ **CORRECTION 2026-07-28 (later the same day, post-`d5a4253`) — read this before anything else.**
@@ -214,7 +214,7 @@ Merge-era simulation results, with the current outcome alongside:
 
 **Consequences:** T5 is removed from the Commit-2a plan (replaced by T5′, §A). Commit 2b's
 Secondary-Bus-Number write must become a **whole-DW read-modify-write of config DW `0x18`** —
-**operator decision.** Full detail and the anchor evidence: `RECON_commit2a.md` §B.3a.
+**operator decision.** Full detail and the anchor evidence: `docs/recon/RECON_commit2a.md` §B.3a.
 
 ### D.4 BE-consistency check (mandatory) — **CONFIRMED, anchors MOVED + one item extended**
 Recompute `tlp_first_be(off, bc)` / `tlp_last_be(off, bc)` and compare to the `tuser` BEs. On
@@ -319,7 +319,7 @@ Any Commit-2a assertion written against the old names must be re-pointed:
 `transmit_enable_i=1`, `fc_initialized_i=1`, and at least one `fc_update_valid_i` pulse with
 non-zero credits (`tlp_layer.sv:19-20, 31-38, 249`; `tlp_credit_manager.sv:53-54, 76-83`).
 Config requests consume **NPH/NPD** credit (`tlp_layer.sv:262-272`). Reference init sequence:
-`tb/tlp/test_tlp_conf_requester.py:112-119`. Full detail: `RECON_commit2a.md` §Q.2.
+`tb/tlp/test_tlp_conf_requester.py:112-119`. Full detail: `docs/recon/RECON_commit2a.md` §Q.2.
 
 ## G. Test-list deltas vs brief §6/§7 (from go/no-go)
 - **§4.3 fixed to R1** — T2/T5/T11 assert the R1 mapping and the D.4 rejects (non-contiguous,

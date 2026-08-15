@@ -500,7 +500,7 @@ exist for debugging and are deliberately outside the gate, as established in
 
 ### 9.1 Per-target record
 
-See `RECON_stageD_baseline.txt`, committed alongside this file: one line per target,
+See `docs/recon/RECON_stageD_baseline.txt`, committed alongside this file: one line per target,
 `target|rc|TESTS/PASS/FAIL/SKIP|sim end time`. Diff mechanically after every commit;
 do not eyeball.
 
@@ -562,7 +562,7 @@ The gate is instead the suite's own inertness argument, the same one that proved
 `pcie_enum_top` hoist: every test in the suite asserts against spec goldens, so an
 unchanged PASS set *with identical sim end times* **is** an unchanged set of observed
 values. Required for D-1a: full **36 targets / 258 tests** identical in verdict **and**
-sim end time, diffed mechanically against `RECON_stageD_baseline.txt`. One commit,
+sim end time, diffed mechanically against `docs/recon/RECON_stageD_baseline.txt`. One commit,
 landed before D-1b introduces anything behavioural.
 
 ### 11.2 Decision B — D-3 uses per-level scan/BAR instances

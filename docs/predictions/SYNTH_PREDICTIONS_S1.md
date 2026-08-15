@@ -17,7 +17,7 @@ placeholder only; the real clocking architecture is blocked on the GTH-attach de
 ### 0.1 The synthesis units
 
 Re-derived at HEAD from `src/rc/rc_core.core`, `src/tlp/tlp_core.core` and the RTL, then
-cross-checked against `RECON_STACK_INTEGRATION.md` §4A.
+cross-checked against `docs/recon/RECON_STACK_INTEGRATION.md` §4A.
 
 There are exactly two RC-side integration tops in the `rc_core` fileset:
 

@@ -372,7 +372,7 @@ follows from what is now known, not from the original plan.
    16% once the VC buffer is subtracted — was right all along.
 
 2. **Extend the vertical downward: the DLL and `pcie_endpoint_top`.** S-1 deliberately
-   covered only the RC. `RECON_STACK_INTEGRATION.md` §4A names `pcie_endpoint_top`
+   covered only the RC. `docs/recon/RECON_STACK_INTEGRATION.md` §4A names `pcie_endpoint_top`
    (TL + DLL) and `pcie_phy_top` (PHY + LTSSM + DLL) as the other two integration tops,
    and neither has ever been through synthesis. Given that the one memory S-1 looked at
    was mapped to 164,800 flip-flops, **the DLL's retry buffer is the obvious next

@@ -60,7 +60,7 @@ package tlp_pkg;
     // ours".  The alternative -- adopting the other branch's numbering -- would
     // move CFG_READ1/CFG_WRITE1 off 6 and 7, and three bench files bind those
     // two ordinals as Python integers while eight more bind ordinals 0..5.
-    // See RECON_MERGE.md SSR1 for the collision and docs/findings/M1_FINDINGS.md for the gate.
+    // See docs/recon/RECON_MERGE.md SSR1 for the collision and docs/findings/M1_FINDINGS.md for the gate.
     //
     // !! WARNING to whoever gives these a datapath: the requester FAILS OPEN on
     // them today.  command_non_posted is derived as "!= TLP_CMD_MEM_WRITE", so

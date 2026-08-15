@@ -56,7 +56,7 @@ each, every `rc=0`, every per-test sim time unmoved.
 Verilator emitted **zero warnings and zero errors** across all 126 target builds
 (42 × 3): `grep -rhoE "%(Warning|Error)-[A-Z]+"` over every saved log returns nothing.
 
-This record is finer than `RECON_MERGE_baseline.txt`, which held only the 42 aggregates.
+This record is finer than `docs/recon/RECON_MERGE_baseline.txt`, which held only the 42 aggregates.
 A per-test row catches two tests trading sim time while their target total holds still —
 a change the M-0 format could not have seen. That refinement cost nothing and is the
 form later stages should keep.
@@ -80,7 +80,7 @@ census the predictions were built to replace.
 
 ---
 
-## §3 The census, and the gap in `RECON_MERGE.md` §R1
+## §3 The census, and the gap in `docs/recon/RECON_MERGE.md` §R1
 
 ### 3.1 ⚠️ Two sites R1 missed, and the class that hid them
 
@@ -251,7 +251,7 @@ and two of them additionally say "(8 members)".
 this brief authorises. The full site list is above so M-2 — which edits several of these
 same bench files for the attr convention — can absorb it. The lesson is the one the
 brief's §6 already applied to the new members: **cite a stable anchor, not a line
-number.** The reserved-member comment names `RECON_MERGE.md` §R1 for that reason.
+number.** The reserved-member comment names `docs/recon/RECON_MERGE.md` §R1 for that reason.
 
 ---
 
@@ -268,7 +268,7 @@ number.** The reserved-member comment names `RECON_MERGE.md` §R1 for that reaso
   critical path, but that is an expectation, not a measurement.
 - **`origin/main`'s message behaviour remains unreviewed and unexecuted** — its
   requester rules, generator DW1/2/3 packing, parser decode and classifier POSTED arm.
-  `RECON_MERGE.md` §4.1 found that `main` has not compiled since `8386c16`. M-1 reserves
+  `docs/recon/RECON_MERGE.md` §4.1 found that `main` has not compiled since `8386c16`. M-1 reserves
   two encodings; it adopts, ports and validates nothing.
 - **P1 identity is evidence of behavioural inertness at the 305 tests that exist**, not
   of coverage. Whatever those tests do not reach is equally unmeasured before and after.

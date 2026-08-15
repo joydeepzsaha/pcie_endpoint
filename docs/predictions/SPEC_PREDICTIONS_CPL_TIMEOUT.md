@@ -1,7 +1,7 @@
 # SPEC_PREDICTIONS_CPL_TIMEOUT.md — Phase 1 predictions for the `tlp_request_tracker` Completion Timeout
 
 **Branch:** `kourosh/dev` · **Written against:** `cc1e194` · **Date:** 2026-07-28
-Companion to `RECON_cpl_timeout.md`. Written **before** any RTL was edited and before any new test
+Companion to `docs/recon/RECON_cpl_timeout.md`. Written **before** any RTL was edited and before any new test
 was run. The "Actual" column was filled in afterwards; every falsification is called out in §F.
 
 Pattern note: the established convention in this repo is a repo-root `SPEC_PREDICTIONS_<AREA>.md`
@@ -88,11 +88,11 @@ Bit 4, p. 550:
 | §1.4 QUARANTINE rather than immediate recycle | §6.2.3.2.4.5 p.374–375 explicitly worries about a late/misrouted Completion colliding with Requester recovery | ✅ supported in spirit; the exact quarantine is a design choice |
 | §1.6 a timed-out request is failed; partial data is the FSM's problem | §2.8 p.152: "the Requester is permitted to keep or to discard the data that was returned prior to timer expiration" | ✅ explicitly permitted |
 | §1.5 late completion drained **silently** (no `unexpected_completion_o`) | A CPL for a tag no longer outstanding is by construction an Unexpected Completion (§6.2.3.2.4.5). We suppress that report and raise the more specific `late_cpl_valid_o` instead. | ⚠️ **deliberate deviation**, documented in the module header. `late_cpl_valid_o` is strictly more information than `unexpected_completion_o` would have been, and §6.2.3.2.4.5 classes the case as an *Advisory* Non-Fatal Error — advisory, not required-fatal. |
-| §1.7 ZOMBIE counts in `outstanding_o` | not a spec concern | design choice, see `RECON_cpl_timeout.md` §6 |
+| §1.7 ZOMBIE counts in `outstanding_o` | not a spec concern | design choice, see `docs/recon/RECON_cpl_timeout.md` §6 |
 
 ---
 
-## C. Timing model (predicted, derived from the design in `RECON_cpl_timeout.md` §6)
+## C. Timing model (predicted, derived from the design in `docs/recon/RECON_cpl_timeout.md` §6)
 
 `cycle_counter_r` and `scan_index_r` both start at 0 on the first non-reset edge and increment every
 cycle, so `scan_index_r == cycle_counter_r mod TAG_COUNT` for `TAG_COUNT = 32`.
@@ -153,7 +153,7 @@ Integration tests run on **`verilate_rq_rc_top`** at the **default 4096**, 4 ns 
 
 With the default 4096, **no existing test fires either strobe.** Basis: the longest-running test in
 the entire TL/RC suite is `v4_backpressure_tag_exhaustion_recovery` at 606 cycles, and the longest
-tracker test is `tag_exhaustion` at 177 cycles (`RECON_cpl_timeout.md` §4). Every test resets the
+tracker test is `tag_exhaustion` at 177 cycles (`docs/recon/RECON_cpl_timeout.md` §4). Every test resets the
 DUT first, so timers cannot accumulate across tests. Predicted margin: **6.8×** at the tightest
 point. To be confirmed by a live monitor over the full sequential regression, not by this argument.
 
@@ -171,7 +171,7 @@ never has to: **the tracker's completion port is header-only** (`tlp_request_tra
 payload beats bypass it entirely (`tlp_layer.sv:254-259`). The drain is beat-free, and the beats
 are swallowed by the orphan drain that already existed at `pcie_rc_if.sv:341-343`. No byte-counting
 code was added anywhere, which is why the RC3/RC5 failure class could not be reproduced here.
-Full detail in `RECON_cpl_timeout.md` §3.
+Full detail in `docs/recon/RECON_cpl_timeout.md` §3.
 
 ### F.2 §2.8 does not "permit" the timer restart — it is silent
 

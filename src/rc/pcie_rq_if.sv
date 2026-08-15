@@ -270,7 +270,7 @@ module pcie_rq_if
       // Stage D-2: the Type 1 pair, mapped to the D-1b commands.  Setting
       // desc_is_config is the WHOLE integration with the legality checks --
       // bad_cfg_n, bad_cfg_fit, bad_at and the config address packing below
-      // are class-shaped and bind to CFG1 with no edit (RECON_stageD.md SS5).
+      // are class-shaped and bind to CFG1 with no edit (docs/recon/RECON_stageD.md SS5).
       RQ_CFG_READ1:  begin desc_cmd = TLP_CMD_CFG_READ1;  desc_is_config = 1'b1; end
       RQ_CFG_WRITE1: begin desc_cmd = TLP_CMD_CFG_WRITE1; desc_is_config = 1'b1; end
       default:       type_ok = 1'b0;
@@ -278,7 +278,7 @@ module pcie_rq_if
   end
 
   // Per-command like bad_poison below, NOT class-shaped: this is the second
-  // of the two decode sites RECON_stageD.md SS5's "two arms" survey missed
+  // of the two decode sites docs/recon/RECON_stageD.md SS5's "two arms" survey missed
   // (the RQ-level analogue of tlp_requester's command_has_data, D-1b site 2).
   // Leaving CFG_WRITE1 out here silently reclassifies a CfgWr1 as payload-
   // less and rejects its packet with RQ_ERR_MISSING_LAST.

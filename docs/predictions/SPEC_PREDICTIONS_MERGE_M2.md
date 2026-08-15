@@ -284,7 +284,7 @@ finding to report, not an edit to absorb.
   through a netlist; `SYNTH_FINDINGS_S1/S2.md` describe a netlist already superseded by
   M-1.
 - **`origin/main`'s attr RTL remains unexecuted** regardless of which side §2 vindicates.
-  `RECON_MERGE.md` §4.1 found `main` has not compiled since `8386c16`, so "main is
+  `docs/recon/RECON_MERGE.md` §4.1 found `main` has not compiled since `8386c16`, so "main is
   correct" is a statement about its source text, never about its behaviour.
 - **Only DW0 attr placement is in scope.** TC, AT, TH, EP, TD share the same byte
   mapping and are asserted only incidentally, by the tests that already pass.
