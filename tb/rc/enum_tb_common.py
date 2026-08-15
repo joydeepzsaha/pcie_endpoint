@@ -693,7 +693,7 @@ class Socket:
 #                    are genuinely different models. What they SHARE is the
 #                    four-name interface .start / .seen / .wait_for /
 #                    .complete, and that contract is specified in
-#                    EP_VERIFICATION_MODEL_SPEC.md rather than forced into a
+#                    docs/spec-notes/EP_VERIFICATION_MODEL_SPEC.md rather than forced into a
 #                    common base class. A third implementation (BAR write-mask
 #                    semantics) joins them in Commit D.
 #

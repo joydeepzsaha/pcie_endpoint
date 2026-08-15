@@ -836,7 +836,7 @@ free only at the repo migration.
     four of the seven constants in its list could never match (R4). The code reads as a
     seven-way classifier; it is a three-way one.
 
-12. **`[stack-inventory-c2a]`'s note that `STACK_INVENTORY.md` claims "27/151 not 152"**
+12. **`[stack-inventory-c2a]`'s note that `docs/spec-notes/STACK_INVENTORY.md` claims "27/151 not 152"**
     remains uncorrected in the tree at this anchor. Unrelated to the merge, restated so
     it is not re-derived a third time.
 

@@ -103,7 +103,7 @@ Corrected arithmetic:
 - `6a8c9de` added `verilate_tlp_credit_integration` (2 tests) → **30 / 172**.
 
 **Root cause of the error — worth recording, because this is its third
-occurrence.** `STACK_INVENTORY.md` headline finding 0.1 and §2.1 state *"The
+occurrence.** `docs/spec-notes/STACK_INVENTORY.md` headline finding 0.1 and §2.1 state *"The
 trusted baseline is 27 targets / 151 tests, not 152 … The '152' in the brief is a
 bookkeeping slip of one"*. That reconciliation is internally consistent **for the
 TLP+RC set alone** and is not wrong about that set — but it mis-attributed the
@@ -116,7 +116,7 @@ exactly as `docs/predictions/SPEC_PREDICTIONS_CPL_TIMEOUT.md §G` tabulates it:
 **TOTAL: TESTS=152 PASS=152 FAIL=0**
 ```
 
-`STACK_INVENTORY.md` then listed LTSSM wholesale under *"Not in the trusted
+`docs/spec-notes/STACK_INVENTORY.md` then listed LTSSM wholesale under *"Not in the trusted
 baseline"*, and **this recon inherited that exclusion without re-deriving it** —
 trusting a downstream summary over the two primary records. The lesson is the
 same one the project keeps relearning: re-measure, and when a document and an

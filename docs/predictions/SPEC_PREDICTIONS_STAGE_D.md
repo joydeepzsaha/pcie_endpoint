@@ -239,7 +239,7 @@ the PCI-to-PCI bridge layout. This matches the existing RTL exactly:
 constant needed**, and the existing bit-7 masking already makes a multi-function bridge
 classify correctly.
 
-> **Scope clarification, added 2026-07-31** (`MINDSHARE_CROSSCHECK_STAGE_D.md` C9). The
+> **Scope clarification, added 2026-07-31** (`docs/spec-notes/MINDSHARE_CROSSCHECK_STAGE_D.md` C9). The
 > claim above is about **classification only**: masking to `[6:0]` before comparing to
 > `7'h01` classifies a multi-function bridge *as a bridge*. It is **not** a claim that
 > this design enumerates a multi-function device. It does not — functions 1–7 are never
@@ -260,7 +260,7 @@ organisation, not by our assumption. Note that the bridge's
 scope** (it gates secondary-side error/reset behaviour, not config routing).
 
 **P4.7 — ⚠️ a Type 1 header has TWO BARs (10h/14h), not six.** *Added 2026-07-31;
-`MINDSHARE_CROSSCHECK_STAGE_D.md` C7.* `[BASE]` **§7.5.3.1 "Base Address Registers
+`docs/spec-notes/MINDSHARE_CROSSCHECK_STAGE_D.md` C7.* `[BASE]` **§7.5.3.1 "Base Address Registers
 (Offset 10h/14h)" p.493** names two offsets for the Type 1 header. Contrast `[BASE]`
 **§7.5.2.1 "Base Address Registers (Offset 10h - 24h)"**, the Type 0 subsection, which
 names six. Figure 7-6 p.492 — already the map of record for this section — shows **18h
@@ -366,7 +366,7 @@ this is preserved unchanged when the target is addressed via CFG1, because the o
 is a property of the BAR stage, not of the config type.
 
 **P5.6 — ⚠️ Completer ID is `0000h` until the Function's first Type 0 Configuration
-Write.** *Added 2026-07-31; `MINDSHARE_CROSSCHECK_STAGE_D.md` C6.* `[BASE]` **§2.2.9
+Write.** *Added 2026-07-31; `docs/spec-notes/MINDSHARE_CROSSCHECK_STAGE_D.md` C6.* `[BASE]` **§2.2.9
 "Completion Rules" p.99**:
 
 > "Functions must capture the Bus and Device Numbers supplied with all Type 0
@@ -404,7 +404,7 @@ Applied to P5.4's sequence:
 > inherits the deviation, and P5.6 is exactly the rule that makes it matter.
 
 **P5.7 — ⚠️ P5.4's single 18h write is Stage-D-specific, not the general algorithm.**
-*Added 2026-07-31; `MINDSHARE_CROSSCHECK_STAGE_D.md` C8.* A general enumerator cannot
+*Added 2026-07-31; `docs/spec-notes/MINDSHARE_CROSSCHECK_STAGE_D.md` C8.* A general enumerator cannot
 know the Subordinate Bus Number at write time — it is discovered by descending. The
 standard shape is therefore **two writes per bridge**: a provisional wide Subordinate on
 the way down, and the true value rewritten on the way back up.
@@ -681,7 +681,7 @@ routing decision on PCIe.** An assertion that varies only Primary Bus Number and
 to prove routing is vacuous *even with distinct values* — the spec says nothing reads
 it. Route-proving assertions must vary **Secondary**.
 
-**A second instance, added 2026-07-31** (`MINDSHARE_CROSSCHECK_STAGE_D.md` C6; anchor
+**A second instance, added 2026-07-31** (`docs/spec-notes/MINDSHARE_CROSSCHECK_STAGE_D.md` C6; anchor
 `[BASE]` §2.2.9 p.99 via P5.6). **The Completer ID is `0000h` at the bridge *and* at the
 device, simultaneously, throughout the entire probe phase** — transactions #1, #2, #4 and
 #5 all precede the first Type 0 Configuration Write to the Function they address. So in
@@ -774,7 +774,7 @@ Recorded so their absence is visible rather than looking like an oversight.
 
 ## §11. Cross-check pass (added 2026-07-31)
 
-`MINDSHARE_CROSSCHECK_STAGE_D.md` records a background cross-check of this document
+`docs/spec-notes/MINDSHARE_CROSSCHECK_STAGE_D.md` records a background cross-check of this document
 against MindShare's *PCI Express Technology 3.0* (2012), chapters 3 and 4. **21 items:
 9 resolved-confirmed, 10 resolved-rejected, 2 unresolved.**
 

@@ -9,7 +9,7 @@ of them is scoped.
 **Method and standing caveats:**
 
 - Every claim below carries a `path:line` reference re-derived from the code at HEAD.
-- `STACK_INVENTORY.md` was cross-checked throughout. **The RTL at HEAD is
+- `docs/spec-notes/STACK_INVENTORY.md` was cross-checked throughout. **The RTL at HEAD is
   authoritative**; where the two disagree the disagreement is stated explicitly, and
   those cases are collected in §3.
 - All inherited RTL — anything not written in the Stage A–D work — is treated as
@@ -51,7 +51,7 @@ coverage and no build.
 
 The hierarchy below was re-derived at HEAD by extracting every `module` declaration
 under `src/` and `tb/` and then scanning every first-party file for instantiations of
-those names. It is not taken from `STACK_INVENTORY.md`; where the two disagree the
+those names. It is not taken from `docs/spec-notes/STACK_INVENTORY.md`; where the two disagree the
 disagreement is called out.
 
 Vendor trees (`src/verilog-axis/`, `src/verilog-pcie/`, `src/xilinx_primitives/`,
@@ -285,7 +285,7 @@ matching `tb.log.info("PHASE N: ...")`. Phase 15 (`:2621`) is gated behind
 | 8 | `:2545` | 17 | `:2664` |
 | 9 | `:2552` | 18 | `:2672` |
 
-`STACK_INVENTORY.md:112` ("18 phases") and `:670` ("all 17 mandatory phases…
+`docs/spec-notes/STACK_INVENTORY.md §1.3` ("18 phases") and `§4.5` ("all 17 mandatory phases…
 1-14 and 16-18") are both correct once the gate is understood.
 
 ### B.2 DUT top
@@ -361,7 +361,7 @@ and pcie_config. So:
 **Filesets**
 1. `rtl` — `depend: [fusesoc:pcie:dllp_core]`, no `files:` needed; the whole closure
    arrives transitively. **`fusesoc:pcie:axis` does not need to be named** — it
-   arrives via `src/dllp/dllp_core.core:16`. (`STACK_INVENTORY.md:653` recommends
+   arrives via `src/dllp/dllp_core.core:16`. (`docs/spec-notes/STACK_INVENTORY.md §4.4` recommends
    adding it explicitly; that is redundant, though harmless.)
 2. `cocotb_dll_comprehensive` — one entry,
    `test_dll_comprehensive.py : {file_type: user, copyto: .}`. **No other Python
@@ -425,7 +425,7 @@ full 40-target sweep.
 **So under FuseSoC + Verilator the dump block is preprocessed away entirely** — no
 `$dumpvars`, no `#1`, no FST. That is why the 40-target sweep in step 3 emitted zero
 waveform files. Under cocotb's own `Makefile.sim`, cocotb defines `COCOTB_SIM`
-itself, which is why `STACK_INVENTORY.md:684-686` reports Verilator printing
+itself, which is why `docs/spec-notes/STACK_INVENTORY.md §4.5` reports Verilator printing
 `$dumpvar ignored, as Verilated without --trace`.
 
 **Nothing was modified over this**, per the brief. The practical consequence for a
@@ -487,7 +487,7 @@ worth knowing before the first red target gets blamed on something else.
 
 ### C.1 Headline: the two recorded blockers are gone, and the doc that records them is stale
 
-`STACK_INVENTORY.md:775-812` (§5.6) states that `tb_pcie_endpoint_top.sv` "does not
+`docs/spec-notes/STACK_INVENTORY.md` (§5.6) states that `tb_pcie_endpoint_top.sv` "does not
 elaborate — in any simulator, VCS included", for two reasons: four timeout signals
 never declared in the harness, and two `tlp_layer` pins missing on the
 `pcie_endpoint_top` instantiation. **Neither holds at HEAD.**
@@ -500,7 +500,7 @@ never declared in the harness, and two `tlp_layer` pins missing on the
 
 Both were repaired by commit `08b05d0` ("fix: repair pcie_endpoint_top pin
 connections and testbench declarations"), which is an ancestor of HEAD and postdates
-`8544a2f`, the commit that wrote `STACK_INVENTORY.md`. The doc's cited line numbers
+`8544a2f`, the commit that wrote `docs/spec-notes/STACK_INVENTORY.md`. The doc's cited line numbers
 (`tb:155`, `tb:171`, `tb:127`) do not correspond to anything at HEAD — the
 instantiation is now `tb/endpoint/tb_pcie_endpoint_top.sv:164-180` with the `.*` at
 `:179`.
@@ -688,7 +688,7 @@ plus that core's `::tlp_core` and `fusesoc:pcie:dllp_core` dependencies
 
 Three things follow.
 
-1. **`STACK_INVENTORY.md:779-781`'s "does not elaborate — in any simulator, VCS
+1. **`docs/spec-notes/STACK_INVENTORY.md §5.6`'s "does not elaborate — in any simulator, VCS
    included" is false at HEAD.** It was true when written; `08b05d0` fixed it.
 
 2. **`-Wno-PINMISSING` is no longer required.** `lint/waiver.vlt` waives
@@ -696,7 +696,7 @@ Three things follow.
    `PINMISSING` is not among them), and `PINMISSING` is a warning Verilator exits
    on. A clean exit 0 without that flag is therefore positive proof that no
    instantiation in this hierarchy has a missing pin — which is exactly what
-   `STACK_INVENTORY.md:786-798` recorded as the second open blocker. The
+   `docs/spec-notes/STACK_INVENTORY.md §5.6` recorded as the second open blocker. The
    named-empty connections at `pcie_endpoint_top.sv:241-242` are what closed it,
    and the comment there (`:238-240`) explicitly says they were written named-empty
    rather than omitted so that `PINMISSING` would stay useful for real omissions.
@@ -722,7 +722,7 @@ to connect, and whether the PHY serial path is inside or outside that scope. The
 answer is that the question does not apply, because **`end_to_end` never left the
 Transaction Layer.**
 
-`STACK_INVENTORY.md:650` rates it S with the reason: *"New `cocotb_end_to_end`
+`docs/spec-notes/STACK_INVENTORY.md §4.4` rates it S with the reason: *"New `cocotb_end_to_end`
 fileset + target with `toplevel: tlp_layer`. No SV wrapper needed."* Re-derived from
 the code:
 
@@ -731,7 +731,7 @@ the code:
 - Its toplevel is `tlp_layer`, and its RTL source list is the existing
   `TLP_RTL_SOURCES` (`Makefile:92-108`), driven by the VCS target
   `tlp-test-end-to-end` at `Makefile:168-169`.
-- `STACK_INVENTORY.md:634-636` says elaboration is already proven by
+- `docs/spec-notes/STACK_INVENTORY.md §4.3` says elaboration is already proven by
   `verilate_tlp_compile`, which shares the same toplevel and source list.
 
 So "end to end" here means **end to end within the TL** — a command in at
@@ -869,18 +869,18 @@ exactly the failure mode `tb/ltssm/tb_ltssm_b2b.sv:24-31` cites as its reason fo
 
 ---
 
-## 3. Where `STACK_INVENTORY.md` and the code disagree
+## 3. Where `docs/spec-notes/STACK_INVENTORY.md` and the code disagree
 
 The RTL at HEAD is authoritative in every row below.
 
 | # | Doc claim | Code at HEAD | Severity |
 |---|---|---|---|
-| 1 | `STACK_INVENTORY.md:775-812` §5.6 — `tb_pcie_endpoint_top.sv` "does not elaborate — in any simulator, VCS included"; four timeout signals undeclared; two `tlp_layer` pins missing | Both defects were repaired by `08b05d0`. The signals are declared at `tb/endpoint/tb_pcie_endpoint_top.sv:132-135`; the pins are connected named-empty at `src/pcie_endpoint/pcie_endpoint_top.sv:241-242`. The doc's cited lines (`tb:155`, `:171`, `:127`) match nothing at HEAD | **material** — the doc names two blockers that no longer exist |
-| 2 | `STACK_INVENTORY.md:650` rates `end_to_end` feasibility **S** in a section about stack integration | `end_to_end` is `tb/tlp/test_tlp_end_to_end.py`, toplevel `tlp_layer` — entirely inside the TL. It integrates no two layers | **material** — the name misleads about scope |
-| 3 | `STACK_INVENTORY.md:653` — a new DLL `.core` needs `depend: fusesoc:pcie:dllp_core` **+ `fusesoc:pcie:axis`** | `fusesoc:pcie:axis` arrives transitively via `src/dllp/dllp_core.core:16` | minor — redundant, harmless |
-| 4 | `STACK_INVENTORY.md:653` and `tb/tlp/tb_tlp.core:466` treat `--public-flat-rw` as a flag you must add | edalize's cocotb+verilator flow injects it unconditionally; verified in generated `.vc` files for three targets whose cores omit it | minor — the explicit listings are no-ops under FuseSoC |
-| 5 | `STACK_INVENTORY.md:684-686` — "adding `--trace-fst` would honour" the `$dumpvars` in `dllp_receive.sv` | Under FuseSoC the block never reaches Verilator at all: it is `` `ifdef COCOTB_SIM ``-guarded and no Verilator target defines that macro. Also the file is named at `:364`, not `:365` | minor, but the suggestion is a trap — see §4B.6 |
-| 6 | `STACK_INVENTORY.md` baseline prose ("all 151 tests still pass", `:820`) | 294 tests across 40 targets at HEAD | stale, already known |
+| 1 | `docs/spec-notes/STACK_INVENTORY.md` §5.6 — `tb_pcie_endpoint_top.sv` "does not elaborate — in any simulator, VCS included"; four timeout signals undeclared; two `tlp_layer` pins missing | Both defects were repaired by `08b05d0`. The signals are declared at `tb/endpoint/tb_pcie_endpoint_top.sv:132-135`; the pins are connected named-empty at `src/pcie_endpoint/pcie_endpoint_top.sv:241-242`. The doc's cited lines (`tb:155`, `:171`, `:127`) match nothing at HEAD | **material** — the doc names two blockers that no longer exist |
+| 2 | `docs/spec-notes/STACK_INVENTORY.md §4.4` rates `end_to_end` feasibility **S** in a section about stack integration | `end_to_end` is `tb/tlp/test_tlp_end_to_end.py`, toplevel `tlp_layer` — entirely inside the TL. It integrates no two layers | **material** — the name misleads about scope |
+| 3 | `docs/spec-notes/STACK_INVENTORY.md §4.4` — a new DLL `.core` needs `depend: fusesoc:pcie:dllp_core` **+ `fusesoc:pcie:axis`** | `fusesoc:pcie:axis` arrives transitively via `src/dllp/dllp_core.core:16` | minor — redundant, harmless |
+| 4 | `docs/spec-notes/STACK_INVENTORY.md §4.4` and `tb/tlp/tb_tlp.core:466` treat `--public-flat-rw` as a flag you must add | edalize's cocotb+verilator flow injects it unconditionally; verified in generated `.vc` files for three targets whose cores omit it | minor — the explicit listings are no-ops under FuseSoC |
+| 5 | `docs/spec-notes/STACK_INVENTORY.md §4.5` — "adding `--trace-fst` would honour" the `$dumpvars` in `dllp_receive.sv` | Under FuseSoC the block never reaches Verilator at all: it is `` `ifdef COCOTB_SIM ``-guarded and no Verilator target defines that macro. Also the file is named at `:364`, not `:365` | minor, but the suggestion is a trap — see §4B.6 |
+| 6 | `docs/spec-notes/STACK_INVENTORY.md` baseline prose ("all 151 tests still pass", `:820`) | 294 tests across 40 targets at HEAD | stale, already known |
 | 7 | `tb/rc/tb_rc.core:397` — `verilate_enum_bar_trace` "runs the same 25 tests" | `verilate_enum_bar` runs **32** (`tb/rc/test_pcie_enum_bar.py`, 32 `@cocotb.test()`, confirmed by the sweep) | minor — stale comment in a live core file |
 | 8 | `Makefile:1-9` header — "Python test: `tb/dllp/test_pcie_datalink_layer.py`" | `Makefile:18` sets `MODULE := test_dll_comprehensive` | minor — stale header comment |
 | 9 | `tb/ltssm/tb_ltssm_b2b.sv:56-60` — `extended_synch_i` is among the inputs "unconnected/unused in the RTL body" | `pcie_ltssm_downstream.sv:1061` branches on it live, and `pcie_phy_top.sv:349` leaves it unconnected | **material** — see §4.2 |
@@ -919,7 +919,7 @@ task — and it should be decided before the `.core` is written, not after.
 
 ### 4.4 `pcie_endpoint_top`'s two recorded blockers are already fixed
 
-`STACK_INVENTORY.md` §5.6 is the basis for the "M, harness broken" rating, and both
+`docs/spec-notes/STACK_INVENTORY.md` §5.6 is the basis for the "M, harness broken" rating, and both
 of its blockers were repaired by `08b05d0`. A full diff of every `dut.<name>` the
 Python touches against the DUT's 113 ports and the harness declarations found
 **zero mismatches** in either direction.

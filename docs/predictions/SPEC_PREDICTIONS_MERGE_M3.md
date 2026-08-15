@@ -156,7 +156,7 @@ reasoning are separable, and only the reasoning needed correcting.
 
 ## §4 P3 — deferral inventory scope
 
-`DEFERRED_FROM_MAIN.md`, committed alongside this file, must capture for every `ours`
+`docs/spec-notes/DEFERRED_FROM_MAIN.md`, committed alongside this file, must capture for every `ours`
 path where `main`'s content differs: the path, `main`'s blob hash, the merge-base blob
 hash, a one-sentence statement per hunk, the owning rung, and a command that reproduces
 the diff **after** the merge has hidden it. 26 paths qualify (A + B + C + D minus the

@@ -119,7 +119,7 @@ state.**
 > (23 TLP + 6 RC) + `verilate_conformance` control 1/1 = 30 targets / 172 tests.**
 
 Written decomposed, deliberately. This off-by-one has now occurred three times —
-`STACK_INVENTORY.md` §0.1/§2.1 mis-attributed the +1 and declared a prior "152" a
+`docs/spec-notes/STACK_INVENTORY.md` §0.1/§2.1 mis-attributed the +1 and declared a prior "152" a
 bookkeeping slip, and `docs/recon/RECON_commit2b.md` inherited that exclusion. The control
 is a **separate line item** and is neither folded into the TLP+RC subtotal nor
 dropped from the grand total. Prior art: `docs/recon/RECON_commit2a.md §G`,
