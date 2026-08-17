@@ -2446,7 +2446,19 @@ async def run_test(dut):
                 "incoming valid Memory Write TLP seq={}".format(sequence_number),
                 tuser=PHY_USER_IS_TLP,
             )
+            # send() returns once the frame is queued, not once it is driven, so
+            # the paused frame must be awaited here or the generator below is
+            # torn down before it has stalled a single beat.
+            await with_timeout(
+                tb.phy_source.wait(),
+                AXIS_SEND_TIMEOUT_US,
+                "us",
+            )
+            # Removing the generator does not clear the pause level it last
+            # drove, and the source only dequeues while pause is low.  Drop it
+            # explicitly, or every later phase inherits a stalled source.
             tb.phy_source.set_pause_generator(None)
+            tb.phy_source.pause = False
 
             received_tlp = await receive_frame_with_timeout(
                 tb.tlp_sink,
