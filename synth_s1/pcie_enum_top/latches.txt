@@ -1,0 +1,12 @@
+238:INFO: [Synth 8-802] inferred FSM for state register 'state_r_reg' in module 'pcie_enum_scan'
+239:INFO: [Synth 8-802] inferred FSM for state register 'state_r_reg' in module 'pcie_enum_bar'
+240:INFO: [Synth 8-802] inferred FSM for state register 'state_r_reg' in module 'pcie_enum_bus'
+241:INFO: [Synth 8-802] inferred FSM for state register 'state_r_reg' in module 'pcie_cfg_txn'
+520:# mark "PHASE latch query"
+521:===S1=== PHASE latch query
+522:# set latch_cells [get_cells -hier -quiet -filter {PRIMITIVE_SUBGROUP == LATCH}]
+523:# set lf [open $OUTDIR/latches_netlist.txt w]
+525:# puts $lf "latch primitives in the synthesized netlist: [llength $latch_cells]"
+526:# foreach c $latch_cells {
+530:# mark "LATCH_COUNT [llength $latch_cells]"
+531:===S1=== LATCH_COUNT 0
