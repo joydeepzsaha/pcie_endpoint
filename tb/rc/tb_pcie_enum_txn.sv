@@ -12,7 +12,7 @@
 // A socket model that is too POLITE hides exactly the bugs this target exists to
 // catch: one that strobes the tag at command-accept time, or never lowers
 // tready, will happily pass a DUT that cannot work against the real thing. The
-// four seeded mutations SM-1..SM-4 (SPEC_PREDICTIONS_ENUM.md SS7) are the
+// four seeded mutations SM-1..SM-4 (docs/predictions/SPEC_PREDICTIONS_ENUM.md SS7) are the
 // acceptance gate for the model itself -- each must fail at least one test here
 // before this target is trusted. See test_pcie_enum_txn.py, SS THE SOCKET MODEL.
 //

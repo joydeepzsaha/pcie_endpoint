@@ -34,7 +34,7 @@ module tb_pcie_rq_if;
 
   logic        command_valid_o;
   logic        command_ready_i;
-  logic [2:0]  command_o;
+  logic [3:0]  command_o;
   logic [63:0] command_address_o;
   logic [12:0] command_byte_count_o;
   logic [2:0]  command_tc_o;

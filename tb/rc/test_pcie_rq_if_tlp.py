@@ -15,9 +15,9 @@ tlp_credit_manager.sv:53-54, 66-83).  Config requests consume NPH/NPD.  Every
 "zero packets" result in this file would otherwise be meaningless.
 
 RTL cited (read, not assumed):
-  DW0 assembly ................... src/tlp/tlp_generator.sv:60-73
-  DW1 = {rid, tag, last_be, first_be} .. src/tlp/tlp_generator.sv:80
-  config DW2 = {address[31:2],00} .. src/tlp/tlp_generator.sv:81-82
+  DW0 assembly ................... src/tlp/tlp_generator.sv, the dw0 assembly
+  DW1 = {rid, tag, last_be, first_be} .. src/tlp/tlp_generator.sv, the dw1 assembly
+  config DW2 = {address[31:2],00} .. src/tlp/tlp_generator.sv, the dw2 assembly
   length encode .................. src/tlp/tlp_pkg.sv:85-87
   fmt/type encodings ............. src/tlp/tlp_pkg.sv:8-27
   command_error_valid_o .......... src/tlp/tlp_requester.sv:225-231
@@ -57,15 +57,15 @@ def enc_len(length_dw):
 
 
 def golden_dw0(fmt, typ, length_dw, tc=0, attr=0):
-    """DW0 per the generator bit map (tlp_generator.sv:60-73)."""
+    """DW0 per the generator bit map (tlp_generator.sv, the dw0 assembly)."""
     enc = enc_len(length_dw)
     v = 0
     v |= (fmt & 0x7) << 5
     v |= (typ & 0x1F)
-    v |= (attr & 0x1) << 10
+    v |= ((attr >> 2) & 0x1) << 10
     v |= (tc & 0x7) << 12
     v |= ((enc >> 8) & 0x3) << 16
-    v |= ((attr >> 1) & 0x3) << 20
+    v |= (attr & 0x3) << 20
     v |= (enc & 0xFF) << 24
     return v & 0xFFFFFFFF
 
@@ -602,7 +602,7 @@ async def test_t20_tag_exhaustion_strobe(dut):
 
 
 # ==========================================================================
-# Stage D-2 -- CFG1 on the wire (SPEC_PREDICTIONS_STAGE_D.md SS7.3 / SS8.1)
+# Stage D-2 -- CFG1 on the wire (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS7.3 / SS8.1)
 # ==========================================================================
 @cocotb.test()
 async def test_d2i1_cfgrd1_on_wire(dut):
@@ -678,3 +678,82 @@ async def test_d2i2_cfgwr1_on_wire(dut):
     assert len(p) == 4, f"a config write is 4 Dwords, got {len(p)}"
     assert p[3] == value, f"payload {p[3]:#010x} != {value:#010x}"
     assert tx.command_errors == []
+
+
+# ==========================================================================
+# M2-I1 -- attribute placement on the wire, generator direction
+# ==========================================================================
+# The positions below are SPEC-DERIVED and written out literally rather than
+# built by a helper, so this test cannot agree with a wrong golden.
+#
+#   PCIe Base 2.1 SS2.2.1 p.57  Attr[2] is bit 2 of byte 1
+#                               Attr[1:0] are bits [5:4] of byte 2
+#   SS2.2.6.3 p.73              Attr[2]=ID-Based Ordering, Attr[1]=Relaxed
+#                               Ordering, Attr[0]=No Snoop -- and the spec's own
+#                               text warns "attribute bit 2 is not adjacent to
+#                               bits 1 and 0", which is the trap this catches.
+#
+# With header byte N at dw0[8N+7:8N] -- the mapping every other DW0 field in
+# tlp_generator already uses -- that is dw0[10] and dw0[21:20].  PG213 Table 60
+# gives the RQ descriptor's attr[126:124] the same {IDO, RO, NS} order, so
+# descriptor bit n and Attr[n] are the same bit and no translation is involved.
+ATTR_WIRE_POSITION = ((2, 10, "IDO"), (1, 21, "RO"), (0, 20, "NS"))
+ATTR_DW0_MASK = (1 << 10) | (1 << 21) | (1 << 20)
+
+# 0 and 7 are FIXED POINTS of the misplacement this test exists to catch: with
+# all three bits equal, every permutation produces the same DW0.  They prove
+# nothing on their own and are here only as controls.  5 is what the standalone
+# generator test drives, and it pins only two of the three bits, because
+# attr[0] == attr[2] there leaves dw0[10] identical under both placements.
+# 1, 2 and 4 are one-hot: each isolates a single source bit, so the DW0 position
+# that lights up IS that bit's destination, and the three together determine the
+# map with no residual ambiguity.  See docs/predictions/SPEC_PREDICTIONS_MERGE_M2.md SS7.
+ATTR_DRIVE_SET = (1, 2, 4, 5, 7)
+
+
+@cocotb.test()
+async def test_m2i1_attr_bits_land_at_spec_wire_positions(dut):
+    """M2-I1: Attr[2:0] from the RQ descriptor reaches its spec DW0 positions.
+
+    Absolute-position assertions, never a round trip.  tlp_parser is the exact
+    inverse of tlp_generator under BOTH placements, so parse(generate(a)) == a
+    holds however the bits are physically arranged and a loopback has zero
+    discriminating power -- which is why a misplacement survived three
+    integration targets that each carry a real tlp_layer.  See
+    docs/predictions/SPEC_PREDICTIONS_MERGE_M2.md SS6.
+    """
+    tx = await init(dut)
+    base_dw0 = golden_dw0(FMT_3DW_DATA, TYPE_MEM, 1)
+    assert base_dw0 & ATTR_DW0_MASK == 0, \
+        "the attr=0 golden must leave every attr bit clear, else the mask is wrong"
+
+    for attr in ATTR_DRIVE_SET:
+        tx.clear()
+        # Dword Count 1 means last_be MUST be 0 -- the wrapper rejects
+        # anything else as RQ_ERR_BE_MISMATCH, because the TL derives the byte
+        # enables from address[1:0] and the byte count and cannot reproduce a
+        # non-zero last_be on a single-Dword write (pcie_rq_rc_pkg.sv:96).
+        await send(dut, [(rq_desc(RQ_MEM_WRITE, 1, address=0x10000, attr=attr),
+                          0xF, False, tuser(0xF, 0x0))]
+                        + payload_beats([0xA5A50000 | attr], 0xF, 0x0))
+        await settle(dut)
+
+        assert tx.rq_errors == [], \
+            f"attr=0b{attr:03b} rejected by the wrapper: {tx.rq_errors}"
+        assert tx.command_errors == [], \
+            f"attr=0b{attr:03b} raised command errors {tx.command_errors}"
+        assert len(tx.packets) == 1, \
+            f"attr=0b{attr:03b}: expected 1 TLP, got {len(tx.packets)}"
+        dw0 = tx.packets[0][0]
+
+        for src, pos, name in ATTR_WIRE_POSITION:
+            want = (attr >> src) & 1
+            got = (dw0 >> pos) & 1
+            assert got == want, (
+                f"Attr[{src}] ({name}) must be DW0 bit {pos} "
+                f"(Base 2.1 SS2.2.1 p.57): attr=0b{attr:03b} dw0={dw0:#010x} "
+                f"bit{pos}={got}, expected {want}")
+
+        assert dw0 & ~ATTR_DW0_MASK == base_dw0 & ~ATTR_DW0_MASK, (
+            f"attr=0b{attr:03b} disturbed a non-attr DW0 field: "
+            f"{dw0:#010x} vs {base_dw0:#010x}")

@@ -7,10 +7,10 @@ is what an RC actually puts on the wire when it answers an inbound request.
 Driven through tb_tlp_generator (flattened header inputs).  Golden hand-derived
 from the PCIe completion TLP format.
 RTL cited:
-  CPL DW1 = {completer_id, status, bcm, byte_count[11:0]} .. src/tlp/tlp_generator.sv:65
-  CPL DW2 = {requester_id, tag, 1'b0, lower_address}  ...... src/tlp/tlp_generator.sv:67
-  DW0 bit map ............................................. src/tlp/tlp_generator.sv:49-62
-  no-data 3DW tlast at DW2 ............................... src/tlp/tlp_generator.sv:105
+  CPL DW1 = {completer_id, status, bcm, byte_count[11:0]} .. src/tlp/tlp_generator.sv, the dw0 th assignment
+  CPL DW2 = {requester_id, tag, 1'b0, lower_address}  ...... src/tlp/tlp_generator.sv, the dw0 traffic-class assignment
+  DW0 bit map ............................................. src/tlp/tlp_generator.sv, the dw0 assembly
+  no-data 3DW tlast at DW2 ............................... src/tlp/tlp_generator.sv, payload_offset
 """
 
 import cocotb

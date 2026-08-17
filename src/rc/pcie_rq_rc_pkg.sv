@@ -19,7 +19,7 @@
 //
 // The byte-count arithmetic here is the wrapper's half of the contract with
 // tlp_requester: the TL re-derives the byte enables internally from
-// command_address[1:0] and the byte count (tlp_requester.sv:129-130 calling
+// command_address[1:0] and the byte count (tlp_requester.sv:167-168 calling
 // tlp_pkg::tlp_first_be / tlp_last_be), so the wrapper must produce an
 // (offset, byte_count) pair that reproduces the descriptor's byte enables
 // exactly. rq_byte_count() below is that pair's second half; pcie_rq_if checks
@@ -112,7 +112,7 @@ package pcie_rq_rc_pkg;
   // reproduces PG213's Dword-aligned layout -- beat 0 is
   // {payload DW0, desc DW2, desc DW1, desc DW0} and every later beat is offset
   // by one Dword. There is no rotation logic and no DESC_DW parameter anywhere;
-  // the gearbox stays descriptor-blind (pcie_axis_dw_upsize.sv:22-25).
+  // the gearbox stays descriptor-blind (pcie_axis_dw_upsize.sv:27-30).
   // -------------------------------------------------------------------------
   typedef struct packed {
     logic        rsvd3;              // [95]
@@ -163,11 +163,12 @@ package pcie_rq_rc_pkg;
   // rather than by omission -- see the KNOWN_GAPS block in pcie_rc_if.sv. The
   // request tracker refuses to produce a result at all for a completion with no
   // data when data was expected, or with a byte count that overruns what is
-  // outstanding (tlp_request_tracker.sv:127-135): it raises unexpected_r and
-  // reports TLP_ERR_COMPLETION_OVERFLOW on completion_error_code_o instead. A
-  // completion that would earn Error Code 0011 therefore never becomes an RC
-  // packet. The encoding is named so the field is total and so the standalone
-  // bench can drive the condition directly.
+  // outstanding (tlp_request_tracker.sv:315 and :341-342): it raises
+  // unexpected_r and reports TLP_ERR_COMPLETION_OVERFLOW on
+  // completion_error_code_o instead. A completion that would earn Error Code
+  // 0011 therefore never becomes an RC packet. The encoding is named so the
+  // field is total and so the standalone bench can drive the condition
+  // directly.
   // -------------------------------------------------------------------------
   typedef enum logic [3:0] {
     RC_DESC_ERR_NORMAL     = 4'b0000,  // no error

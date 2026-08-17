@@ -21,7 +21,7 @@ async def init_layer(dut, nph, npd=3000):
     """Reset the layer and deliver the FC-initialisation advertisement.
 
     The first fc_update_valid_i strobe after reset is the initial advertisement
-    (SPEC_PREDICTIONS_CREDIT.md SSI.2); every later strobe is an UpdateFC.
+    (docs/predictions/SPEC_PREDICTIONS_CREDIT.md SSI.2); every later strobe is an UpdateFC.
     """
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     for handle in dut:

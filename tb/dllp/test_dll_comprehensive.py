@@ -65,6 +65,15 @@ FC_INITIALIZED_TIMEOUT_US = int(
     os.environ.get("PCIE_FC_INITIALIZED_TIMEOUT_US", "2000")
 )
 
+# dllp_fc_update advertises consumed receive credit only from ST_IDLE, once its
+# timer reaches FcWaitPeriod.  dllp_receive instantiates it without a CLK_RATE
+# override, so FcWaitPeriod is 2 ms / (1000/100) = 200,000 cycles, and every
+# received TLP restarts the timer.  Observing the advertised value therefore
+# needs a deliberate quiet window longer than that.
+FC_UPDATE_IDLE_TIMEOUT_US = int(
+    os.environ.get("PCIE_FC_UPDATE_IDLE_TIMEOUT_US", "2000")
+)
+
 MONITOR_POLL_TIMEOUT_US = int(os.environ.get("PCIE_MONITOR_POLL_TIMEOUT_US", "20"))
 MONITOR_SHUTDOWN_TIMEOUT_US = int(
     os.environ.get("PCIE_MONITOR_SHUTDOWN_TIMEOUT_US", "100")
@@ -2293,6 +2302,224 @@ async def check_no_unknown_after_reset(tb: TB) -> None:
         assert sig.value.is_resolvable, "{} is X/Z after reset".format(signal_name)
 
 
+# Widths of dllp2tlp's six receive-credit accumulators, used to compare deltas
+# modulo the counter width instead of assuming no wrap.
+RX_CREDIT_COUNTER_BITS = {
+    "ph": 8, "pd": 12, "nph": 8, "npd": 12, "cplh": 8, "cpld": 12,
+}
+
+# PCIe Base Specification Rev 2.1, Section 2.6.1, Table 2-36 "TLP Flow Control
+# Credit Consumption" (p.136).  The data credit unit is 4 DW (p.135) and
+# n = Roundup(Length / FC unit size) (footnote 31).  Length == 0 encodes
+# 1024 DW (Table 2-4), hence 256 data credits.
+#
+# Each row is (description, byte0, header_dw, length_dw, payload_bytes,
+# expected credit deltas).  byte0 is written verbatim, so reserved and unmapped
+# encodings are reachable alongside the defined ones.  The wildcard bit in the
+# Fmt field is exercised from both sides (3-DW and 4-DW forms of the same type),
+# and the message routing subfield at both ends of its range, because a literal
+# such as MWr = 8'b01?0_0000 is only half proven by one of its two values.
+RX_FC_CLASSIFICATION_CASES = [
+    # Posted: Memory Write is 1 PH + n PD.  L=4 -> 1, L=5 -> 2 pins the roundup
+    # in both directions.
+    ("MWr 3DW",        0x40, 3, 4, 16, {"ph": 1, "pd": 1}),
+    ("MWr 4DW",        0x60, 4, 5, 20, {"ph": 1, "pd": 2}),
+    # Non-posted: every Read is 1 NPH and no data credit, even though a Read
+    # carries a non-zero Length.
+    ("MRd 3DW",        0x00, 3, 1,  0, {"nph": 1}),
+    ("MRd 4DW",        0x20, 4, 1,  0, {"nph": 1}),
+    ("MRdLk 3DW",      0x01, 3, 1,  0, {"nph": 1}),
+    # Posted: Message without data is 1 PH; with data 1 PH + n PD.
+    ("Msg routing 0",  0x30, 4, 0,  0, {"ph": 1}),
+    ("Msg routing 7",  0x37, 4, 0,  0, {"ph": 1}),
+    ("MsgD routing 0", 0x70, 4, 4, 16, {"ph": 1, "pd": 1}),
+    ("MsgD routing 7", 0x77, 4, 2,  8, {"ph": 1, "pd": 1}),
+    # Non-posted: AtomicOp is 1 NPH + n NPD.
+    ("FetchAdd 3DW",   0x4C, 3, 2,  8, {"nph": 1, "npd": 1}),
+    ("Swap 4DW",       0x6D, 4, 4, 16, {"nph": 1, "npd": 1}),
+    ("CAS 3DW",        0x4E, 3, 8, 32, {"nph": 1, "npd": 2}),
+    # Controls: wildcard-free labels that already classified before this fix.
+    # They share their arms with the wildcard labels above, so an arm that only
+    # ever fired for these would look covered without them being distinguished.
+    ("IORd",           0x02, 3, 1,  0, {"nph": 1}),
+    ("IOWr",           0x42, 3, 1,  4, {"nph": 1, "npd": 1}),
+    ("CfgRd0",         0x04, 3, 1,  0, {"nph": 1}),
+    ("CfgWr1",         0x45, 3, 1,  4, {"nph": 1, "npd": 1}),
+    ("Cpl",            0x0A, 3, 0,  0, {"cplh": 1}),
+    ("CplD",           0x4A, 3, 4, 16, {"cplh": 1, "cpld": 1}),
+    # Unclassified encodings must consume nothing: a reserved type, and a
+    # declared Local-TLP-Prefix encoding that this classifier deliberately does
+    # not list in any arm.
+    ("reserved 0x03",  0x03, 3, 1,  4, {}),
+    ("prefix 0x80",    0x80, 3, 1,  4, {}),
+    # Length == 0 is 1024 DW, the one payload size that is not its own DW count.
+    ("MWr Length=0",   0x40, 3, 0,  4, {"ph": 1, "pd": 256}),
+]
+
+
+async def verify_receive_flow_control_classification(
+    tb: TB,
+    output_queue: Queue,
+) -> None:
+    """Check received-TLP credit consumption against PCIe Base 2.1 Table 2-36.
+
+    The mirror of Phase 12, which checks the same six classes on the transmit
+    side through tlp2dllp.  Both classifiers match the same byte-0 literals; the
+    receive side had never been observed.
+
+    Every row is checked and reported before the phase asserts, so one run
+    yields the whole per-type table rather than stopping at the first mismatch.
+    """
+    base = "dllp_receive_inst.dllp2tlp_inst."
+    signals = {
+        name: get_internal_handle(tb.dut, base + name + "_credits_consumed_r")
+        for name in RX_CREDIT_COUNTER_BITS
+    }
+    expected_sequence = get_internal_handle(tb.dut, base + "next_expected_seq_num_r")
+
+    def snapshot() -> Dict[str, int]:
+        values = {}
+        for name, handle in signals.items():
+            assert handle.value.is_resolvable, (
+                "{}_credits_consumed_r is X/Z".format(name)
+            )
+            values[name] = int(handle.value)
+        return values
+
+    failures: List[str] = []
+
+    for description, byte0, header_dw, length_dw, payload_bytes, expected in (
+        RX_FC_CLASSIFICATION_CASES
+    ):
+        sequence_number = int(expected_sequence.value) & 0xFFF
+        payload = bytes(((byte0 + index) & 0xFF) for index in range(payload_bytes))
+        raw_tlp = build_raw_tlp(byte0, length_dw, header_dw, payload)
+
+        before = snapshot()
+
+        await send_frame_with_timeout(
+            tb.phy_source,
+            add_sequence_and_lcrc(sequence_number, raw_tlp),
+            "incoming {} (byte0=0x{:02X}) seq={}".format(
+                description, byte0, sequence_number
+            ),
+            tuser=PHY_USER_IS_TLP,
+        )
+
+        received_tlp = await receive_frame_with_timeout(
+            tb.tlp_sink,
+            "m_tlp_axis TLP for {} seq={}".format(description, sequence_number),
+            timeout_us=AXIS_RECV_TIMEOUT_US,
+        )
+        ack = await wait_for_outgoing_dllp(output_queue, DllpType.ACK)
+        await tb.wait_cycles(20)
+
+        after = snapshot()
+        observed = {
+            name: (after[name] - before[name]) % (1 << bits)
+            for name, bits in RX_CREDIT_COUNTER_BITS.items()
+        }
+        wanted = {name: expected.get(name, 0) for name in RX_CREDIT_COUNTER_BITS}
+
+        if observed != wanted:
+            failures.append(
+                "{} (byte0=0x{:02X}, Length={} DW): expected {} but consumed {}".format(
+                    description,
+                    byte0,
+                    length_dw,
+                    {k: v for k, v in wanted.items() if v},
+                    {k: v for k, v in observed.items() if v} or "nothing",
+                )
+            )
+        # A misclassification must not be able to hide behind a broken data
+        # path, so the forwarding and acknowledgement checks are independent.
+        if received_tlp != raw_tlp:
+            failures.append(
+                "{} was altered in flight: sent {} received {}".format(
+                    description, raw_tlp.hex(), received_tlp.hex()
+                )
+            )
+        if ack.seq != sequence_number:
+            failures.append(
+                "{} was acknowledged with sequence {} instead of {}".format(
+                    description, ack.seq, sequence_number
+                )
+            )
+
+        tb.log.info(
+            "RX classification %-14s byte0=0x%02X L=%-3d consumed %s",
+            description,
+            byte0,
+            length_dw,
+            {k: v for k, v in observed.items() if v} or "nothing",
+        )
+
+    assert not failures, (
+        "Received-TLP flow-control classification disagrees with PCIe Base 2.1 "
+        "Table 2-36 in {} of {} cases:\n  {}".format(
+            len(failures),
+            len(RX_FC_CLASSIFICATION_CASES),
+            "\n  ".join(failures),
+        )
+    )
+
+
+async def verify_receive_credit_reaches_updatefc(
+    tb: TB,
+    output_queue: Queue,
+) -> None:
+    """Prove the receive-credit counters reach the advertised UpdateFC payload.
+
+    dllp_fc_update builds UpdateFC_P/NP directly from ph/pd/nph/npd_credits_
+    consumed_i, so this is a wiring proof rather than a detection test -- it
+    holds whatever the classifier decides.  It is worth its cost because the
+    advertised value is the only externally visible consequence of receive-side
+    classification, and because nothing had ever observed it.
+
+    pcie_flow_ctrl_init also emits UpdateFC, but from hardcoded constants and
+    only while flow control initializes.  No initialization happens here, so an
+    UpdateFC arriving after a quiet window is unambiguously dllp_fc_update's.
+    """
+    base = "dllp_receive_inst.dllp2tlp_inst."
+    consumed = {
+        name: int(get_internal_handle(tb.dut, base + name + "_credits_consumed_r").value)
+        for name in ("ph", "pd", "nph", "npd")
+    }
+
+    drain_queue(output_queue, "before the UpdateFC quiet window")
+
+    update_p = await wait_for_outgoing_dllp(
+        output_queue, DllpType.UPDATE_FC_P, timeout_us=FC_UPDATE_IDLE_TIMEOUT_US
+    )
+    update_np = await wait_for_outgoing_dllp(
+        output_queue, DllpType.UPDATE_FC_NP, timeout_us=FC_UPDATE_IDLE_TIMEOUT_US
+    )
+
+    for dllp, hdr_name, data_name in (
+        (update_p, "ph", "pd"),
+        (update_np, "nph", "npd"),
+    ):
+        assert dllp.hdr_fc == consumed[hdr_name] & 0xFF, (
+            "{} advertised hdr_fc={} but {}_credits_consumed_r is {}".format(
+                dllp.type.name, dllp.hdr_fc, hdr_name, consumed[hdr_name]
+            )
+        )
+        assert dllp.data_fc == consumed[data_name] & 0xFFF, (
+            "{} advertised data_fc={} but {}_credits_consumed_r is {}".format(
+                dllp.type.name, dllp.data_fc, data_name, consumed[data_name]
+            )
+        )
+
+    tb.log.info(
+        "Advertised receive credit tracks the counters: P hdr=%d data=%d, "
+        "NP hdr=%d data=%d",
+        update_p.hdr_fc,
+        update_p.data_fc,
+        update_np.hdr_fc,
+        update_np.data_fc,
+    )
+
+
 @cocotb.test()
 async def run_test(dut):
     """Exercise flow-control initialization and both TLP data directions."""
@@ -2446,7 +2673,19 @@ async def run_test(dut):
                 "incoming valid Memory Write TLP seq={}".format(sequence_number),
                 tuser=PHY_USER_IS_TLP,
             )
+            # send() returns once the frame is queued, not once it is driven, so
+            # the paused frame must be awaited here or the generator below is
+            # torn down before it has stalled a single beat.
+            await with_timeout(
+                tb.phy_source.wait(),
+                AXIS_SEND_TIMEOUT_US,
+                "us",
+            )
+            # Removing the generator does not clear the pause level it last
+            # drove, and the source only dequeues while pause is low.  Drop it
+            # explicitly, or every later phase inherits a stalled source.
             tb.phy_source.set_pause_generator(None)
+            tb.phy_source.pause = False
 
             received_tlp = await receive_frame_with_timeout(
                 tb.tlp_sink,
@@ -2679,6 +2918,23 @@ async def run_test(dut):
         # ------------------------------------------------------------------
         tb.log.info("PHASE 18: repeated NAK and replay-attempt exhaustion")
         await verify_repeated_nak_and_replay_exhaustion(tb, output_queue)
+        robust_dllp_check_count += 1
+
+        # ------------------------------------------------------------------
+        # Phase 19: received-TLP flow-control classification
+        # ------------------------------------------------------------------
+        # Placed last so it cannot perturb any incumbent phase, and entered
+        # from a fresh link so the receive sequence and credit state are clean.
+        await reinitialize_link(tb, output_queue)
+        tb.log.info("PHASE 19: received-TLP flow-control classification")
+        await verify_receive_flow_control_classification(tb, output_queue)
+        incoming_tlp_count += len(RX_FC_CLASSIFICATION_CASES)
+
+        # ------------------------------------------------------------------
+        # Phase 20: consumed receive credit reaches the advertised UpdateFC
+        # ------------------------------------------------------------------
+        tb.log.info("PHASE 20: consumed receive credit reaches UpdateFC")
+        await verify_receive_credit_reaches_updatefc(tb, output_queue)
         robust_dllp_check_count += 1
 
     finally:

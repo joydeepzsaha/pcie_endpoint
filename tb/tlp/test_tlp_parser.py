@@ -5,6 +5,8 @@ from cocotb.triggers import RisingEdge, Timer
 
 
 def dw0(fmt, tlp_type, length=1, td=0, tc=0, attr=0):
+    # attr is PCIe Attr[2:0] = {IDO, RO, NS}.  Base 2.1 SS2.2.1 p.57:
+    # Attr[2] -> dw0[10], Attr[1:0] -> dw0[21:20]; the halves are NOT adjacent.
     encoded = 0 if length == 1024 else length
     return (
         (fmt << 5) | tlp_type | (((attr >> 2) & 1) << 10) | (tc << 12)

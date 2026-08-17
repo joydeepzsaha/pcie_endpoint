@@ -36,15 +36,21 @@ module tlp_vc_buffer
 
   localparam int PACKET_INDEX_WIDTH = PACKET_DEPTH <= 1 ? 1 : $clog2(PACKET_DEPTH);
   localparam int WORD_INDEX_WIDTH = MAX_PACKET_WORDS <= 1 ? 1 : $clog2(MAX_PACKET_WORDS+1);
-  logic [DATA_WIDTH-1:0] data_mem [0:PACKET_DEPTH-1][0:MAX_PACKET_WORDS-1];
-  logic [KEEP_WIDTH-1:0] keep_mem [0:PACKET_DEPTH-1][0:MAX_PACKET_WORDS-1];
-  logic [USER_WIDTH-1:0] user_mem [0:PACKET_DEPTH-1][0:MAX_PACKET_WORDS-1];
-  logic last_mem [0:PACKET_DEPTH-1][0:MAX_PACKET_WORDS-1];
+  localparam int MEM_DEPTH = PACKET_DEPTH * MAX_PACKET_WORDS;
+  localparam int MEM_INDEX_WIDTH = MEM_DEPTH <= 1 ? 1 : $clog2(MEM_DEPTH);
+  // One flat entry per (packet slot, word).  A second unpacked dimension is what
+  // disqualifies the array from distributed-RAM inference; tlp_parser.sv:41 uses
+  // this shape with the same clocked-write / asynchronous-read pattern.
+  logic [DATA_WIDTH-1:0] data_mem [0:MEM_DEPTH-1];
+  logic [KEEP_WIDTH-1:0] keep_mem [0:MEM_DEPTH-1];
+  logic [USER_WIDTH-1:0] user_mem [0:MEM_DEPTH-1];
+  logic last_mem [0:MEM_DEPTH-1];
   logic [WORD_INDEX_WIDTH-1:0] word_count_mem [0:PACKET_DEPTH-1];
   tlp_credit_class_e class_mem [0:PACKET_DEPTH-1];
   logic [11:0] credit_mem [0:PACKET_DEPTH-1];
   logic [PACKET_INDEX_WIDTH-1:0] wr_packet_r, rd_packet_r;
   logic [WORD_INDEX_WIDTH-1:0] wr_word_r, rd_word_r;
+  logic [MEM_INDEX_WIDTH-1:0] wr_index, rd_index;
   logic [$clog2(PACKET_DEPTH+1)-1:0] packet_count_r;
   logic transmitting_r;
   logic input_fire, output_fire, packet_completed, packet_released;
@@ -57,10 +63,13 @@ module tlp_vc_buffer
   assign packet_data_credits_o = credit_mem[rd_packet_r];
   assign packet_released = packet_valid_o && packet_ready_i;
 
-  assign m_axis_tdata = data_mem[rd_packet_r][rd_word_r];
-  assign m_axis_tkeep = keep_mem[rd_packet_r][rd_word_r];
-  assign m_axis_tuser = user_mem[rd_packet_r][rd_word_r];
-  assign m_axis_tlast = last_mem[rd_packet_r][rd_word_r];
+  assign wr_index = MEM_INDEX_WIDTH'((wr_packet_r * MAX_PACKET_WORDS) + wr_word_r);
+  assign rd_index = MEM_INDEX_WIDTH'((rd_packet_r * MAX_PACKET_WORDS) + rd_word_r);
+
+  assign m_axis_tdata = data_mem[rd_index];
+  assign m_axis_tkeep = keep_mem[rd_index];
+  assign m_axis_tuser = user_mem[rd_index];
+  assign m_axis_tlast = last_mem[rd_index];
   assign m_axis_tvalid = transmitting_r;
   assign output_fire = m_axis_tvalid && m_axis_tready;
   assign packet_completed = input_fire && s_axis_tlast;
@@ -81,10 +90,10 @@ module tlp_vc_buffer
       // only reports a source attempting to exceed the maximum packet size.
       overflow_o <= s_axis_tvalid && (wr_word_r >= MAX_PACKET_WORDS);
       if (input_fire) begin
-        data_mem[wr_packet_r][wr_word_r] <= s_axis_tdata;
-        keep_mem[wr_packet_r][wr_word_r] <= s_axis_tkeep;
-        user_mem[wr_packet_r][wr_word_r] <= s_axis_tuser;
-        last_mem[wr_packet_r][wr_word_r] <= s_axis_tlast;
+        data_mem[wr_index] <= s_axis_tdata;
+        keep_mem[wr_index] <= s_axis_tkeep;
+        user_mem[wr_index] <= s_axis_tuser;
+        last_mem[wr_index] <= s_axis_tlast;
         if (wr_word_r == 0) begin
           class_mem[wr_packet_r] <= tlp_credit_class(s_packet_class_i);
           credit_mem[wr_packet_r] <= s_packet_has_data_i ?

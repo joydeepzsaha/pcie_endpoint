@@ -19,7 +19,7 @@
 // (3*8 = 24 against CPL_TIMEOUT_CYCLES = 4096).
 //
 // MEM_BAR_BASE / MEM_BAR_WINDOW are left at their SHIPPED defaults, so the
-// addresses this target asserts are the ones SPEC_PREDICTIONS_ENUM.md SSE.7.4
+// addresses this target asserts are the ones docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.7.4
 // pinned before the RTL existed. Two tests need a different allocator geometry
 // -- exhaustion, and a 32-bit BAR that cannot be named in 32 bits -- and they
 // get their own top-level instances below rather than a parameter the other

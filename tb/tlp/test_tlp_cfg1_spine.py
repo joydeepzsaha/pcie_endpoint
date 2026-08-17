@@ -12,7 +12,7 @@ pre-change, tag_expects_data_o omits CFG_READ1, the CplD's payload trips the
 tracker's !expects_data && payload != 0 guard (tlp_request_tracker.sv:334-340),
 unexpected_completion_o goes high and no result ever fires.
 
-TRAP A (SPEC_PREDICTIONS_STAGE_D.md SS8.1): both spine tests compare the WHOLE
+TRAP A (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.1): both spine tests compare the WHOLE
 DW0 -- a Type 0 emission differs from Type 1 in exactly dw0[4:0] bit 0 and
 would slip past any field-subset assertion.
 
@@ -25,7 +25,7 @@ Spec anchors:
   CfgRd1/CfgWr1 fmt/type ..... PCIe Base 2.1 Table 2-3 p.58
   config-request class rules . PCIe Base 2.1 SS2.2.7 p.79
 RTL cited (read, not assumed):
-  tlp_cmd_e (8 members) ...... src/tlp/tlp_pkg.sv:43-52
+  tlp_cmd_e ...... src/tlp/tlp_pkg.sv, typedef tlp_cmd_e
   type/fmt select ............ src/tlp/tlp_requester.sv:138-149
   non-MEM lower_address = 0 .. src/tlp/tlp_layer.sv:385-386
   tracker match / clear ...... src/tlp/tlp_request_tracker.sv:200-216,334-360
@@ -35,7 +35,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-# --- tlp_cmd_e members (src/tlp/tlp_pkg.sv:43-52) ---
+# --- tlp_cmd_e members (src/tlp/tlp_pkg.sv, typedef tlp_cmd_e) ---
 CMD_CFG_READ1 = 6
 CMD_CFG_WRITE1 = 7
 
@@ -65,7 +65,7 @@ def cfg_addr(bus, dev, fn, reg_byte_offset, ext_reg=0):
 
 
 def golden_cfg_dw0(write, type1=False):
-    """Whole DW0 of a config request (generator bit map, tlp_generator.sv:49-62);
+    """Whole DW0 of a config request (generator bit map, tlp_generator.sv, the dw0 assembly);
     Length=1 always (SS2.2.7).  type1=False keeps CFG0 callers unchanged."""
     fmt = FMT_3DW_DATA if write else FMT_3DW_NO_DATA
     typ = TYPE_CFG1 if type1 else 0b00100

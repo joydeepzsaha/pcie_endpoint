@@ -1,0 +1,38 @@
+CAPI=2:
+name: fusesoc:pcie:tb_dll_comprehensive:1.0.0
+description: >
+  Data Link Layer comprehensive functional suite, driven against the real
+  pcie_datalink_layer: link bring-up and flow-control initialisation, both TLP
+  directions, ACK/NAK and replay, retry-buffer wrap, 12-bit sequence rollover,
+  and receive-side flow-control classification checked against PCIe Base Spec
+  Rev 2.1 Table 2-36. One cocotb test, twenty phases.
+
+filesets:
+  rtl:
+    depend:
+      - fusesoc:pcie:dllp_core
+
+  cocotb_dll_comprehensive:
+    files:
+      - test_dll_comprehensive.py : {file_type : user, copyto : .}
+
+targets:
+  # Coverage stays off: --coverage-fsm together with --coverage-line provokes a
+  # V3FsmDetect internal error on this source set (neither flag alone does).
+  # Tracing stays off too: the suite simulates 2.8 ms, most of it the quiet
+  # window Phase 20 needs, and an FST of that is not worth writing.
+  # --public-flat-rw exposes the six receive credit counters the flow-control
+  # phases observe; dllp2tlp has no output port for the completion pair, and the
+  # transmit-side phases already read their counterparts the same way.
+  verilate_dll_comprehensive:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_dll_comprehensive
+      timescale: 1ns/1ns
+      verilator_options:
+        - --timing
+        - --public-flat-rw
+        - waiver.vlt
+    filesets : [rtl, cocotb_dll_comprehensive]
+    toplevel : [pcie_datalink_layer]

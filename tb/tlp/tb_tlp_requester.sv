@@ -8,13 +8,11 @@ module tb_tlp_requester;
   logic [12:0] max_read_bytes;
   logic command_valid;
   logic command_ready;
-  logic [2:0] command;
+  logic [3:0] command;
   logic [63:0] command_address;
   logic [12:0] command_byte_count;
   logic [2:0] command_tc;
   logic [2:0] command_attr;
-  logic [2:0] command_message_route;
-  logic [7:0] command_message_code;
   logic [15:0] command_context;
   logic command_prefix_valid;
   logic [31:0] command_prefix;
@@ -67,8 +65,6 @@ module tb_tlp_requester;
       .command_valid_i(command_valid), .command_ready_o(command_ready), .command_i(command),
       .command_address_i(command_address), .command_byte_count_i(command_byte_count),
       .command_tc_i(command_tc), .command_attr_i(command_attr),
-      .command_message_route_i(command_message_route),
-      .command_message_code_i(command_message_code),
       .command_context_i(command_context), .command_prefix_valid_i(command_prefix_valid),
       .command_prefix_i(command_prefix), .command_ecrc_enable_i(command_digest_valid),
       .command_data_i(command_data),

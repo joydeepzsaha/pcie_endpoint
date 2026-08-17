@@ -63,8 +63,14 @@ module tlp_generator
     dw0[7:5]   = header_r.fmt;
     dw0[4:0]   = header_r.tlp_type;
     dw0[8]     = header_r.th;
-    // PCIe Attr[2] (IDO) occupies byte-one bit 2 on this little-endian
-    // AXI representation; Attr[1:0] occupy byte-two bits 5:4.
+    // Attr[2:0] is SPLIT across two header bytes and the halves are not
+    // adjacent -- PCIe Base 2.1 SS2.2.1 p.57 puts Attr[2] at bit 2 of byte 1 and
+    // Attr[1:0] at bits [5:4] of byte 2, and SS2.2.6.3 p.73 calls the split out
+    // explicitly ("attribute bit 2 is not adjacent to bits 1 and 0").  With
+    // byte N at dw0[8N+7:8N] -- the mapping every other field here uses -- that
+    // is Attr[2] (ID-Based Ordering) at dw0[10] and Attr[1:0] (Relaxed
+    // Ordering, No Snoop) at dw0[21:20].  Writing attributes[0] into dw0[10]
+    // looks natural and is wrong: it puts No Snoop where a receiver reads IDO.
     dw0[10]    = header_r.attributes[2];
     dw0[14:12] = header_r.traffic_class;
     dw0[17:16] = encoded_length[9:8];
@@ -78,17 +84,13 @@ module tlp_generator
       dw1 = {header_r.completer_id, header_r.completion_status,
              header_r.byte_count_modified, header_r.byte_count[11:0]};
       dw2 = {header_r.requester_id, header_r.tag, 1'b0, header_r.lower_address};
-    end else if (tlp_is_message(header_r.tlp_type)) begin
-      dw1 = {header_r.requester_id, header_r.tag, header_r.message_code};
-      dw2 = header_r.address[63:32];
     end else begin
       dw1 = {header_r.requester_id, header_r.tag, header_r.last_be, header_r.first_be};
       dw2 = tlp_is_4dw(header_r.fmt) ? header_r.address[63:32] :
             {header_r.address[31:2], 2'b00};
     end
 
-    dw3 = tlp_is_message(header_r.tlp_type) ? header_r.address[31:0] :
-          {header_r.address[31:2], 2'b00};
+    dw3 = {header_r.address[31:2], 2'b00};
     axis_dw1 = dw1;
     axis_dw2 = dw2;
     axis_dw3 = dw3;
@@ -103,9 +105,7 @@ module tlp_generator
   assign formatter_start_valid = state_r == TX_PAYLOAD_START;
   assign payload_offset = (header_r.tlp_type == TLP_TYPE_CPL ||
                            header_r.tlp_type == TLP_TYPE_CPL_LOCK) ?
-                          header_r.lower_address[1:0] :
-                          tlp_is_message(header_r.tlp_type) ? 2'b00 :
-                          header_r.address[1:0];
+                          header_r.lower_address[1:0] : header_r.address[1:0];
 
   always_comb begin
     m_axis_tdata  = '0;

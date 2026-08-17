@@ -3,6 +3,17 @@
 //
 // Wiring only. No policy, no mechanism, no state of its own.
 //
+// SPEC ANCHORS: none of its own, by construction. Every spec rule this assembly
+// obeys is enforced in a module it instantiates -- presence in pcie_enum_scan,
+// BAR layout in pcie_enum_bar, bus numbering in pcie_enum_bus, transaction
+// mechanics in pcie_cfg_txn. Two constraints do surface here because they are
+// properties of the ASSEMBLY rather than of any one stage:
+//   PCIe Base 2.1 Table 2-37 ..... only ONE pcie_cfg_txn exists, so
+//                                  single-outstanding is a property of the
+//                                  netlist and not of an FSM behaving well.
+//   [BASE] Figure 7-5 p.491 ...... the Command register's write-1-to-clear
+//                                  bits, which a whole-Dword write destroys.
+//
 //   pcie_enum_top
 //   |- pcie_cfg_txn    (ONE instance -- the only tag holder)
 //   |- pcie_enum_scan  (presence policy, level 1)
@@ -56,7 +67,7 @@
 // boundary, monotonically, with no arbiter and no registered state of its
 // own. (The recon sized this as "4-way"; it is five arms because pcie_enum_bus
 // owns the port for its one write between bar1 and scan2 -- same shape,
-// one more stop.) !! Per RECON_stageD.md SS11.2 this widened mux is NOT
+// one more stop.) !! Per docs/recon/RECON_stageD.md SS11.2 this widened mux is NOT
 // load-bearing architecture: it does not iterate, and the sequencing layer is
 // expected to be redesigned for the Stage E tree walk.
 //
@@ -78,7 +89,7 @@
 // the one the bench must assert on:
 //
 //   cmd_valid   scan drives 0 in every terminal state          -> merge is a no-op
-//   cmd_write   scan drives a hard 0 (pcie_enum_scan.sv:269)   -> merge is a no-op
+//   cmd_write   scan drives a hard 0 (pcie_enum_scan.sv:282)   -> merge is a no-op
 //   cmd_wdata   scan drives a hard 0 (:272)                    -> merge is a no-op
 //   cmd_reg_num scan drives 0 in every terminal state          -> merge is a no-op
 //   cmd_ext_reg both stages drive the same constant            -> merge is a no-op
@@ -425,7 +436,7 @@ module pcie_enum_top
   // -------------------------------------------------------------------------
   // Stage D: the bridge path -- sequencer, then a SECOND scan/BAR pair for
   // the secondary bus. The existing stages are never re-armed (decision B,
-  // RECON_stageD.md SS11.2): each instance below is single-shot exactly like
+  // docs/recon/RECON_stageD.md SS11.2): each instance below is single-shot exactly like
   // its level-1 twin, and "one bridge level, no recursion" is structural.
   // Both library modules instantiate AS-IS -- no parameter, no port differs
   // from the level-1 instances except the wiring.

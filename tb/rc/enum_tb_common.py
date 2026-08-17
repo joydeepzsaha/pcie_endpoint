@@ -46,7 +46,7 @@ Everything here is hand-derived from the specification:
   Config Space Type 0 header offsets .. PCIe Base 2.1 Figure 7-5 p.491
 
 Nothing here is read back from a DUT.  The 128-bit RQ descriptor values these
-builders produce are pinned independently in SPEC_PREDICTIONS_ENUM.md SS3.4,
+builders produce are pinned independently in docs/predictions/SPEC_PREDICTIONS_ENUM.md SS3.4,
 which was committed before any of this RTL existed; `assert_rq_descriptor`
 below is what ties the two together.
 """
@@ -61,7 +61,7 @@ RQ_CFG_WRITE0 = 0b1010
 # Stage D-2: the Type 1 pair.  Exactly one bit (bit 0) away from the Type 0
 # encodings -- _selftest_type1_one_bit() below pins that distance, because it
 # is what makes a mistyped golden actively wrong rather than merely different
-# (SPEC_PREDICTIONS_STAGE_D.md SS8.1, Trap A).
+# (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.1, Trap A).
 RQ_CFG_READ1 = 0b1001
 RQ_CFG_WRITE1 = 0b1011
 
@@ -346,7 +346,7 @@ def cfg_wire_dw2(bus, dev, fn, reg_num, ext_reg=0):
 
     {Bus[31:24], Device[23:19], Function[18:16], Reserved[15:12],
      Ext Reg[11:8], Register[7:2], R[1:0]} -- PCIe Base 2.1 Figure 2-18 p.80,
-    built by tlp_generator.sv:81-82.  The BDF comes from the RQ descriptor's
+    built by tlp_generator.sv, the dw2 assembly.  The BDF comes from the RQ descriptor's
     Completer ID field, NOT from the address.
     """
     return (((bus & 0xFF) << 24) | ((dev & 0x1F) << 19) | ((fn & 0x7) << 16)
@@ -354,6 +354,13 @@ def cfg_wire_dw2(bus, dev, fn, reg_num, ext_reg=0):
 
 
 def cfg_wire_dw0(write, length_dw=1, tc=0, attr=0, type1=False):
+    # attr is PCIe Attr[2:0] = {IDO, RO, NS}; Base 2.1 SS2.2.1 p.57 puts
+    # Attr[2] at dw0[10] and Attr[1:0] at dw0[21:20] -- the halves are not
+    # adjacent.  KEEP attr=0 AND tc=0 HERE: Base 2.1 SS2.2.7 p.79 says a
+    # Configuration Request must carry TC[2:0]=000b and Attr[1:0]=00b with
+    # Attr[2] reserved, so a non-zero value would build an ILLEGAL TLP.
+    # The enumeration targets are attr-blind by the spec, not by omission;
+    # non-zero attr belongs on a completion (cpl_dw0) or a memory request.
     """Configuration Request DW0 as tlp_generator assembles it (:60-73).
 
     Base 2.1 SS2.2.7 p.79 fixes Length to 1 and TC/Attr/AT to zero for every
@@ -365,16 +372,16 @@ def cfg_wire_dw0(write, length_dw=1, tc=0, attr=0, type1=False):
     fmt = FMT_3DW_DATA if write else FMT_3DW_NO_DATA
     enc = length_dw & 0x3FF
     v = (fmt << 5) | (TYPE_CFG1 if type1 else TYPE_CFG0)
-    v |= (attr & 0x1) << 10
+    v |= ((attr >> 2) & 0x1) << 10
     v |= (tc & 0x7) << 12
-    v |= ((attr >> 1) & 0x3) << 20
+    v |= (attr & 0x3) << 20
     v |= ((enc >> 8) & 0x3) << 16
     v |= (enc & 0xFF) << 24
     return v & 0xFFFFFFFF
 
 
 def _selftest_type1_one_bit():
-    """Stage D-2 builder self-assert (SPEC_PREDICTIONS_STAGE_D.md SS8.1, Trap A).
+    """Stage D-2 builder self-assert (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.1, Trap A).
 
     The Type 0 and Type 1 goldens must sit EXACTLY one bit apart, at both
     levels -- descriptor req_type 1000/1010 vs 1001/1011, wire dw0[4:0] 00100
@@ -403,26 +410,30 @@ _selftest_type1_one_bit()
 def cfg_wire_dw1(requester_id, tag, first_be, last_be=0):
     """{Requester ID[31:16], Tag[15:8], Last DW BE[7:4], 1st DW BE[3:0]}.
 
-    tlp_generator.sv:80.  Base 2.1 SS2.2.7 p.79: Last DW BE must be 0000b.
+    tlp_generator.sv, the dw1 assembly.  Base 2.1 SS2.2.7 p.79: Last DW BE must be 0000b.
     """
     return (((requester_id & 0xFFFF) << 16) | ((tag & 0xFF) << 8)
             | ((last_be & 0xF) << 4) | (first_be & 0xF))
 
 
 def dw0_length(dw0):
-    """Recover length_dw from a TX DW0 (inverse of tlp_generator.sv:60-73)."""
+    """Recover length_dw from a TX DW0 (inverse of tlp_generator.sv, the dw0 assembly)."""
     enc = ((dw0 >> 24) & 0xFF) | (((dw0 >> 16) & 0x3) << 8)
     return 1024 if enc == 0 else enc
 
 
 def cpl_dw0(has_data, length_dw, tc=0, attr=0):
+    # attr is PCIe Attr[2:0] = {IDO, RO, NS}: Attr[2] -> dw0[10] and
+    # Attr[1:0] -> dw0[21:20] (Base 2.1 SS2.2.1 p.57).  Unlike a config
+    # request, a completion may legitimately carry non-zero attributes,
+    # echoed from the request it answers.
     """CPL DW0 as the parser reads it back (tlp_parser.sv:145-147, 150-155)."""
     fmt = FMT_3DW_DATA if has_data else FMT_3DW_NO_DATA
     enc = length_dw & 0x3FF
     v = (fmt << 5) | TYPE_CPL
-    v |= (attr & 0x1) << 10
+    v |= ((attr >> 2) & 0x1) << 10
     v |= (tc & 0x7) << 12
-    v |= ((attr >> 1) & 0x3) << 20
+    v |= (attr & 0x3) << 20
     v |= ((enc >> 8) & 0x3) << 16
     v |= (enc & 0xFF) << 24
     return v & 0xFFFFFFFF
@@ -682,7 +693,7 @@ class Socket:
 #                    are genuinely different models. What they SHARE is the
 #                    four-name interface .start / .seen / .wait_for /
 #                    .complete, and that contract is specified in
-#                    EP_VERIFICATION_MODEL_SPEC.md rather than forced into a
+#                    docs/spec-notes/EP_VERIFICATION_MODEL_SPEC.md rather than forced into a
 #                    common base class. A third implementation (BAR write-mask
 #                    semantics) joins them in Commit D.
 #
@@ -731,7 +742,7 @@ def err_name(value):
 
 # The shipped allocator geometry -- pcie_enum_bar's parameter defaults.  The
 # addresses every BAR test asserts derive from these, and they were pinned in
-# SPEC_PREDICTIONS_ENUM.md SSE.7.4 before the RTL existed.
+# docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.7.4 before the RTL existed.
 MEM_BAR_BASE = 0x0000_0000_8000_0000
 MEM_BAR_WINDOW = 0x0000_0000_1000_0000
 
@@ -946,7 +957,7 @@ def assert_cfg_tlp_on_wire(req, *, write, reg_num, first_be, tag, what="",
 
     Base 2.1 SS2.2.7 p.79 fixes Length to 1 Dword, Last DW BE to 0000b and
     TC/Attr/AT to zero for every Configuration Request; Figure 2-18 p.80 fixes
-    the third header Dword's BDF packing.  SPEC_PREDICTIONS_ENUM.md SS3.4,
+    the third header Dword's BDF packing.  docs/predictions/SPEC_PREDICTIONS_ENUM.md SS3.4,
     SSD.4 and SSE.8 pin the resulting values.
 
     require_device0 is opt-IN, not the default.  It is the SS7.3.1 p.479
@@ -955,7 +966,7 @@ def assert_cfg_tlp_on_wire(req, *, write, reg_num, first_be, tag, what="",
 
     type1 (Stage D) selects the CFG1 DW0 golden -- dw0[4:0] = 00101, one bit
     from Type 0, which is exactly why the DW0 compare here is the WHOLE Dword
-    (Trap A, SPEC_PREDICTIONS_STAGE_D.md SS8.1).  bus overrides the routing
+    (Trap A, docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.1).  bus overrides the routing
     Dword's bus field (default: the direct-attach BUS); Device/Function stay 0
     on every bus level by construction (P5.3).
     """
@@ -982,7 +993,7 @@ def assert_cfg_tlp_on_wire(req, *, write, reg_num, first_be, tag, what="",
 # The golden device the enumeration benches model, and its Type 0 header.
 #
 # One device description, not one per bench.  Commit D's acceptance test
-# enumerates this same device end to end (SPEC_PREDICTIONS_ENUM.md SSE.8), so
+# enumerates this same device end to end (docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.8), so
 # consolidating here is the "before a third copy" case the 2b-3 brief names.
 # ---------------------------------------------------------------------------
 SCAN_BUS = 0x01
@@ -1213,7 +1224,7 @@ class ConfigDevice:
 # SS ⭐ THE EMPTY-SET GUARD
 #
 # "A green diff, an empty finding list, and a passing assertion over an empty
-# set are the same bug" -- RECON_commit2b3.md SS2, where it fired on the recon
+# set are the same bug" -- docs/recon/RECON_commit2b3.md SS2, where it fired on the recon
 # itself.  Brief SS3.2 trap 3 makes the guard mandatory for every on-wire
 # assertion in Commits D and E, and for any helper that iterates a collected
 # list.
@@ -1274,7 +1285,7 @@ def assert_sequence(observed, golden, what="", render=repr):
 # SS ⭐ THE BRIDGED TOPOLOGY (Stage D increment 2)
 #
 # One virtual PCI bridge (Type 1 header) at 01:00.0 with one endpoint behind
-# it at 05:00.0.  Three pieces, per RECON_stageD.md SS7: the Type 1 bridge
+# it at 05:00.0.  Three pieces, per docs/recon/RECON_stageD.md SS7: the Type 1 bridge
 # config space, the routing/transform core, and a BDF-routing completer that
 # dispatches on the wire instead of answering everything.
 #
@@ -1283,7 +1294,7 @@ def assert_sequence(observed, golden, what="", render=repr):
 # exists from the first line of this model, because at reset Secondary and
 # Subordinate are 00h and that arm is what makes Trap C self-detecting: a
 # wrongly-typed CfgWr1 for the bus-number write is answered UR automatically,
-# with no test having to anticipate the mistake (SPEC_PREDICTIONS_STAGE_D.md
+# with no test having to anticipate the mistake (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md
 # SS8.3).
 #
 # !! LATENCIES ARE NON-ZERO AND UNEQUAL (Trap D, SS8.4).  Stage D's headline

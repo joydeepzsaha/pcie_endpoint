@@ -49,7 +49,7 @@ RQ_MSG_ATS = 0b1111
 RQ_NEVER_MAPPED = (0b0100, 0b0101, 0b0110, 0b0111,
                    0b1100, 0b1101, 0b1110, 0b1111)
 
-# tlp_pkg::tlp_cmd_e (tlp_pkg.sv:43-52)
+# tlp_pkg::tlp_cmd_e (tlp_pkg.sv, typedef tlp_cmd_e)
 CMD_MEM_READ = 0
 CMD_MEM_WRITE = 1
 CMD_CFG_READ0 = 2
@@ -731,7 +731,7 @@ async def test_t11_core_managed_tag(dut):
 
 
 # ==========================================================================
-# Stage D-2 -- CFG1 through the RQ surface (SPEC_PREDICTIONS_STAGE_D.md SS7.3)
+# Stage D-2 -- CFG1 through the RQ surface (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS7.3)
 # ==========================================================================
 @cocotb.test()
 async def test_d2s1_cfg1_admission(dut):

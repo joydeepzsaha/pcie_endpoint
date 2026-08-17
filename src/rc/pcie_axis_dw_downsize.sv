@@ -1,6 +1,11 @@
 // ---------------------------------------------------------------------------
 // pcie_axis_dw_downsize -- AXI-Stream width converter, 128 -> 32 (4:1).
 //
+// SPEC ANCHORS: none directly. This module implements no PCIe or PG213 rule --
+// it is a plain AXI-Stream width converter. The PG213 Dword-aligned RQ layout
+// falls out of concatenation at the caller (pcie_rq_if), never here; see the
+// DESCRIPTOR-BLIND note below.
+//
 // One wide beat is serialized into up to four narrow Dword beats, LSB group
 // first. A narrow beat is emitted for every 4-byte group that the wide beat's
 // tkeep spans; the final narrow beat carries the partial tkeep verbatim. There
@@ -28,7 +33,7 @@
 //  * s_axis_tready IS REGISTERED. It is driven from state only, never from
 //    m_axis_tready, so no combinational ready path runs through the gearbox.
 //    The TL's command_data_ready_o is already combinational
-//    (tlp_requester.sv:159); chaining a second combinational ready through here
+//    (tlp_requester.sv:196); chaining a second combinational ready through here
 //    would build a long path that simulation ignores and synthesis does not.
 //    The cost is one turnaround cycle per wide beat: a full 128-bit beat
 //    occupies 5 clocks (4 data + 1 reload) rather than 4, i.e. ~80% of peak.

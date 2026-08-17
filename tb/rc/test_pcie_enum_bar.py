@@ -47,7 +47,7 @@ Spec cited (read, not assumed):
   Expansion ROM at 30h .............. [PCI3] SS6.2.5.2 p.227 :11283,:11287
   Type 0 header offsets ............. [BASE] Figure 7-5 p.491
   UR for an unimplemented register .. [BASE] SS7.3.3 p.480
-Full derivation: SPEC_PREDICTIONS_ENUM.md SSE.
+Full derivation: docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.
 """
 
 import cocotb

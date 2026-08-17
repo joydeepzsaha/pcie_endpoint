@@ -20,9 +20,9 @@ tlp_credit_manager.sv:53-54, 66-83).  Every "N packets" assertion below would
 otherwise be vacuously satisfied by silence.  This was regression RC1.
 
 RTL cited (read, not assumed):
-  DW0 assembly ..................... src/tlp/tlp_generator.sv:60-73
-  DW1 = {rid, tag, last_be, first_be}  src/tlp/tlp_generator.sv:80
-  config DW2 = {address[31:2],00} .. src/tlp/tlp_generator.sv:81-82
+  DW0 assembly ..................... src/tlp/tlp_generator.sv, the dw0 assembly
+  DW1 = {rid, tag, last_be, first_be}  src/tlp/tlp_generator.sv, the dw1 assembly
+  config DW2 = {address[31:2],00} .. src/tlp/tlp_generator.sv, the dw2 assembly
   CPL parse, DW1/DW2 fields ........ src/tlp/tlp_parser.sv:163-189
   tracker match + accounting ....... src/tlp/tlp_request_tracker.sv:123-155
   Lower Address seeded 0 for
@@ -98,7 +98,7 @@ def cfg_wire_dw2(bus, dev, fn, reg_num, ext_reg=0):
     """The config-request address DW as the generator emits it.
 
     {bus[31:24], device[23:19], function[18:16], ext_reg[11:8], reg[7:2], 00}
-    (tlp_generator.sv:81-82).  The BDF comes from the RQ descriptor's Completer
+    (tlp_generator.sv, the dw2 assembly).  The BDF comes from the RQ descriptor's Completer
     ID field, NOT from the address -- which is why a config request needs
     completer_id set and why this golden carries it.
     """
@@ -126,7 +126,7 @@ def decode_rc_desc(v):
 
 
 def dw0_length(dw0):
-    """Recover length_dw from a TX DW0 (inverse of tlp_generator.sv:60-73)."""
+    """Recover length_dw from a TX DW0 (inverse of tlp_generator.sv, the dw0 assembly)."""
     enc = ((dw0 >> 24) & 0xFF) | (((dw0 >> 16) & 0x3) << 8)
     return 1024 if enc == 0 else enc
 
@@ -136,9 +136,9 @@ def cpl_dw0(has_data, length_dw, tc=0, attr=0):
     fmt = FMT_3DW_DATA if has_data else FMT_3DW_NO_DATA
     enc = length_dw & 0x3FF
     v = (fmt << 5) | TYPE_CPL
-    v |= (attr & 0x1) << 10
+    v |= ((attr >> 2) & 0x1) << 10
     v |= (tc & 0x7) << 12
-    v |= ((attr >> 1) & 0x3) << 20
+    v |= (attr & 0x3) << 20
     v |= ((enc >> 8) & 0x3) << 16
     v |= (enc & 0xFF) << 24
     return v & 0xFFFFFFFF
@@ -1048,7 +1048,7 @@ async def v10_cfg1_round_trip(dut):
     """F2.5: a CfgRd1's CplD and a CfgWr1's Cpl correlate by tag and decode
     identically to the Type 0 path.
 
-    Recorded in SPEC_PREDICTIONS_STAGE_D.md SS7.3 as a NON-FALSIFIABLE row:
+    Recorded in docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS7.3 as a NON-FALSIFIABLE row:
     nothing emitted CFG1 through this surface before D-2, so there is no
     meaningful pre-change run -- this test exists post-change only.  The
     request side asserts the whole DW0 (Trap A: dw0[4:0] = 00101 is the only

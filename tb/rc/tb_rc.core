@@ -301,7 +301,7 @@ targets:
     toplevel : [tb_pcie_enum_txn]
 
   # 2b-1 integration: I1..I8. On-wire TLP goldens, the real completion timeout,
-  # and the credit vectors from SPEC_PREDICTIONS_ENUM.md SS2 (Table 2-37 minimum
+  # and the credit vectors from docs/predictions/SPEC_PREDICTIONS_ENUM.md SS2 (Table 2-37 minimum
   # with a cumulative drip; P-NPD1-STALL; P-NPD-INF; RC1).
   verilate_enum_txn_tlp:
     flow: sim
@@ -331,7 +331,7 @@ targets:
 
   # 2b-2 integration: K1..K6. On-wire goldens for both scan descriptors, a
   # CRS-first device, the Table 2-37 minimum credit with a cumulative drip, and
-  # the fabricated-timeout signature from SPEC_PREDICTIONS_ENUM.md SSD.6.
+  # the fabricated-timeout signature from docs/predictions/SPEC_PREDICTIONS_ENUM.md SSD.6.
   verilate_enum_scan_tlp:
     flow: sim
     flow_options:
@@ -410,7 +410,7 @@ targets:
 
   # 2b-3 integration: E1..E7. THE ACCEPTANCE TARGET -- an NVMe-like endpoint
   # enumerated end to end from FC init to enum_done_o, every emitted DW asserted
-  # against SPEC_PREDICTIONS_ENUM.md SSE.8 with payloads, run both saturated and
+  # against docs/predictions/SPEC_PREDICTIONS_ENUM.md SSE.8 with payloads, run both saturated and
   # under the Table 2-37 minimum credit drip.
   verilate_enum_bar_tlp:
     flow: sim

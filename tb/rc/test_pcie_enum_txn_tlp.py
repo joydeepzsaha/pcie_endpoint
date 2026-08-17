@@ -29,9 +29,9 @@ Spec cited (read, not assumed):
   Completion timeout is an error .... PCIe Base 2.1 SS2.8 p.152
   Bit 30 / Request Completed ........ PG213 v1.3 :4049
 RTL cited:
-  DW0 assembly ...................... src/tlp/tlp_generator.sv:60-73
-  DW1 = {rid, tag, last_be, first_be}  src/tlp/tlp_generator.sv:80
-  config DW2 = {address[31:2], 00} .. src/tlp/tlp_generator.sv:81-82
+  DW0 assembly ...................... src/tlp/tlp_generator.sv, the dw0 assembly
+  DW1 = {rid, tag, last_be, first_be}  src/tlp/tlp_generator.sv, the dw1 assembly
+  config DW2 = {address[31:2], 00} .. src/tlp/tlp_generator.sv, the dw2 assembly
   orphan-data report, once per Dword   src/rc/pcie_rc_if.sv:403-405
 """
 
@@ -527,7 +527,7 @@ async def i5_small_credit_drip(dut):
 async def i6_finite_npd_starves_writes_not_reads(dut):
     """A finite NPD with no replenishment stalls writes indefinitely, silently.
 
-    THE PREDICTED SIGNATURE (SPEC_PREDICTIONS_ENUM.md SS2.4, P-NPD1-STALL):
+    THE PREDICTED SIGNATURE (docs/predictions/SPEC_PREDICTIONS_ENUM.md SS2.4, P-NPD1-STALL):
     tx_fc_blocked_o held, ZERO error strobes anywhere, no TLP on the wire, and
     the primitive simply waiting.  It is indistinguishable from a hung FSM
     unless you know to look at tx_fc_blocked_o -- which is exactly why it is
@@ -598,7 +598,7 @@ async def i7_zero_advertisement_means_infinite(dut):
     THIS TEST EXISTS TO PREVENT A TEST.  The obvious way to write a credit
     starvation case -- advertise zero and watch the writes wedge -- produces
     the exact opposite behaviour and passes while proving nothing.  Both the
-    Commit-2b brief and RECON_commit2b.md SS2.3 predicted the wedge before this
+    Commit-2b brief and docs/recon/RECON_commit2b.md SS2.3 predicted the wedge before this
     was checked against the RTL.  I6 is the real starvation; this is the vacuum,
     pinned so nobody rebuilds the inverted version.
     """

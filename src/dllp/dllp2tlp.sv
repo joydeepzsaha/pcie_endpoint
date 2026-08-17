@@ -448,7 +448,14 @@ module dllp2tlp
             if (!pending_tlp_valid_r) begin
               tlp_dw0      = aligned_tlp_word;
               word_count_c = {tlp_dw0.byte2.Length1, tlp_dw0.byte3.Length0};
-              case (tlp_dw0.byte0)
+              // Eight of these labels embed `?` at the encoding's don't-care bits
+              // -- Fmt[0] for the 3DW/4DW forms, the routing subfield for
+              // messages.  A plain `case` compares 4-state-exact, so a `z` label
+              // bit can never match received 0/1 data and those labels select
+              // nothing.  The transmit sibling tlp2dllp matches the same labels
+              // with `inside {...}`, which wildcard-matches; `casez` is the
+              // receive-side equivalent.
+              casez (tlp_dw0.byte0)
                 MRd, MRdLk, IORd, CfgRd0, CfgRd1, TCfgRd:
                   tlp_is_nph_c = '1;
                 MWr, MsgD:

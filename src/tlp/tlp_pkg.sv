@@ -23,13 +23,7 @@ package tlp_pkg;
     TLP_TYPE_CPL_LOCK  = 5'b01011,
     TLP_TYPE_FETCH_ADD = 5'b01100,
     TLP_TYPE_SWAP      = 5'b01101,
-    TLP_TYPE_CAS       = 5'b01110,
-    TLP_TYPE_MSG_TO_RC = 5'b10000,
-    TLP_TYPE_MSG_ADDR  = 5'b10001,
-    TLP_TYPE_MSG_ID    = 5'b10010,
-    TLP_TYPE_MSG_BCAST = 5'b10011,
-    TLP_TYPE_MSG_LOCAL = 5'b10100,
-    TLP_TYPE_MSG_GATHER = 5'b10101
+    TLP_TYPE_CAS       = 5'b01110
   } tlp_type_e;
 
   typedef enum logic [1:0] {
@@ -46,13 +40,37 @@ package tlp_pkg;
     TLP_CPL_CA  = 3'b100
   } tlp_cpl_status_e;
 
-  typedef enum logic [2:0] {
+  typedef enum logic [3:0] {
     TLP_CMD_MEM_READ,
     TLP_CMD_MEM_WRITE,
     TLP_CMD_CFG_READ0,
     TLP_CMD_CFG_WRITE0,
     TLP_CMD_IO_READ,
     TLP_CMD_IO_WRITE,
+    TLP_CMD_CFG_READ1,
+    TLP_CMD_CFG_WRITE1,
+    // RESERVED ENCODINGS -- declared, never decoded.  Nothing in this tree
+    // drives ordinal 8 or 9, no test constructs one, and no datapath decodes
+    // one.  The six command_is_* predicates in tlp_requester each return 0 for
+    // both, because each is an explicit member list and an unlisted member
+    // matches no term.
+    //
+    // They exist so the command encoding is ALREADY the union of this tree's
+    // set and the endpoint branch's, which lets tlp_pkg.sv merge as "take
+    // ours".  The alternative -- adopting the other branch's numbering -- would
+    // move CFG_READ1/CFG_WRITE1 off 6 and 7, and three bench files bind those
+    // two ordinals as Python integers while eight more bind ordinals 0..5.
+    // See docs/recon/RECON_MERGE.md SSR1 for the collision and docs/findings/M1_FINDINGS.md for the gate.
+    //
+    // !! WARNING to whoever gives these a datapath: the requester FAILS OPEN on
+    // them today.  command_non_posted is derived as "!= TLP_CMD_MEM_WRITE", so
+    // a message would read as non-posted although messages are posted; and the
+    // tlp_type select has no message arm, so header_c.tlp_type falls through to
+    // TLP_TYPE_MEM and a message command would be emitted as a well-formed
+    // Memory Read.  That is pre-existing out-of-range behaviour -- see the
+    // comment above command_is_config in tlp_requester.sv, which records the
+    // same failure mode -- and it is harmless ONLY while these stay undriven.
+    // Adding a message datapath means fixing both, not just adding arms.
     TLP_CMD_MSG,
     TLP_CMD_MSG_DATA
   } tlp_cmd_e;
@@ -94,7 +112,6 @@ package tlp_pkg;
     logic [15:0] requester_id;
     logic [15:0] completer_id;
     logic [7:0]  tag;
-    logic [7:0]  message_code;
     logic [3:0]  first_be;
     logic [3:0]  last_be;
     logic [63:0] address;
@@ -113,10 +130,6 @@ package tlp_pkg;
 
   function automatic logic tlp_is_4dw(input logic [2:0] fmt);
     return fmt == TLP_FMT_4DW_NO_DATA || fmt == TLP_FMT_4DW_DATA;
-  endfunction
-
-  function automatic logic tlp_is_message(input logic [4:0] tlp_type);
-    return tlp_type >= TLP_TYPE_MSG_TO_RC && tlp_type <= TLP_TYPE_MSG_GATHER;
   endfunction
 
   function automatic logic [9:0] tlp_encode_length(input logic [10:0] length_dw);

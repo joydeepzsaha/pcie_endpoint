@@ -19,8 +19,6 @@ module tlp_requester
     input  logic [12:0]              command_byte_count_i,
     input  logic [2:0]               command_tc_i,
     input  logic [2:0]               command_attr_i,
-    input  logic [2:0]               command_message_route_i,
-    input  logic [7:0]               command_message_code_i,
     input  logic [CONTEXT_WIDTH-1:0] command_context_i,
     input  logic                     command_prefix_valid_i,
     input  logic [31:0]              command_prefix_i,
@@ -61,8 +59,6 @@ module tlp_requester
   logic [12:0] segment_sent_r;
   logic [2:0] tc_r;
   logic [2:0] attr_r;
-  logic [2:0] message_route_r;
-  logic [7:0] message_code_r;
   logic [CONTEXT_WIDTH-1:0] context_r;
   logic [7:0] tag_r;
   logic prefix_valid_r;
@@ -70,8 +66,6 @@ module tlp_requester
   logic ecrc_enable_r;
   tlp_header_t header_c;
   logic command_has_data;
-  logic command_is_message;
-  logic command_posted;
   logic command_non_posted;
   logic [12:0] accepted_bytes;
   logic expected_data_last;
@@ -145,11 +139,8 @@ module tlp_requester
   endfunction
 
   always_comb begin
-    command_has_data   = command_is_write(command_r) ||
-                         command_r == TLP_CMD_MSG_DATA;
-    command_is_message = command_r == TLP_CMD_MSG || command_r == TLP_CMD_MSG_DATA;
-    command_posted     = command_r == TLP_CMD_MEM_WRITE || command_is_message;
-    command_non_posted = !command_posted;
+    command_has_data   = command_is_write(command_r);
+    command_non_posted = command_r != TLP_CMD_MEM_WRITE;
     accepted_bytes = '0;
     for (lane = 0; lane < KEEP_WIDTH; lane = lane + 1)
       accepted_bytes = accepted_bytes + command_keep_i[lane];
@@ -179,16 +170,6 @@ module tlp_requester
     header_c.prefix_present = prefix_valid_r;
     header_c.prefix         = prefix_r;
     header_c.digest_present = ecrc_enable_r;
-    if (command_is_message) begin
-      header_c.fmt = command_has_data ? TLP_FMT_4DW_DATA : TLP_FMT_4DW_NO_DATA;
-      header_c.tlp_type = tlp_type_e'({2'b10, message_route_r});
-      header_c.length_dw = command_has_data ?
-          11'((segment_bytes_r + 13'd3) >> 2) : 11'd0;
-      header_c.first_be = '0;
-      header_c.last_be = '0;
-      header_c.tag = '0;
-      header_c.message_code = message_code_r;
-    end
   end
 
   assign command_ready_o = state_r == REQ_IDLE;
@@ -224,8 +205,6 @@ module tlp_requester
       segment_sent_r  <= '0;
       tc_r            <= '0;
       attr_r          <= '0;
-      message_route_r <= '0;
-      message_code_r  <= '0;
       context_r       <= '0;
       tag_r           <= '0;
       prefix_valid_r  <= 1'b0;
@@ -247,18 +226,7 @@ module tlp_requester
           // byte_count + address[1:0] <= 4, so length_dw (:125-126) is 1 by
           // construction, and calculate_segment's clamp to 4 - address[1:0]
           // (:93-94) can no longer split the request across two config TLPs.
-          // Message requests have their own zero-length and DWORD-alignment
-          // rules.  Keep those checks alongside the relaxed Config/IO fit
-          // check so Endpoint Message support and Root Complex Config/IO
-          // support use the same requester without weakening either contract.
-          if ((command_byte_count_i == 0 && command_i != TLP_CMD_MEM_READ &&
-               command_i != TLP_CMD_MSG) ||
-              (command_i == TLP_CMD_MSG && command_byte_count_i != 0) ||
-              ((command_i == TLP_CMD_MSG || command_i == TLP_CMD_MSG_DATA) &&
-               command_message_route_i > 3'd5) ||
-              (command_i == TLP_CMD_MSG_DATA &&
-               (command_byte_count_i > command_limit(command_i) ||
-                command_byte_count_i[1:0] != 0)) ||
+          if ((command_byte_count_i == 0 && command_i != TLP_CMD_MEM_READ) ||
               (command_is_config_or_io(command_i) &&
                command_byte_count_i > (13'd4 - {11'd0, command_address_i[1:0]}))) begin
             command_error_valid_o <= 1'b1;
@@ -269,20 +237,14 @@ module tlp_requester
             remaining_r <= command_byte_count_i;
             tc_r        <= command_tc_i;
             attr_r      <= command_attr_i;
-            message_route_r <= command_message_route_i;
-            message_code_r <= command_message_code_i;
             context_r   <= command_context_i;
             prefix_valid_r <= command_prefix_valid_i;
             prefix_r       <= command_prefix_i;
             ecrc_enable_r  <= command_ecrc_enable_i;
-            segment_bytes_r <= (command_i == TLP_CMD_MSG ||
-                                command_i == TLP_CMD_MSG_DATA) ?
-                command_byte_count_i :
-                calculate_segment(command_address_i, command_byte_count_i,
-                                  command_limit(command_i));
+            segment_bytes_r <= calculate_segment(command_address_i, command_byte_count_i,
+                                                 command_limit(command_i));
             segment_sent_r <= '0;
-            state_r <= (command_i == TLP_CMD_MEM_WRITE || command_i == TLP_CMD_MSG ||
-                        command_i == TLP_CMD_MSG_DATA) ? REQ_HEADER : REQ_TAG;
+            state_r <= command_i == TLP_CMD_MEM_WRITE ? REQ_HEADER : REQ_TAG;
           end
         end
 

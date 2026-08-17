@@ -20,7 +20,6 @@ module tb_tlp_comb;
   logic [1:0] class_value;
   logic memory_request;
   logic config_request;
-  logic message_request;
   logic completion;
   logic read_request;
   logic write_request;
@@ -54,7 +53,6 @@ module tb_tlp_comb;
   tlp_classifier classifier_inst (
       .header_i(header), .class_o(class_value),
       .memory_request_o(memory_request), .config_request_o(config_request),
-      .message_request_o(message_request),
       .completion_o(completion), .read_request_o(read_request),
       .write_request_o(write_request), .unsupported_o(unsupported)
   );

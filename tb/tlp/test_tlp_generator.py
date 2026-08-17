@@ -62,6 +62,8 @@ async def collect(dut, count, stalls=(1,)):
 
 
 def expected_dw0(fmt, tlp_type, length, tc=0, attr=0, digest=0):
+    # attr is PCIe Attr[2:0] = {IDO, RO, NS}.  Base 2.1 SS2.2.1 p.57 splits it:
+    # Attr[2] -> dw0[10], Attr[1:0] -> dw0[21:20].  The halves are NOT adjacent.
     enc = 0 if length == 1024 else length
     return ((fmt << 5) | tlp_type | (((attr >> 2) & 1) << 10) | (tc << 12)
             | (((enc >> 8) & 3) << 16) | ((attr & 3) << 20)

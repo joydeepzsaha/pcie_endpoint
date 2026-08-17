@@ -29,7 +29,7 @@ RTL cited (read, not assumed):
     REQUEST ....................... src/tlp/tlp_request_tracker.sv:140-142
   Lower Address seeded 0 for
     non-memory requests ........... src/tlp/tlp_layer.sv:371-378
-  DW0 assembly (TX golden) ........ src/tlp/tlp_generator.sv:60-73
+  DW0 assembly (TX golden) ........ src/tlp/tlp_generator.sv, the dw0 assembly
 """
 
 import cocotb
@@ -108,9 +108,9 @@ def cpl_dw0(has_data, length_dw, tc=0, attr=0):
     fmt = FMT_3DW_DATA if has_data else FMT_3DW_NO_DATA
     enc = length_dw & 0x3FF
     v = (fmt << 5) | TYPE_CPL
-    v |= (attr & 0x1) << 10
+    v |= ((attr >> 2) & 0x1) << 10
     v |= (tc & 0x7) << 12
-    v |= ((attr >> 1) & 0x3) << 20
+    v |= (attr & 0x3) << 20
     v |= ((enc >> 8) & 0x3) << 16
     v |= (enc & 0xFF) << 24
     return v & 0xFFFFFFFF
@@ -546,3 +546,81 @@ async def u15_crs_and_unexpected_completion(dut):
     assert loop.unexpected == [TLP_ERR_UNEXPECTED_COMPLETION], \
         f"unexpected completion not surfaced: {loop.unexpected}"
     assert int(dut.outstanding_o.value) == 0
+
+
+# ==========================================================================
+# M2-I2 -- attribute placement off the wire, parser direction
+# ==========================================================================
+# The mirror of M2-I1.  The completion DW0 is assembled here from the spec
+# table directly -- NOT from cpl_dw0() -- so that the stimulus and the DUT do
+# not share a helper.  If they shared one, a helper wrong in the same way as the
+# RTL would make this pass, which is exactly how the misplacement survived.
+#
+#   PCIe Base 2.1 SS2.2.1 p.57  Attr[2] = bit 2 of byte 1  -> dw0[10]
+#                               Attr[1:0] = bits [5:4] of byte 2 -> dw0[21:20]
+#   PG213 Table 65              RC descriptor attr[94:92] is {IDO, RO, NS},
+#                               matching pcie_rq_rc_pkg.sv:119
+#
+# So this walks a bit from a Base-2.1 wire position to a PG213 descriptor bit:
+# both ends are normative and neither is read back from the DUT.
+ATTR_WIRE_POSITION = ((2, 10, "IDO"), (1, 21, "RO"), (0, 20, "NS"))
+
+# Same reasoning as M2-I1: 0 and 7 are fixed points and prove nothing; 1, 2 and
+# 4 are one-hot and pin each bit independently.
+# See docs/predictions/SPEC_PREDICTIONS_MERGE_M2.md SS7.
+ATTR_DRIVE_SET = (1, 2, 4, 5, 7)
+
+
+def spec_cpl_dw0(attr, length_dw=1):
+    """A CplD DW0 built straight from Base 2.1 SS2.2.1 p.57, helper-free."""
+    v = (FMT_3DW_DATA << 5) | TYPE_CPL
+    v |= (length_dw & 0xFF) << 24
+    v |= ((length_dw >> 8) & 0x3) << 16
+    for src, pos, _ in ATTR_WIRE_POSITION:
+        if (attr >> src) & 1:
+            v |= 1 << pos
+    return v & 0xFFFFFFFF
+
+
+@cocotb.test()
+async def m2i2_completion_attr_decodes_from_spec_wire_positions(dut):
+    """M2-I2: Attr bits at their spec DW0 positions reach the RC descriptor.
+
+    A completion is driven with one attribute bit set at the position Base 2.1
+    assigns it, and the RC descriptor's Attributes field is checked for the same
+    bit.  Round-trip cannot do this job: tlp_parser is the exact inverse of
+    tlp_generator under both placements, so a loopback is the identity however
+    the bits sit.  See docs/predictions/SPEC_PREDICTIONS_MERGE_M2.md SS6.
+    """
+    loop = await init(dut)
+    seen = 0
+
+    for attr in ATTR_DRIVE_SET:
+        wire_tag = await issue_cfg_read(dut, loop, reg_num=0x04)
+        read_data = 0xC0DE0000 | attr
+        await send_rx(dut, [
+            spec_cpl_dw0(attr),
+            cpl_dw1(COMPLETER, CPL_SC, byte_count=4),
+            cpl_dw2(RID, wire_tag, lower_address=0),
+            read_data,
+        ])
+        seen += 1
+        await loop.wait_rc(seen)
+
+        desc, payload = split_packet(loop.rc[seen - 1])
+        fields = decode_desc(desc)
+        assert fields["attr"] == attr, (
+            f"RC descriptor Attributes {fields['attr']:#05b} != {attr:#05b} "
+            f"driven at the Base 2.1 wire positions; per PG213 Table 65 bit 92 "
+            f"is No Snoop, 93 Relaxed Ordering, 94 ID-Based Ordering")
+        assert fields["tag"] == wire_tag, "the completion did not match its request"
+        assert payload == [read_data], f"payload {payload} != [{read_data:#010x}]"
+
+        for _ in range(10):
+            await RisingEdge(dut.clk_i)
+        assert int(dut.outstanding_o.value) == 0, \
+            f"attr=0b{attr:03b}: the tag did not retire"
+        assert loop.unexpected == [], \
+            f"attr=0b{attr:03b}: completion flagged unexpected: {loop.unexpected}"
+        assert loop.rc_errors == [], \
+            f"attr=0b{attr:03b}: RC protocol errors {loop.rc_errors}"

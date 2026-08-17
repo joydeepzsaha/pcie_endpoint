@@ -1,5 +1,20 @@
 `timescale 1ns/1ps
-module tb_tlp_vc_buffer;
+// Wrapper for tlp_vc_buffer: flattens the enum ports for cocotb and narrows the
+// geometry so a full FIFO, a maximum-length packet and a slot-pointer wrap are
+// all reachable in a short sim.
+//
+// The geometry is a parameter because the two properties of the storage index
+// that matter are only both live at a NON-power-of-two shape: with
+// PACKET_DEPTH=2 or 4 the slot counter's own width makes it wrap on its own, so
+// the explicit `== PACKET_DEPTH-1` wrap (tlp_vc_buffer.sv:96, :110) is dead, and
+// with a power-of-two MAX_PACKET_WORDS the flat stride is trivial.  The shipped
+// instance (tlp_layer.sv:455) runs PACKET_DEPTH=4, MAX_PACKET_WORDS=1030 -- the
+// word bound is NOT a power of two there.  Defaults here reproduce the geometry
+// the original bundled bench used.
+module tb_tlp_vc_buffer #(
+    parameter int PACKET_DEPTH = 2,
+    parameter int MAX_PACKET_WORDS = 16
+);
   import tlp_pkg::*;
   logic clk_i=0,rst_i;
   logic [31:0] s_data,m_data; logic [3:0] s_keep,m_keep;
@@ -7,7 +22,7 @@ module tb_tlp_vc_buffer;
   logic [2:0] s_user,m_user; logic [1:0] s_class,packet_class;
   logic s_has_data;
   logic [10:0] s_length; logic [11:0] packet_credits;
-  tlp_vc_buffer #(.PACKET_DEPTH(2),.MAX_PACKET_WORDS(16)) dut(
+  tlp_vc_buffer #(.PACKET_DEPTH(PACKET_DEPTH),.MAX_PACKET_WORDS(MAX_PACKET_WORDS)) dut(
     .clk_i(clk_i),.rst_i(rst_i),.s_axis_tdata(s_data),.s_axis_tkeep(s_keep),
     .s_axis_tvalid(s_valid),.s_axis_tlast(s_last),.s_axis_tuser(s_user),
     .s_axis_tready(s_ready),.s_packet_class_i(s_class),.s_packet_length_dw_i(s_length),

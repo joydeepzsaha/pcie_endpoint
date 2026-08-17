@@ -15,13 +15,13 @@ The integration module is [`tlp_layer.sv`](tlp_layer.sv), and
 | --- | --- |
 | `tlp_pkg.sv` | TLP formats, types, classes, commands, error codes, packed headers, and helper functions. |
 | `tlp_validator.sv` | Header-format and protocol validation. |
-| `tlp_classifier.sv` | Posted, non-posted, completion, memory, configuration, Message, read, and write classification. |
+| `tlp_classifier.sv` | Posted, non-posted, completion, memory, configuration, read, and write classification. |
 | `tlp_bar_decoder.sv` | Address comparison, BAR selection, overlap reporting, and target offset calculation. |
 | `tlp_config_decoder.sv` | Configuration request BDF and register-offset decoding. |
 | `tlp_parser.sv` | AXI-Stream TLP disassembly, header extraction, payload forwarding, framing checks, and ECRC checking. |
 | `tlp_payload_formatter.sv` | Payload alignment, byte masking, segmentation, and backpressure handling. |
 | `tlp_request_tracker.sv` | Tag allocation, outstanding-request context, completion accounting, and tag retirement. |
-| `tlp_requester.sv` | Application command conversion, request segmentation, tag requests, and Memory/Configuration/I/O/Message header generation. |
+| `tlp_requester.sv` | Application command conversion, request segmentation, tag requests, and request-header generation. |
 | `tlp_completion_generator.sv` | Completion and Completion-with-Data header/payload generation. |
 | `tlp_control.sv` | Arbitration between locally generated requests and completions while preserving packet boundaries. |
 | `tlp_generator.sv` | TLP serialization, optional prefix insertion, payload emission, and optional ECRC insertion. |
@@ -47,7 +47,7 @@ assertions.
 | `test_tlp_generator.py` | Request headers, prefixes, payloads, digest insertion, stalls, no-data requests/completions, output stability, and reset. |
 | `test_tlp_completion_control.py` | Completion fields, completion priority, packet locking, and boundary-level round-robin fairness. |
 | `test_tlp_ecrc.py` | Fixed vectors, randomized data, maximum packet length, and reset. |
-| `test_tlp_credit_manager.py` | Exact credit consumption, P/NP/Cpl header-only and data-only starvation, short updates, all six independent pools, and blocked-counter wraparound guards. |
+| `test_tlp_credit_manager.py` | Exact credit consumption, short updates, and independence of all six credit pools. |
 | `test_tlp_vc_buffer.py` | Packet atomicity, credit-class metadata, data-credit calculation, queueing, and backpressure. |
 | `test_tlp_compile.py` | Layer reset, request routing, malformed timing, local command output, and exact credit-class blocking. |
 | `test_tlp_end_to_end.py` | Request families, 3-DW/4-DW formats, prefix/ECRC alignment, segmentation, request-to-completion tracking, malformed traffic, and recovery. |
@@ -159,17 +159,3 @@ by itself prove Data Link replay, LTSSM operation, Physical Layer encoding, or
 electrical PCIe compliance. Those are tested at their respective layers and at
 the endpoint integration level.
 
-Messages and Messages with Data use four-DWORD headers and posted credits.
-The generic interface preserves routing values 0 through 5, the eight-bit
-message code, the requester ID, routing-specific 64-bit header data, and any
-DWORD-aligned payload. Message-code semantics are intentionally left to the
-endpoint application.
-
-## Change log (12-Aug-26)
-
-The receive-path repair is below the Transaction Layer: a good protected frame
-must emerge from the DLL as the exact original DWORD-aligned TLP before parser
-classification. No TLP header layout or parser behavior should be changed to
-compensate for sequence/LCRC alignment failures in the DLL. The endpoint
-line-rate tests retain Memory Read, Memory Write, Completion, and Message checks
-at the TLP boundary. The associated changes were not simulated when recorded.

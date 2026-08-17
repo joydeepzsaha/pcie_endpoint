@@ -2,6 +2,19 @@
 // pcie_enum_scan -- the presence phase of Root Complex enumeration.
 // Commit 2b-2.
 //
+// SPEC ANCHORS
+//   [BASE] SS7.3.1 p.479 ......... Downstream Ports associate with Device 0
+//                                  only -- the reason this module probes ONE
+//                                  device and not a 0..31 sweep.
+//   [BASE] SS7.3.3 p.480 ......... the general Endpoint rule for an
+//                                  unimplemented Function.
+//   [BASE] SS2.3.2 p.122 ......... Implementation Note: a Root Complex
+//                                  synthesises all-ones for a failed probe,
+//                                  which is what "absent" decodes from.
+//   [BASE] Figure 7-5 p.491 ...... Type 0 header layout (Vendor/Device ID,
+//                                  Header Type).
+//   Tag conventions are defined in pcie_enum_pkg.sv:29.
+//
 //   scan_start_i -> Vendor/Device ID probe -> [absent? done]
 //                -> Header Type read       -> [Type 1? unsupported]
 //                -> scan_done_o
@@ -70,7 +83,7 @@
 //      and sees UR for 1-31 -- but that UR is synthesised by the Root Port's own
 //      downstream-port logic and the request never reaches the wire. THIS DESIGN
 //      HAS NO SUCH LOGIC: the completer surface is tied off
-//      (pcie_rq_rc_top.sv:83-99) and pcie_rq_rc_top originates Type 0 straight
+//      (pcie_rq_rc_top.sv:96-99) and pcie_rq_rc_top originates Type 0 straight
 //      onto the link. A request naming device 5 would actually be transmitted.
 //
 //   2. "Non-ARI Devices must respond to all Type 0 Configuration Read Requests,
@@ -276,7 +289,7 @@ module pcie_enum_scan
   //
   // The probe and header-type phases get their OWN response states rather than
   // sharing one with a phase flag, so that the phase-dependent policy of
-  // SPEC_PREDICTIONS_ENUM.md SSD.5 maps one-to-one onto the RTL and a reader can
+  // docs/predictions/SPEC_PREDICTIONS_ENUM.md SSD.5 maps one-to-one onto the RTL and a reader can
   // check the TXN_UR rows against the table by eye.
   // -------------------------------------------------------------------------
   typedef enum logic [2:0] {
@@ -343,7 +356,7 @@ module pcie_enum_scan
 
         S_PROBE_CMD: if (cmd_ready) state_r <= S_PROBE_RSP;
 
-        // ---- PROBE policy. SPEC_PREDICTIONS_ENUM.md SSD.5, left column. -----
+        // ---- PROBE policy. docs/predictions/SPEC_PREDICTIONS_ENUM.md SSD.5, left column. -----
         S_PROBE_RSP: begin
           if (rsp_valid) begin
             case (rsp_outcome)

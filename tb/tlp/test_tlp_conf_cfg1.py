@@ -7,7 +7,7 @@ commands (NOT inherited from the CFG0 matrix in test_tlp_conf_cfgbe), and
 the anti-segmentation proof that an over-length CFG1 request is rejected
 outright rather than split on command_limit.
 
-TRAP A (SPEC_PREDICTIONS_STAGE_D.md SS8.1): CfgRd1 differs from CfgRd0 in
+TRAP A (docs/predictions/SPEC_PREDICTIONS_STAGE_D.md SS8.1): CfgRd1 differs from CfgRd0 in
 exactly ONE bit -- dw0[4:0] is 0b00101 vs 0b00100 (PCIe Base 2.1 Table 2-3
 p.58).  Fmt, DW1, DW2, byte enables, length and payload are all identical
 between the two types (SS2.2.7 p.79 constrains Configuration Requests as a
@@ -29,18 +29,18 @@ Spec anchors:
   Length=1 / Last DW BE=0000 .... PCIe Base 2.1 SS2.2.7 p.79 (class rule,
                                   no Type 0/Type 1 distinction)
 RTL cited (read, not assumed):
-  tlp_cmd_e (8 members) ......... src/tlp/tlp_pkg.sv:43-52
+  tlp_cmd_e ......... src/tlp/tlp_pkg.sv, typedef tlp_cmd_e
   command-class predicates ...... src/tlp/tlp_requester.sv:82-110
   tlp_type/fmt select ........... src/tlp/tlp_requester.sv:138-149
   admission guard ............... src/tlp/tlp_requester.sv:208-222
-  generator DW0/DW1/DW2 ......... src/tlp/tlp_generator.sv:49-72,81-85
+  generator DW0/DW1/DW2 ......... src/tlp/tlp_generator.sv, the dw0 and dw2 assembly
 """
 
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-# tlp_cmd_e (src/tlp/tlp_pkg.sv:43-52) -- D-1b appends the two CFG1 members
+# tlp_cmd_e (src/tlp/tlp_pkg.sv, typedef tlp_cmd_e) -- D-1b appends the two CFG1 members
 # at the tail, filling the logic [2:0] enum to exactly 8 of 8.
 CMD_CFG_READ1 = 6
 CMD_CFG_WRITE1 = 7
@@ -70,7 +70,7 @@ def cfg_addr(bus, dev, fn, reg_byte_offset, ext_reg=0):
     [31:24]=Bus [23:19]=Device [18:16]=Function [11:8]=ExtReg [7:2]=Register#.
     The requester copies command_address_i into header.address
     (tlp_requester.sv:158) and the generator emits {address[31:2],2'b00}
-    as DW2 (tlp_generator.sv:81-85)."""
+    as DW2 (tlp_generator.sv, the dw2 assembly)."""
     return (((bus & 0xFF) << 24) | ((dev & 0x1F) << 19) | ((fn & 0x7) << 16)
             | ((ext_reg & 0xF) << 8) | (reg_byte_offset & 0xFC))
 
@@ -80,7 +80,7 @@ def cfg_addr(bus, dev, fn, reg_byte_offset, ext_reg=0):
 # --------------------------------------------------------------------------
 def golden_cfg_dw0(write, type1=False):
     """Whole DW0 of a config request per the generator bit map
-    (tlp_generator.sv:49-62): fmt=dw0[7:5], type=dw0[4:0], Length=1 always
+    (tlp_generator.sv, the dw0 assembly): fmt=dw0[7:5], type=dw0[4:0], Length=1 always
     (SS2.2.7).  type1=False default keeps every CFG0 caller unchanged."""
     fmt = FMT_3DW_DATA if write else FMT_3DW_NO_DATA
     typ = TYPE_CFG1 if type1 else TYPE_CFG0
@@ -88,7 +88,7 @@ def golden_cfg_dw0(write, type1=False):
 
 
 def golden_dw1(rid, tag, first_be, last_be):
-    """DW1 non-CPL: {rid, tag, last_be, first_be} (tlp_generator.sv:69)."""
+    """DW1 non-CPL: {rid, tag, last_be, first_be} (tlp_generator.sv, the dw0 length assignment)."""
     return ((rid & 0xFFFF) << 16) | ((tag & 0xFF) << 8) | \
            ((last_be & 0xF) << 4) | (first_be & 0xF)
 
@@ -250,7 +250,7 @@ async def settle(dut, n=16):
 
 
 def dec_len(dw0):
-    """Decode the Length field out of DW0 (tlp_generator.sv:49-62)."""
+    """Decode the Length field out of DW0 (tlp_generator.sv, the dw0 assembly)."""
     enc = (((dw0 >> 16) & 0x3) << 8) | ((dw0 >> 24) & 0xFF)
     return 1024 if enc == 0 else enc
 
