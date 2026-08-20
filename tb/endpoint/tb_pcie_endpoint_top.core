@@ -21,3 +21,26 @@ targets:
       timescale: 1ns/1ps
     filesets: [tb]
     toplevel: tb_pcie_endpoint_top
+
+  # First netlist in the tree that contains tlp_core and dllp_core together --
+  # every other verilate target holds one layer or the other.  The five tests in
+  # test_pcie_endpoint_top.py had no runnable target before this one: `sim`
+  # above is vcs, and this flow is verilator+cocotb throughout.
+  #
+  # --timing is required by src/dllp (verilate_dll_comprehensive carries it for
+  # the same source set); the TL-only targets in tb_tlp.core do not need it.
+  # -Wall stays off: it surfaces ~118 pre-existing warnings in third-party
+  # src/verilog-axis and in src/tlp/tlp_payload_formatter.sv that are outside
+  # this project's standard warnings-as-errors-without--Wall invocation.
+  # waiver.vlt arrives via dllp_core -> fusesoc:pcie:lint.
+  verilate_endpoint_top:
+    flow: sim
+    flow_options:
+      tool: verilator
+      cocotb_module: test_pcie_endpoint_top
+      timescale: 1ns/1ps
+      verilator_options:
+        - --timing
+        - waiver.vlt
+    filesets: [tb]
+    toplevel: [tb_pcie_endpoint_top]
