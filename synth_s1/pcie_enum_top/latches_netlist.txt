@@ -1,2 +1,0 @@
-unit: pcie_enum_top
-latch primitives in the synthesized netlist: 0

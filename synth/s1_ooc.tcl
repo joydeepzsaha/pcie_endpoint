@@ -1,61 +1,58 @@
 # ---------------------------------------------------------------------------
 # s1_ooc.tcl -- Stage S-1, out-of-context synthesis of one RC-side unit.
 #
-# Non-project batch flow. Reads one unit's ordered file list, applies ONE
-# virtual clock, synthesizes out-of-context, and writes every report to a
-# per-unit directory OUTSIDE the repository.
+# Non-project batch flow. Reads one unit's ordered file list, loads the shared
+# timing constraints before synthesis, synthesizes out-of-context, and writes
+# every report to a per-unit directory OUTSIDE the repository.
 #
 # THIS SCRIPT CHANGES NO RTL AND WRITES NOTHING INTO THE REPO. Every artefact
 # it produces lands in $OUTROOT/<unit>/ -- nothing generated is ever committed.
 #
-# Usage (from a shell that has sourced /home/kourosh/tools/vivado_env.sh, and
-# ONLY such a shell -- never the conda pcie/Verilator environment):
+# Usage (Vivado must be available on PATH):
 #
 #   vivado -mode batch -nojournal -nolog -source synth/s1_ooc.tcl \
-#          -tclargs <unit> [repo_root] [out_root] [part] [period_ns]
+#          -tclargs <unit> [repo_root] [out_root] [part] [period_ns] \
+#                   [uncertainty_ns] [input_delay_min_ns] \
+#                   [input_delay_max_ns] [output_delay_min_ns] \
+#                   [output_delay_max_ns]
 #
 #   <unit> is one of:  pcie_enum_top | pcie_rq_rc_top
 #
 # ---------------------------------------------------------------------------
-# THE CLOCK IS A PLACEHOLDER.
+# THE CLOCK PERIOD IS A PLACEHOLDER.
 #
-# One create_clock at 250 MHz (4.000 ns) on the unit's clk_i port, and nothing
-# else. No XDC, no pin placement, no set_input_delay / set_output_delay, no
-# clocking architecture -- all of that is blocked on the GTH-attach decision,
-# which is not this brief's to make.
+# The default is 250 MHz (4.000 ns) on the unit's clk_i port. The shared
+# constraints also apply clock uncertainty and input/output delays. No pin
+# placement or clock-buffer site is specified; that remains dependent on the
+# final GTH/clock architecture.
 #
-# 250 MHz is a Gen1-era stand-in (Gen1 x1 at 2.5 GT/s is 250 MHz of 8-bit
-# symbol time; the TL here is 32 bits wide, so this is a shape, not a
-# requirement). CONSEQUENCE: with no I/O delays written, only register-to-
-# register paths are timed. Every input-to-register and register-to-output
-# path is unconstrained and cannot appear in WNS. Read every timing number
-# this script produces as DIRECTIONAL ONLY.
+# Read timing results as directional until the parent-interface timing budgets
+# and final clock architecture are known.
 # ---------------------------------------------------------------------------
 
 # ---- arguments -------------------------------------------------------------
 if {[llength $argv] < 1} {
-  puts "ERROR: usage: -tclargs <unit> \[repo_root\] \[out_root\] \[part\] \[period_ns\]"
+  puts "ERROR: usage: -tclargs <unit> \[repo_root\] \[out_root\] \[part\] \[period_ns\] \[uncertainty_ns\] \[input_delay_min_ns\] \[input_delay_max_ns\] \[output_delay_min_ns\] \[output_delay_max_ns\]"
   exit 1
 }
 
-set UNIT   [lindex $argv 0]
-set REPO   [expr {[llength $argv] > 1 ? [lindex $argv 1] : "/home/kourosh/pcie_endpoint"}]
-set OUTROOT [expr {[llength $argv] > 2 ? [lindex $argv 2] : "/home/kourosh/synth_s1"}]
-# xczu7ev-ffvc1156-2-e: free-tier stand-in for the ZCU102's ZU9EG
-# (xczu9eg-ffvb1156-2-e -- same family, same speed/temperature grade, not
-# visible under ML Standard). A placeholder for area and timing character,
-# NOT a board commitment.
-set PART   [expr {[llength $argv] > 3 ? [lindex $argv 3] : "xczu7ev-ffvc1156-2-e"}]
-set PERIOD [expr {[llength $argv] > 4 ? [lindex $argv 4] : 4.000}]
+set SCRIPT_DIR [file dirname [file normalize [info script]]]
+set DEFAULT_REPO [file dirname $SCRIPT_DIR]
 
-# ---- the file lists --------------------------------------------------------
-# Ordered per the FuseSoC .core filesets (src/tlp/tlp_core.core and
-# src/rc/rc_core.core), RTL only -- no tb/, no cocotb glue, no lint waivers --
-# with the three packages hoisted to the front.
-#
-# The hoist is REQUIRED, not cosmetic: pcie_rq_rc_pkg references tlp_pkg::, so
-# tlp_pkg must compile first even for pcie_enum_top, which contains no TL.
-# pcie_enum_pkg imports nothing.
+set UNIT [lindex $argv 0]
+set REPO [expr {[llength $argv] > 1 ? [lindex $argv 1] : $DEFAULT_REPO}]
+set OUTROOT [expr {[llength $argv] > 2 ? [lindex $argv 2] : "$REPO/build/vivado/syn"}]
+set PART [expr {[llength $argv] > 3 ? [lindex $argv 3] : "xczu7ev-ffvc1156-2-e"}]
+set PERIOD_OVERRIDE [expr {[llength $argv] > 4 ? [lindex $argv 4] : ""}]
+set UNCERTAINTY_OVERRIDE [expr {[llength $argv] > 5 ? [lindex $argv 5] : ""}]
+set INPUT_DELAY_MIN_OVERRIDE [expr {[llength $argv] > 6 ? [lindex $argv 6] : ""}]
+set INPUT_DELAY_MAX_OVERRIDE [expr {[llength $argv] > 7 ? [lindex $argv 7] : ""}]
+set OUTPUT_DELAY_MIN_OVERRIDE [expr {[llength $argv] > 8 ? [lindex $argv 8] : ""}]
+set OUTPUT_DELAY_MAX_OVERRIDE [expr {[llength $argv] > 9 ? [lindex $argv 9] : ""}]
+set CONSTRAINT_GENERATOR $REPO/synth/pcie_datalink_layer_constraints.tcl
+
+# ---- ordered RTL lists -----------------------------------------------------
+# Package files must precede modules that import them.
 
 set FILES(pcie_enum_top) {
   src/tlp/tlp_pkg.sv
@@ -102,17 +99,15 @@ set OUTDIR $OUTROOT/$UNIT
 file mkdir $OUTDIR
 
 # ---- progress markers ------------------------------------------------------
-# Vivado's own log is written by the -log switch on the caller; these markers
-# make the phase boundaries greppable regardless of how the log is captured.
 proc mark {msg} {
   puts "===S1=== $msg"
   flush stdout
 }
 
-mark "unit=$UNIT part=$PART period=${PERIOD}ns outdir=$OUTDIR"
+mark "unit=$UNIT part=$PART outdir=$OUTDIR"
 mark "vivado=[version -short]"
 
-# ---- 1. read -------------------------------------------------------------
+# ---- read RTL --------------------------------------------------------------
 mark "PHASE read_verilog ([llength $FILES($UNIT)] files)"
 foreach f $FILES($UNIT) {
   set p $REPO/$f
@@ -123,27 +118,64 @@ foreach f $FILES($UNIT) {
   read_verilog -sv $p
 }
 
-# ---- 2. synthesize -------------------------------------------------------
-# -mode out_of_context: no I/O buffers inserted, ports stay as ports. Correct
-# for a unit that is not the whole device and has no pinout.
-# -flatten_hierarchy none: keeps the hierarchy intact so that
-# report_utilization -hierarchical and report_timing can NAME the submodule a
-# finding belongs to. Without it every path reports against the top and the
-# per-submodule area table in the findings doc is not derivable.
+# ---- timing constraints ----------------------------------------------------
+if {![file exists $CONSTRAINT_GENERATOR]} {
+  puts "ERROR: missing constraint generator $CONSTRAINT_GENERATOR"
+  exit 1
+}
+source $CONSTRAINT_GENERATOR
+if {[llength [info commands write_pcie_ooc_constraints]] != 1} {
+  puts "ERROR: constraint generator did not define write_pcie_ooc_constraints"
+  exit 1
+}
+
+foreach {variable override} [list \
+    CLK_PERIOD_NS       $PERIOD_OVERRIDE \
+    CLK_UNCERTAINTY_NS  $UNCERTAINTY_OVERRIDE \
+    INPUT_DELAY_MIN_NS  $INPUT_DELAY_MIN_OVERRIDE \
+    INPUT_DELAY_MAX_NS  $INPUT_DELAY_MAX_OVERRIDE \
+    OUTPUT_DELAY_MIN_NS $OUTPUT_DELAY_MIN_OVERRIDE \
+    OUTPUT_DELAY_MAX_NS $OUTPUT_DELAY_MAX_OVERRIDE] {
+  if {$override ne ""} {
+    set $variable $override
+  }
+}
+
+set RUN_XDC $OUTDIR/${UNIT}_timing.xdc
+write_pcie_ooc_constraints $RUN_XDC
+
+set values_file [open $OUTDIR/constraint_values.txt w]
+puts $values_file "clock_period_ns=$CLK_PERIOD_NS"
+puts $values_file "clock_uncertainty_ns=$CLK_UNCERTAINTY_NS"
+puts $values_file "input_delay_min_ns=$INPUT_DELAY_MIN_NS"
+puts $values_file "input_delay_max_ns=$INPUT_DELAY_MAX_NS"
+puts $values_file "output_delay_min_ns=$OUTPUT_DELAY_MIN_NS"
+puts $values_file "output_delay_max_ns=$OUTPUT_DELAY_MAX_NS"
+close $values_file
+
+mark "constraints period=${CLK_PERIOD_NS}ns uncertainty=${CLK_UNCERTAINTY_NS}ns input=${INPUT_DELAY_MIN_NS}:${INPUT_DELAY_MAX_NS}ns output=${OUTPUT_DELAY_MIN_NS}:${OUTPUT_DELAY_MAX_NS}ns"
+mark "PHASE read_xdc $RUN_XDC"
+read_xdc $RUN_XDC
+
+# ---- synthesize ------------------------------------------------------------
 mark "PHASE synth_design"
 synth_design -mode out_of_context -top $UNIT -part $PART -flatten_hierarchy none
 
-# ---- 3. the one virtual clock --------------------------------------------
-# Applied AFTER synth_design so it constrains the elaborated netlist's clock
-# port. See the placeholder warning in the header.
-mark "PHASE create_clock 250MHz placeholder"
-if {[llength [get_ports -quiet clk_i]] == 0} {
-  puts "ERROR: no clk_i port on $UNIT -- the clock port name must be re-derived"
+# ---- validate required objects -------------------------------------------
+if {[llength [get_ports -quiet clk_i]] != 1} {
+  puts "ERROR: expected exactly one clk_i port on $UNIT"
   exit 1
 }
-create_clock -name clk_placeholder -period $PERIOD [get_ports clk_i]
+if {[llength [get_ports -quiet rst_i]] != 1} {
+  puts "ERROR: expected exactly one rst_i port on $UNIT"
+  exit 1
+}
+if {[llength [get_clocks -quiet -of_objects [get_ports clk_i]]] != 1} {
+  puts "ERROR: expected exactly one clock constraint on $UNIT/clk_i"
+  exit 1
+}
 
-# ---- 4. reports ----------------------------------------------------------
+# ---- reports ---------------------------------------------------------------
 mark "PHASE reports"
 report_utilization           -file $OUTDIR/utilization.rpt
 report_utilization -hierarchical -hierarchical_depth 4 \
@@ -154,16 +186,11 @@ report_timing -delay_type max -max_paths 20 -nworst 20 -sort_by slack \
                              -file $OUTDIR/timing_worst20.rpt
 report_methodology           -file $OUTDIR/methodology.rpt
 report_clocks                -file $OUTDIR/clocks.rpt
+check_timing -verbose        -file $OUTDIR/check_timing.rpt
+report_drc -ruledecks {default} \
+                             -file $OUTDIR/drc.rpt
 
-# The DRC catches structural problems that neither utilization nor timing
-# shows -- unconnected pins, undriven nets, multi-driven nets.
-report_drc -ruledecks {default} -file $OUTDIR/drc.rpt
-
-# ---- 5. latches, from the NETLIST rather than from the log ----------------
-# The brief asks for a log grep, and the driver does that. This is the stronger
-# form of the same question: ask the elaborated netlist what latch primitives
-# it actually contains. A log grep can miss a latch Vivado inferred quietly;
-# this cannot.
+# ---- netlist latch check ---------------------------------------------------
 mark "PHASE latch query"
 set latch_cells [get_cells -hier -quiet -filter {PRIMITIVE_SUBGROUP == LATCH}]
 set lf [open $OUTDIR/latches_netlist.txt w]
@@ -175,9 +202,7 @@ foreach c $latch_cells {
 close $lf
 mark "LATCH_COUNT [llength $latch_cells]"
 
-# ---- 6. checkpoint --------------------------------------------------------
-# So a later brief can re-open this netlist without re-running synthesis.
-# Lands outside the repo with everything else.
+# ---- checkpoint ------------------------------------------------------------
 write_checkpoint -force $OUTDIR/$UNIT.dcp
 
 mark "PHASE done"

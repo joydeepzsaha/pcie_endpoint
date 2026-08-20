@@ -75,6 +75,41 @@ COCOTB_RESULTS_FILE := results_pcie_datalink.xml
 # targets below.
 .DEFAULT_GOAL := test-log
 
+# Vivado non-project flow. Vivado must already be available on PATH; these
+# targets deliberately do not select or source a particular installation.
+VIVADO_ROOT := $(abspath $(dir $(firstword $(MAKEFILE_LIST))))
+VIVADO_OUT ?= $(VIVADO_ROOT)/build/vivado
+PART ?= xczu7ev-ffvc1156-2-e
+# Leave timing overrides empty to use the editable defaults in
+# synth/pcie_datalink_layer_constraints.tcl.
+PERIOD ?=
+UNCERTAINTY ?=
+INPUT_DELAY_MIN ?=
+INPUT_DELAY_MAX ?=
+OUTPUT_DELAY_MIN ?=
+OUTPUT_DELAY_MAX ?=
+UNIT ?=
+
+.PHONY: syn par
+
+syn:
+	@REPO="$(VIVADO_ROOT)" \
+	OUTROOT="$(VIVADO_OUT)/syn" \
+	PART="$(PART)" PERIOD="$(PERIOD)" \
+	UNCERTAINTY="$(UNCERTAINTY)" \
+	INPUT_DELAY_MIN="$(INPUT_DELAY_MIN)" \
+	INPUT_DELAY_MAX="$(INPUT_DELAY_MAX)" \
+	OUTPUT_DELAY_MIN="$(OUTPUT_DELAY_MIN)" \
+	OUTPUT_DELAY_MAX="$(OUTPUT_DELAY_MAX)" \
+	./synth/run_s1.sh $(UNIT)
+
+par:
+	@REPO="$(VIVADO_ROOT)" \
+	SYNROOT="$(VIVADO_OUT)/syn" \
+	OUTROOT="$(VIVADO_OUT)/par" \
+	PART="$(PART)" \
+	./synth/run_par.sh $(UNIT)
+
 .PHONY: test-log clean-all print-sources \
 	tlp-tests tlp-test-comb tlp-test-parser tlp-test-payload-formatter \
 	tlp-test-request-tracker tlp-test-requester tlp-test-generator \
@@ -87,7 +122,7 @@ COCOTB_RESULTS_FILE := results_pcie_datalink.xml
 TLP_ROOT := $(abspath $(dir $(firstword $(MAKEFILE_LIST))))
 TLP_SRC_DIR := $(TLP_ROOT)/src/tlp
 TLP_TB_DIR := $(TLP_ROOT)/tb/tlp
-COCOTB_SIM_MAKEFILE := $(shell cocotb-config --makefiles)/Makefile.sim
+COCOTB_SIM_MAKEFILE = $(shell cocotb-config --makefiles)/Makefile.sim
 
 TLP_RTL_SOURCES := \
 	$(TLP_SRC_DIR)/tlp_pkg.sv \
@@ -193,4 +228,6 @@ clean-all:
 		novas.* \
 		verdiLog
 
+ifeq ($(filter syn par,$(MAKECMDGOALS)),)
 include $(shell cocotb-config --makefiles)/Makefile.sim
+endif
