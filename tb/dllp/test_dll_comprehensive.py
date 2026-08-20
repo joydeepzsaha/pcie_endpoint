@@ -2347,6 +2347,10 @@ RX_FC_CLASSIFICATION_CASES = [
     ("CfgWr1",         0x45, 3, 1,  4, {"nph": 1, "npd": 1}),
     ("Cpl",            0x0A, 3, 0,  0, {"cplh": 1}),
     ("CplD",           0x4A, 3, 4, 16, {"cplh": 1, "cpld": 1}),
+    # Completions round their Length up the same way Posted data does.  L=4 -> 1
+    # is a fixed point of both Roundup(L/4) and a plain +1, so that row alone
+    # cannot tell the roundup from a constant; L=5 -> 2 separates them.
+    ("CplD Length=5",  0x4A, 3, 5, 20, {"cplh": 1, "cpld": 2}),
     # Unclassified encodings must consume nothing: a reserved type, and a
     # declared Local-TLP-Prefix encoding that this classifier deliberately does
     # not list in any arm.
@@ -2354,6 +2358,7 @@ RX_FC_CLASSIFICATION_CASES = [
     ("prefix 0x80",    0x80, 3, 1,  4, {}),
     # Length == 0 is 1024 DW, the one payload size that is not its own DW count.
     ("MWr Length=0",   0x40, 3, 0,  4, {"ph": 1, "pd": 256}),
+    ("CplD Length=0",  0x4A, 3, 0,  4, {"cplh": 1, "cpld": 256}),
 ]
 
 
