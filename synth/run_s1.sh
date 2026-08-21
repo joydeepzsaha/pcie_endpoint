@@ -10,6 +10,7 @@
 #
 #   ./synth/run_s1.sh                    # both units
 #   ./synth/run_s1.sh pcie_enum_top      # one unit
+#   ./synth/run_s1.sh endpoint           # integrated Gen1 endpoint
 # ---------------------------------------------------------------------------
 set -u -o pipefail
 
@@ -41,7 +42,7 @@ mkdir -p "$OUTROOT"
 VIVADO_VERSION="$(vivado -version 2>/dev/null | head -1)"
 echo "== S-1: $VIVADO_VERSION"
 echo "== part=$PART"
-echo "== empty timing overrides use synth/pcie_datalink_layer_constraints.tcl defaults"
+echo "== empty timing overrides use the selected unit's constraint defaults"
 echo "== outroot=$OUTROOT"
 
 overall=0
