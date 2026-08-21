@@ -320,21 +320,48 @@ async def cfgrd0_end_to_end(dut):
 
 
 # ==========================================================================
-# (c) MIN_CREDIT_EP: NPH=1 makes single-outstanding visible on the wire
+# (c) MIN_CREDIT_EP: NPH=1 holds all but one frame off the wire
 # ==========================================================================
 @cocotb.test()
 async def min_credit_one_frame_before_completion(dut):
-    """(c) Scores P3, P4, P5 and P6.  Observation points: emitted TLP frames
-    on m_phy_axis (counted, NOT tag strobes), outstanding_o, tx_fc_blocked_o,
-    and the fc_* readback after init.
+    """(c) Scores P4, P5 and P6, and BOUNDS outstanding_o rather than pinning
+    it.  Observation points: emitted TLP frames on m_phy_axis (counted, NOT
+    tag strobes), outstanding_o, tx_fc_blocked_o, and the fc_* readback after
+    init.
 
-    Under the Table 2-37 Endpoint minimum (NPH=1), three back-to-back CfgRd0s
-    put exactly ONE frame on the wire before the first completion (P4) while
-    all three tag strobes fire (P5) -- tags allocate upstream of the credit
-    gate.  For the same reason outstanding_o tracks ALLOCATED tags, so its
-    peak is 3, not 1: P3 predicted a peak of exactly 1 and is FALSIFIED by
-    this measurement (scored in FINDINGS_RC_DL_TOP.md; first run's failure
-    log: logs/P3_outstanding.log).
+    The credit-side claim is P4: under the Table 2-37 Endpoint minimum
+    (NPH=1), three back-to-back CfgRd0s put exactly ONE frame on the wire
+    before the first completion.  That is the spec-visible statement, and it
+    is asserted directly on m_phy_axis, where the spec can see it.
+
+    outstanding_o is NOT that claim.  It counts ALLOCATED TAGS, not requests
+    on the wire (SS41.4), and where the allocator sits relative to the credit
+    gate is an implementation choice: today tags allocate in tlp_requester's
+    REQ_TAG state, upstream of the VC-buffer release gate (tlp_layer.sv:280),
+    so all three tags are held while one frame is out and the measured peak is
+    3.  P3 predicted a peak of exactly 1 and is FALSIFIED by that measurement
+    (scored in FINDINGS_RC_DL_TOP.md; first run's failure log:
+    logs/P3_outstanding.log).  Moving the allocator below the gate would be
+    correct RTL and would drive the peak to 1, so the peak is LOGGED here and
+    never asserted -- an assertion on it would pin an implementation detail
+    (SS22.42, SS22.46).
+
+    What is asserted instead is a two-sided bound that holds for either
+    allocator placement, plus the drain:
+
+      * lower -- outstanding_o >= (frames emitted on m_phy_axis) - (CplDs this
+        bench has issued).  A request on the wire and unanswered holds a tag
+        by definition.  The counter may legitimately sit ABOVE this, which is
+        exactly what tags held behind the credit gate look like.
+      * upper -- outstanding_o <= (commands issued) - (RC descriptors
+        delivered on m_axis_rc).  No phantom allocations: the DUT cannot hold
+        more tags than requests were asked for, less those already answered
+        downstream.  This is the "never increases after the third command"
+        claim in a placement-insensitive form; a strict no-increase rule would
+        itself pin the allocator, because an allocator below the credit gate
+        necessarily allocates late and so must increase after release.
+      * drain -- outstanding_o == 0 once all three CplDs are delivered and
+        rc.clean() has passed: zero by retirement, not by a quarantine expiry.
 
     Credit return: a CplD alone returns no NP credit -- the far end frees its
     request buffer and advertises the new cumulative NPH in an UpdateFC-NP
@@ -361,18 +388,51 @@ async def min_credit_one_frame_before_completion(dut):
     peak = [0]
     blocked_seen = [False]
     stop = [False]
+    # Both counters are incremented BEFORE the transfer they name, so each is
+    # always at least what the DUT can have acted on.  That keeps the lower
+    # bound at its smallest and the upper bound at its widest, and no sample
+    # can fail on scheduler ordering alone.
+    commands_issued = [0]
+    cpls_issued = [0]
+    # Why the LOWER bound counts CplDs this bench has ISSUED rather than RC
+    # descriptors delivered: the tracker clears active_r in the same cycle it
+    # raises result_valid_r (tlp_request_tracker.sv:344-349), so a tag retires
+    # strictly BEFORE its descriptor reaches m_axis_rc.  A lower bound counting
+    # deliveries would exceed a perfectly correct outstanding_o for that
+    # window, at every completion.  Deliveries drive the UPPER bound instead,
+    # where the same lag is conservative.  The upper bound assumes one CplD
+    # per request, which this test constructs; a split completion would emit
+    # two descriptors for one still-held tag.
+    violations = []
 
     async def watch():
+        cycle = 0
         while not stop[0]:
             await RisingEdge(dut.clk_i)
             await ReadOnly()
-            peak[0] = max(peak[0], int(dut.outstanding_o.value))
+            cycle += 1
+            count = int(dut.outstanding_o.value)
+            peak[0] = max(peak[0], count)
             if int(dut.tx_fc_blocked_o.value):
                 blocked_seen[0] = True
+            unanswered = len(collector.frames) - cpls_issued[0]
+            if count < unanswered:
+                violations.append(
+                    f"cycle {cycle}: outstanding_o={count} is below the "
+                    f"{unanswered} request(s) emitted on m_phy_axis and not "
+                    f"yet answered -- a request on the wire holds a tag")
+            headroom = commands_issued[0] - len(rc.packets)
+            if count > headroom:
+                violations.append(
+                    f"cycle {cycle}: outstanding_o={count} exceeds the "
+                    f"{headroom} tag(s) that {commands_issued[0]} command(s) "
+                    f"can account for after {len(rc.packets)} RC "
+                    f"descriptor(s) -- phantom allocation")
 
     cocotb.start_soon(watch())
 
     for reg in (0x00, 0x01, 0x02):
+        commands_issued[0] += 1
         await cfg_read(dut, reg_num=reg)
     await settle(dut, 300)
 
@@ -384,13 +444,10 @@ async def min_credit_one_frame_before_completion(dut):
         "allocate upstream of the credit gate, so three are expected")
     assert blocked_seen[0] and int(dut.tx_fc_blocked_o.value) == 1, (
         "tx_fc_blocked_o must be high while the second request is held")
-    # P3's measured value.  The design predicted a peak of exactly 1; the
-    # credit gate sits at VC-buffer RELEASE (tlp_layer.sv:280), downstream of
-    # tag allocation, so all three queued requests hold tags while one frame
-    # is on the wire.
-    assert peak[0] == 3, (
-        f"outstanding_o peaked at {peak[0]}; 3 allocated tags were expected "
-        "while NPH=1 holds two frames back")
+    assert violations == [], (
+        "outstanding_o left its bounds before the first completion:\n  " +
+        "\n  ".join(violations))
+    # P3's measured value, LOGGED not asserted -- see the docstring.
     dut._log.info(f"P3 measurement: outstanding_o peak = {peak[0]}")
 
     # Answer request 1; return one more cumulative NPH credit; frame 2 follows.
@@ -402,6 +459,7 @@ async def min_credit_one_frame_before_completion(dut):
         assert req.address == expected[index], (
             f"frame {index} reads register {req.address:#x}, expected "
             f"{expected[index]:#x} -- emission order broke")
+        cpls_issued[0] += 1
         await tb.complete_read(req, data[index])
         if index < 2:
             await send_axis(
@@ -417,10 +475,17 @@ async def min_credit_one_frame_before_completion(dut):
     assert sorted(delivered) == sorted(rc.tags_presented), (
         f"RC descriptors carry tags {delivered}, strobes said "
         f"{rc.tags_presented}")
-    stop[0] = True
     await settle(dut)
-    assert int(dut.outstanding_o.value) == 0, "not every tag retired"
+    stop[0] = True
+    assert violations == [], (
+        "outstanding_o left its bounds during the drain:\n  " +
+        "\n  ".join(violations))
     rc.clean()
+    # clean() first: it rules out a completion timeout, so a zero here is zero
+    # by retirement and not by a quarantine expiry releasing a held tag.
+    assert int(dut.outstanding_o.value) == 0, (
+        "outstanding_o did not drain to 0 after all three CplDs were "
+        "delivered -- not every tag retired")
 
 
 # ==========================================================================
