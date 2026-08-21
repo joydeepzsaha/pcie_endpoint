@@ -203,6 +203,22 @@ filesets:
     files:
       - test_pcie_rq_rc_top.py : {file_type : user, copyto : .}
 
+  # RC-side TL+DLL integration: pcie_rc_dl_top stacks pcie_rq_rc_top on
+  # pcie_datalink_layer; the far end is Python on the PHY-facing streams.
+  # The shared DLLP/InitFC helpers and MIN_CREDIT_EP live in the endpoint
+  # bench module (one copy, imported here), and the RQ descriptor helpers and
+  # the Rc recorder come from test_pcie_rq_rc_top.py the same way.
+  bench_rc_dl_top:
+    files:
+      - tb_pcie_rc_dl_top.sv
+    file_type: systemVerilogSource
+
+  cocotb_rc_dl_top:
+    files:
+      - test_pcie_rc_dl_top.py : {file_type : user, copyto : .}
+      - test_pcie_rq_rc_top.py : {file_type : user, copyto : .}
+      - ../endpoint/test_pcie_endpoint_top.py : {file_type : user, copyto : .}
+
 targets:
   # 2a-0: pcie_axis_dw_downsize / pcie_axis_dw_upsize, G1..G10.
   verilate_axis_gearbox:
@@ -423,6 +439,24 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_enum_bar_tlp, cocotb_enum_bar_tlp]
     toplevel : [tb_pcie_enum_bar_tlp]
+
+  # RC-side TL+DLL integration: tests (a)..(g) from the design record
+  # (~/pcie_docs/evidence/rc-integration-top/DESIGN_RC_INTEGRATION_TOP.md SS8).
+  # First target with neither side of the DLLP seam modelled in Python.
+  # --timing is required by src/dllp, exactly as verilate_endpoint_top carries
+  # it; no coverage flags, following that target's exclusion (--coverage-fsm
+  # with --coverage-line ICEs Verilator, V3FsmDetect).
+  verilate_rc_dl_top:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_rc_dl_top
+      timescale: 1ns/1ps
+      verilator_options:
+        - --timing
+        - waiver.vlt
+    filesets : [rtl, bench_rc_dl_top, cocotb_rc_dl_top]
+    toplevel : [tb_pcie_rc_dl_top]
 
   # Waveform variant; debug-only, not part of the regression gate.
   verilate_enum_bar_tlp_trace:
