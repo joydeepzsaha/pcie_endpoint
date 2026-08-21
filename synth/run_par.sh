@@ -7,6 +7,7 @@
 #
 #   ./synth/run_par.sh                    # both units
 #   ./synth/run_par.sh pcie_enum_top      # one unit
+#   ./synth/run_par.sh endpoint           # integrated Gen1 endpoint
 # ---------------------------------------------------------------------------
 set -u -o pipefail
 

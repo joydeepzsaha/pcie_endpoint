@@ -1,9 +1,12 @@
 `timescale 1ns/1ps
 
-// PCIe endpoint protocol top level.  The physical interface is packet based;
-// electrical PIPE/LTSSM logic can be connected below m/s_phy_axis.
+// PCIe endpoint top level.  The packet PHY interface remains available for
+// protocol-level verification.  INTEGRATED_GEN1_PHY adds the existing LTSSM,
+// logical PHY, Gen1 scrambler and 8b/10b codec below the single Data Link
+// Layer, leaving only a vendor-independent symbol/transceiver-control boundary.
 module pcie_endpoint_top
   import tlp_pkg::*;
+  import pcie_phy_pkg::*;
 #(
     parameter int DATA_WIDTH = 32,
     parameter int KEEP_WIDTH = DATA_WIDTH / 8,
@@ -23,7 +26,10 @@ module pcie_endpoint_top
     parameter int RETRY_TLP_SIZE = 3,
     parameter int MAX_PAYLOAD_SIZE = 256,
     parameter int REPLAY_TIMER_CYCLES = 16'h0aa0,
-    parameter int MAX_REPLAY_ATTEMPTS = 2
+    parameter int MAX_REPLAY_ATTEMPTS = 2,
+    parameter bit INTEGRATED_GEN1_PHY = 1'b0,
+    parameter int PHY_CLK_RATE = 125,
+    parameter int MAX_NUM_LANES = 1
 ) (
     input  logic                     clk_i,
     input  logic                     rst_i,
@@ -43,6 +49,33 @@ module pcie_endpoint_top
     output logic                     m_phy_axis_tlast,
     output logic [USER_WIDTH-1:0]    m_phy_axis_tuser,
     input  logic                     m_phy_axis_tready,
+
+    // Integrated Gen1 logical-PHY boundary.  Each lane transfers two 10-bit
+    // symbols per 125 MHz user-clock cycle (the existing 16-bit PIPE width).
+    input  logic                     pipe_rx_usr_clk_i,
+    input  logic                     pipe_tx_usr_clk_i,
+    input  logic [(MAX_NUM_LANES*20)-1:0] phy_rx_symbol_i,
+    input  logic [MAX_NUM_LANES-1:0] phy_rx_symbol_valid_i,
+    output logic [(MAX_NUM_LANES*20)-1:0] phy_tx_symbol_o,
+    output logic [MAX_NUM_LANES-1:0] phy_tx_symbol_valid_o,
+    input  logic [MAX_NUM_LANES-1:0] phy_phystatus_i,
+    input  logic                     phy_phystatus_rst_i,
+    input  logic [MAX_NUM_LANES-1:0] phy_rxelecidle_i,
+    input  logic [(MAX_NUM_LANES*3)-1:0] phy_rxstatus_i,
+    output logic                     phy_txdetectrx_o,
+    output logic [MAX_NUM_LANES-1:0] phy_txelecidle_o,
+    output logic [MAX_NUM_LANES-1:0] phy_txcompliance_o,
+    output logic [MAX_NUM_LANES-1:0] phy_rxpolarity_o,
+    output logic [1:0]               phy_powerdown_o,
+    output logic [2:0]               phy_rate_o,
+    output logic [2:0]               phy_txmargin_o,
+    output logic                     phy_txswing_o,
+    output logic                     phy_txdeemph_o,
+    output logic [5:0]               phy_pipe_width_o,
+    output logic                     phy_link_up_o,
+    output logic [19:0]              ltssm_state_o,
+    output logic [MAX_NUM_LANES-1:0] phy_rx_code_error_o,
+    output logic [MAX_NUM_LANES-1:0] phy_rx_disparity_error_o,
 
     input  logic                     memory_enable_i,
     input  logic                     extended_tag_enable_i,
@@ -165,6 +198,23 @@ module pcie_endpoint_top
 
   logic [15:0] function_id;
 
+  logic [DATA_WIDTH-1:0] dll_phy_rx_tdata;
+  logic [KEEP_WIDTH-1:0] dll_phy_rx_tkeep;
+  logic                  dll_phy_rx_tvalid;
+  logic                  dll_phy_rx_tlast;
+  logic [USER_WIDTH-1:0] dll_phy_rx_tuser;
+  logic                  dll_phy_rx_tready;
+
+  logic [DATA_WIDTH-1:0] dll_phy_tx_tdata;
+  logic [KEEP_WIDTH-1:0] dll_phy_tx_tkeep;
+  logic                  dll_phy_tx_tvalid;
+  logic                  dll_phy_tx_tlast;
+  logic [USER_WIDTH-1:0] dll_phy_tx_tuser;
+  logic                  dll_phy_tx_tready;
+
+  logic protocol_link_up;
+  logic protocol_idle_valid;
+
   assign function_id = {
       cfg_bus_number_o, cfg_device_number_o, cfg_function_number_o
   };
@@ -185,7 +235,7 @@ module pcie_endpoint_top
   ) tlp_layer_inst (
       .clk_i(clk_i),
       .rst_i(rst_i),
-      .link_up_i(phy_link_up_i),
+      .link_up_i(protocol_link_up),
       .transmit_enable_i(transmit_enable_i),
       .requester_id_i(function_id),
       .completer_id_i(function_id),
@@ -302,6 +352,318 @@ module pcie_endpoint_top
       .outstanding_o(outstanding_o)
   );
 
+  generate
+    if (INTEGRATED_GEN1_PHY) begin : gen_integrated_gen1_phy
+      logic [(MAX_NUM_LANES*DATA_WIDTH)-1:0] phy_txdata;
+      logic [MAX_NUM_LANES-1:0]              phy_txdata_valid;
+      logic [(4*MAX_NUM_LANES)-1:0]          phy_txdatak;
+      logic [(2*MAX_NUM_LANES)-1:0]          phy_txsync_header;
+      logic [MAX_NUM_LANES-1:0]              phy_txstart_block;
+
+      logic [(MAX_NUM_LANES*DATA_WIDTH)-1:0] phy_rxdata;
+      logic [(4*MAX_NUM_LANES)-1:0]          phy_rxdatak;
+      logic [(2*MAX_NUM_LANES)-1:0]          phy_rxsync_header;
+      logic [MAX_NUM_LANES-1:0]              phy_rxstart_block;
+
+      logic [MAX_NUM_LANES-1:0]              tx_running_disparity;
+      logic [MAX_NUM_LANES-1:0]              rx_running_disparity;
+      logic [MAX_NUM_LANES-1:0]              lane_status;
+      logic [MAX_NUM_LANES-1:0]              active_lanes;
+      logic [5:0]                            num_active_lanes;
+      logic [5:0]                            pipe_width;
+      logic                                  link_up_rx;
+      logic [1:0]                            link_up_sync;
+      logic [1:0]                            idle_valid_sync;
+      logic                                  txdetectrx_d;
+      logic                                  txdetectrx_rise;
+      logic [MAX_NUM_LANES-1:0]              ts1_valid;
+      logic [MAX_NUM_LANES-1:0]              ts2_valid;
+      logic [MAX_NUM_LANES-1:0]              idle_valid;
+      logic [MAX_NUM_LANES-1:0]              polarity_inverted;
+      logic                                  ordered_set_transmitted;
+      logic                                  send_ordered_set;
+      logic                                  ltssm_txcompliance;
+      rate_speed_e                           current_data_rate;
+      pcie_ordered_set_t [MAX_NUM_LANES-1:0] rx_ordered_set;
+      pcie_ordered_set_t [MAX_NUM_LANES-1:0] tx_ordered_set;
+      gen_os_struct_t                        gen_os_control;
+
+      // The compatibility packet ports are deliberately quiescent while the
+      // integrated logical PHY owns the Data Link Layer's physical AXI stream.
+      assign s_phy_axis_tready = 1'b0;
+      assign m_phy_axis_tdata  = '0;
+      assign m_phy_axis_tkeep  = '0;
+      assign m_phy_axis_tvalid = 1'b0;
+      assign m_phy_axis_tlast  = 1'b0;
+      assign m_phy_axis_tuser  = '0;
+
+      assign phy_tx_symbol_valid_o = phy_txdata_valid;
+      assign phy_rxsync_header     = '0;
+      assign phy_rxstart_block     = '0;
+      assign phy_pipe_width_o      = pipe_width;
+      assign phy_link_up_o         = link_up_rx;
+      assign phy_rate_o            = current_data_rate - 1'b1;
+      assign phy_txswing_o         = 1'b0;
+      assign phy_txcompliance_o    = {MAX_NUM_LANES{ltssm_txcompliance}};
+
+      assign protocol_link_up   = link_up_sync[1];
+      assign protocol_idle_valid = idle_valid_sync[1];
+
+      // Synchronize the LTSSM indications consumed by the core-clock TLP/DLL
+      // logic.  The packet datapaths themselves cross through the PHY FIFOs.
+      always_ff @(posedge clk_i) begin
+        if (rst_i) begin
+          link_up_sync    <= '0;
+          idle_valid_sync <= '0;
+        end else begin
+          link_up_sync    <= {link_up_sync[0], link_up_rx};
+          idle_valid_sync <= {idle_valid_sync[0], |idle_valid};
+        end
+      end
+
+      always_ff @(posedge pipe_rx_usr_clk_i) begin
+        if (rst_i || phy_phystatus_rst_i) begin
+          txdetectrx_d    <= 1'b0;
+          lane_status     <= '0;
+          num_active_lanes <= '0;
+        end else begin
+          txdetectrx_d <= phy_txdetectrx_o;
+          for (int lane = 0; lane < MAX_NUM_LANES; lane++) begin
+            if (phy_phystatus_i[lane] &&
+                phy_rxstatus_i[lane*3 +: 3] == 3'b011) begin
+              lane_status[lane] <= 1'b1;
+            end
+            if (lane_status[lane]) begin
+              num_active_lanes <= lane + 1;
+            end
+          end
+          if (txdetectrx_rise) begin
+            lane_status      <= '0;
+            num_active_lanes <= '0;
+          end
+        end
+      end
+
+      assign txdetectrx_rise = phy_txdetectrx_o && !txdetectrx_d;
+
+      // The existing codec is combinational.  Running disparity is retained
+      // once per lane and chained across both symbols in each Gen1 PIPE word.
+      for (genvar lane = 0; lane < MAX_NUM_LANES; lane++) begin : gen_8b10b_lane
+        logic [2:0] tx_disparity;
+        logic [2:0] rx_disparity;
+        logic [1:0] rx_code_error;
+        logic [1:0] rx_disparity_error;
+
+        assign tx_disparity[0] = tx_running_disparity[lane];
+        assign rx_disparity[0] = rx_running_disparity[lane];
+        assign phy_rxdata[lane*DATA_WIDTH+16 +: 16] = '0;
+        assign phy_rxdatak[lane*4+2 +: 2] = '0;
+
+        for (genvar symbol = 0; symbol < 2; symbol++) begin : gen_8b10b_symbol
+          encode_8b10b tx_encoder_inst (
+              .datain ({phy_txdatak[lane*4+symbol],
+                        phy_txdata[lane*DATA_WIDTH+symbol*8 +: 8]}),
+              .dispin (tx_disparity[symbol]),
+              .dataout(phy_tx_symbol_o[lane*20+symbol*10 +: 10]),
+              .dispout(tx_disparity[symbol+1])
+          );
+
+          decode_8b10b rx_decoder_inst (
+              .datain  (phy_rx_symbol_i[lane*20+symbol*10 +: 10]),
+              .dispin  (rx_disparity[symbol]),
+              .dataout ({phy_rxdatak[lane*4+symbol],
+                         phy_rxdata[lane*DATA_WIDTH+symbol*8 +: 8]}),
+              .dispout (rx_disparity[symbol+1]),
+              .code_err(rx_code_error[symbol]),
+              .disp_err(rx_disparity_error[symbol])
+          );
+        end
+
+        always_ff @(posedge pipe_tx_usr_clk_i) begin
+          if (rst_i || phy_phystatus_rst_i) begin
+            tx_running_disparity[lane] <= 1'b0;
+          end else if (phy_txdata_valid[lane]) begin
+            // Gen1 lane_management uses a 16-bit PIPE width.
+            tx_running_disparity[lane] <= tx_disparity[2];
+          end
+        end
+
+        always_ff @(posedge pipe_rx_usr_clk_i) begin
+          if (rst_i || phy_phystatus_rst_i) begin
+            rx_running_disparity[lane] <= 1'b0;
+          end else if (phy_rx_symbol_valid_i[lane]) begin
+            rx_running_disparity[lane] <= rx_disparity[2];
+          end
+        end
+
+        assign phy_rx_code_error_o[lane] =
+            phy_rx_symbol_valid_i[lane] && |rx_code_error;
+        assign phy_rx_disparity_error_o[lane] =
+            phy_rx_symbol_valid_i[lane] && |rx_disparity_error;
+      end
+
+      phy_receive #(
+          .CLK_RATE(PHY_CLK_RATE),
+          .MAX_NUM_LANES(MAX_NUM_LANES),
+          .DATA_WIDTH(DATA_WIDTH),
+          .STRB_WIDTH(KEEP_WIDTH),
+          .KEEP_WIDTH(KEEP_WIDTH),
+          .USER_WIDTH(USER_WIDTH)
+      ) phy_receive_inst (
+          .clk_i(clk_i),
+          .rst_i(rst_i || phy_phystatus_rst_i),
+          .en_i(1'b1),
+          .link_up_i(link_up_rx),
+          .pipe_rx_usr_clk_i(pipe_rx_usr_clk_i),
+          .pipe_data_i(phy_rxdata),
+          .pipe_data_valid_i(phy_rx_symbol_valid_i),
+          .pipe_data_k_i(phy_rxdatak),
+          .pipe_sync_header_i(phy_rxsync_header),
+          .pipe_block_start_i(phy_rxstart_block),
+          .pipe_width_i(pipe_width),
+          .num_active_lanes_i(num_active_lanes),
+          .ordered_set_o(rx_ordered_set),
+          .ts1_valid_o(ts1_valid),
+          .ts2_valid_o(ts2_valid),
+          .idle_valid_o(idle_valid),
+          .polarity_inverted_o(polarity_inverted),
+          .curr_data_rate_i(current_data_rate),
+          .m_dllp_axis_tdata(dll_phy_rx_tdata),
+          .m_dllp_axis_tkeep(dll_phy_rx_tkeep),
+          .m_dllp_axis_tvalid(dll_phy_rx_tvalid),
+          .m_dllp_axis_tlast(dll_phy_rx_tlast),
+          .m_dllp_axis_tuser(dll_phy_rx_tuser),
+          .m_dllp_axis_tready(dll_phy_rx_tready)
+      );
+
+      phy_transmit #(
+          .CLK_RATE(PHY_CLK_RATE),
+          .MAX_NUM_LANES(MAX_NUM_LANES),
+          .DATA_WIDTH(DATA_WIDTH),
+          .STRB_WIDTH(KEEP_WIDTH),
+          .KEEP_WIDTH(KEEP_WIDTH),
+          .USER_WIDTH(USER_WIDTH)
+      ) phy_transmit_inst (
+          .clk_i(clk_i),
+          .pipe_rx_usr_clk_i(pipe_rx_usr_clk_i),
+          .pipe_tx_usr_clk_i(pipe_tx_usr_clk_i),
+          .rst_i(rst_i || phy_phystatus_rst_i),
+          .en_i(1'b1),
+          .link_up_i(link_up_rx),
+          .pipe_data_o(phy_txdata),
+          .pipe_data_valid_o(phy_txdata_valid),
+          .pipe_data_k_o(phy_txdatak),
+          .pipe_sync_header_o(phy_txsync_header),
+          .pipe_txstart_block_o(phy_txstart_block),
+          .pipe_width_o(pipe_width),
+          .num_active_lanes_i(num_active_lanes),
+          .send_ordered_set_i(send_ordered_set),
+          .ordered_set_i(tx_ordered_set),
+          .curr_data_rate_i(current_data_rate),
+          .ordered_set_tranmitted_o(ordered_set_transmitted),
+          .gen_os_ctrl_i(gen_os_control),
+          .s_dllp_axis_tdata(dll_phy_tx_tdata),
+          .s_dllp_axis_tkeep(dll_phy_tx_tkeep),
+          .s_dllp_axis_tvalid(dll_phy_tx_tvalid),
+          .s_dllp_axis_tlast(dll_phy_tx_tlast),
+          .s_dllp_axis_tuser(dll_phy_tx_tuser),
+          .s_dllp_axis_tready(dll_phy_tx_tready)
+      );
+
+      pcie_ltssm_downstream #(
+          .CLK_RATE(PHY_CLK_RATE),
+          .MAX_NUM_LANES(MAX_NUM_LANES),
+          .DATA_WIDTH(DATA_WIDTH),
+          .KEEP_WIDTH(KEEP_WIDTH),
+          .USER_WIDTH(USER_WIDTH),
+          .SIM_FAST_LINK(1'b0),
+          .IS_ROOT_PORT(1'b0),
+          .IS_UPSTREAM(1'b1),
+          .MAX_SUPPORTED_RATE(gen1)
+      ) endpoint_ltssm_inst (
+          .clk_i(pipe_rx_usr_clk_i),
+          .rst_i(rst_i || phy_phystatus_rst_i),
+          .en_i(1'b1),
+          .link_up_o(link_up_rx),
+          .is_timeout_i(1'b0),
+          .recovery_i(1'b0),
+          .error_o(),
+          .success_o(),
+          .error_loopback_o(),
+          .error_disable_o(),
+          .ts1_valid_i(ts1_valid),
+          .ts2_valid_i(ts2_valid),
+          .idle_valid_i(idle_valid),
+          .polarity_inverted_i(polarity_inverted),
+          .phy_rxstatus_i(phy_rxstatus_i),
+          .phy_phystatus_i(phy_phystatus_i),
+          .phy_phystatus_rst_i(phy_phystatus_rst_i),
+          .phy_txdetectrx_o(phy_txdetectrx_o),
+          .phy_txelecidle_o(phy_txelecidle_o),
+          .phy_txdeemph_o(phy_txdeemph_o),
+          .phy_powerdown_o(phy_powerdown_o),
+          .phy_txcompliance_o(ltssm_txcompliance),
+          .phy_rxpolarity_o(phy_rxpolarity_o),
+          .phy_txmargin_o(phy_txmargin_o),
+          .lanes_ts2_satisfied_i('0),
+          .config_copmlete_ts2_i('0),
+          .from_l0_i(1'b0),
+          .receiver_detected_i(lane_status),
+          .phy_rxelecidle_i(phy_rxelecidle_i),
+          .tx_enter_elec_idle_o(),
+          .ltssm_state_o(ltssm_state_o),
+          .goto_cfg_o(),
+          .goto_detect_o(),
+          .ordered_set_tranmitted_i(ordered_set_transmitted),
+          .send_ordered_set_o(send_ordered_set),
+          .active_lanes_o(active_lanes),
+          .gen_os_ctrl_o(gen_os_control),
+          .ordered_set_i(rx_ordered_set),
+          .preset_coeff_o(),
+          .ordered_set_o(tx_ordered_set),
+          .extended_synch_i(1'b0),
+          .directed_speed_change_i(1'b0),
+          .lane_status_i(lane_status),
+          .curr_data_rate_o(current_data_rate),
+          .data_rate_o(),
+          .changed_speed_recovery_o()
+      );
+    end else begin : gen_packet_phy_compatibility
+      assign dll_phy_rx_tdata  = s_phy_axis_tdata;
+      assign dll_phy_rx_tkeep  = s_phy_axis_tkeep;
+      assign dll_phy_rx_tvalid = s_phy_axis_tvalid;
+      assign dll_phy_rx_tlast  = s_phy_axis_tlast;
+      assign dll_phy_rx_tuser  = s_phy_axis_tuser;
+      assign s_phy_axis_tready = dll_phy_rx_tready;
+
+      assign m_phy_axis_tdata  = dll_phy_tx_tdata;
+      assign m_phy_axis_tkeep  = dll_phy_tx_tkeep;
+      assign m_phy_axis_tvalid = dll_phy_tx_tvalid;
+      assign m_phy_axis_tlast  = dll_phy_tx_tlast;
+      assign m_phy_axis_tuser  = dll_phy_tx_tuser;
+      assign dll_phy_tx_tready = m_phy_axis_tready;
+
+      assign protocol_link_up                = phy_link_up_i;
+      assign protocol_idle_valid             = idle_valid_i;
+      assign phy_tx_symbol_o                 = '0;
+      assign phy_tx_symbol_valid_o           = '0;
+      assign phy_txdetectrx_o                = 1'b0;
+      assign phy_txelecidle_o                = '1;
+      assign phy_txcompliance_o              = '0;
+      assign phy_rxpolarity_o                = '0;
+      assign phy_powerdown_o                 = 2'b11;
+      assign phy_rate_o                      = 3'b000;
+      assign phy_txmargin_o                  = '0;
+      assign phy_txswing_o                   = 1'b0;
+      assign phy_txdeemph_o                  = 1'b0;
+      assign phy_pipe_width_o                = 6'd16;
+      assign phy_link_up_o                   = phy_link_up_i;
+      assign ltssm_state_o                   = '0;
+      assign phy_rx_code_error_o             = '0;
+      assign phy_rx_disparity_error_o        = '0;
+    end
+  endgenerate
+
   pcie_datalink_layer #(
       .DATA_WIDTH(DATA_WIDTH),
       .STRB_WIDTH(KEEP_WIDTH),
@@ -327,19 +689,19 @@ module pcie_endpoint_top
       .m_tlp_axis_tlast(dll_to_tlp_tlast),
       .m_tlp_axis_tuser(dll_to_tlp_tuser),
       .m_tlp_axis_tready(dll_to_tlp_tready),
-      .s_phy_axis_tdata(s_phy_axis_tdata),
-      .s_phy_axis_tkeep(s_phy_axis_tkeep),
-      .s_phy_axis_tvalid(s_phy_axis_tvalid),
-      .s_phy_axis_tlast(s_phy_axis_tlast),
-      .s_phy_axis_tuser(s_phy_axis_tuser),
-      .s_phy_axis_tready(s_phy_axis_tready),
-      .m_phy_axis_tdata(m_phy_axis_tdata),
-      .m_phy_axis_tkeep(m_phy_axis_tkeep),
-      .m_phy_axis_tvalid(m_phy_axis_tvalid),
-      .m_phy_axis_tlast(m_phy_axis_tlast),
-      .m_phy_axis_tuser(m_phy_axis_tuser),
-      .m_phy_axis_tready(m_phy_axis_tready),
-      .phy_link_up_i(phy_link_up_i),
+      .s_phy_axis_tdata(dll_phy_rx_tdata),
+      .s_phy_axis_tkeep(dll_phy_rx_tkeep),
+      .s_phy_axis_tvalid(dll_phy_rx_tvalid),
+      .s_phy_axis_tlast(dll_phy_rx_tlast),
+      .s_phy_axis_tuser(dll_phy_rx_tuser),
+      .s_phy_axis_tready(dll_phy_rx_tready),
+      .m_phy_axis_tdata(dll_phy_tx_tdata),
+      .m_phy_axis_tkeep(dll_phy_tx_tkeep),
+      .m_phy_axis_tvalid(dll_phy_tx_tvalid),
+      .m_phy_axis_tlast(dll_phy_tx_tlast),
+      .m_phy_axis_tuser(dll_phy_tx_tuser),
+      .m_phy_axis_tready(dll_phy_tx_tready),
+      .phy_link_up_i(protocol_link_up),
       .fc_initialized_o(fc_initialized_o),
       .fc_update_valid_o(fc_update_valid_o),
       .fc_ph_o(fc_ph_o),
@@ -348,7 +710,7 @@ module pcie_endpoint_top
       .fc_npd_o(fc_npd_o),
       .fc_cplh_o(fc_cplh_o),
       .fc_cpld_o(fc_cpld_o),
-      .idle_valid_i(idle_valid_i),
+      .idle_valid_i(protocol_idle_valid),
       .cfg_bus_number_o(cfg_bus_number_o),
       .cfg_device_number_o(cfg_device_number_o),
       .cfg_function_number_o(cfg_function_number_o),

@@ -10,9 +10,38 @@ filesets:
     file_type: systemVerilogSource
     depend:
       - ::tlp_core:1.0.0
+      - fusesoc:pcie:packages:1.0.0
       - fusesoc:pcie:dllp_core:1.0.0
+      - fusesoc:pcie:converters:1.0.0
+      - fusesoc:pcie:verilog-pcie:1.0.0
+      - fusesoc:pcie:phy_receive:1.0.0
+      - fusesoc:pcie:phy_transmit:1.0.0
+      - fusesoc:pcie:ltssm:1.0.0
+
+parameters:
+  INTEGRATED_GEN1_PHY:
+    datatype: bool
+    default: false
+    description: Integrate the LTSSM, logical PHY, scrambler and 8b/10b codec
+    paramtype: vlogparam
+  MAX_NUM_LANES:
+    datatype: int
+    default: 1
+    description: Maximum number of Gen1 lanes
+    paramtype: vlogparam
 
 targets:
   default:
     filesets: [rtl]
+    toplevel: pcie_endpoint_top
+
+  synth:
+    default_tool: vivado
+    filesets: [rtl]
+    parameters:
+      - INTEGRATED_GEN1_PHY=true
+      - MAX_NUM_LANES=1
+    tools:
+      vivado:
+        part: xczu7ev-ffvc1156-2-e
     toplevel: pcie_endpoint_top

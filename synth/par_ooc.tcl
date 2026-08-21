@@ -51,6 +51,18 @@ if {[llength [get_clocks -quiet -of_objects [get_ports clk_i]]] != 1} {
   puts "ERROR: expected exactly one clock constraint on $UNIT/clk_i"
   exit 1
 }
+if {$UNIT eq "endpoint"} {
+  foreach port_name {pipe_rx_usr_clk_i pipe_tx_usr_clk_i} {
+    if {[llength [get_ports -quiet $port_name]] != 1} {
+      puts "ERROR: expected exactly one $port_name port in $INPUT_DCP"
+      exit 1
+    }
+    if {[llength [get_clocks -quiet -of_objects [get_ports $port_name]]] != 1} {
+      puts "ERROR: expected exactly one clock constraint on $UNIT/$port_name"
+      exit 1
+    }
+  }
+}
 
 mark "PHASE opt_design"
 opt_design

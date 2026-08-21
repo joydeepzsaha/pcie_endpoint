@@ -16,7 +16,7 @@
 #                   [input_delay_max_ns] [output_delay_min_ns] \
 #                   [output_delay_max_ns]
 #
-#   <unit> is one of:  pcie_enum_top | pcie_rq_rc_top
+#   <unit> is one of:  pcie_enum_top | pcie_rq_rc_top | endpoint
 #
 # ---------------------------------------------------------------------------
 # THE CLOCK PERIOD IS A PLACEHOLDER.
@@ -50,6 +50,8 @@ set INPUT_DELAY_MAX_OVERRIDE [expr {[llength $argv] > 7 ? [lindex $argv 7] : ""}
 set OUTPUT_DELAY_MIN_OVERRIDE [expr {[llength $argv] > 8 ? [lindex $argv 8] : ""}]
 set OUTPUT_DELAY_MAX_OVERRIDE [expr {[llength $argv] > 9 ? [lindex $argv 9] : ""}]
 set CONSTRAINT_GENERATOR $REPO/synth/pcie_datalink_layer_constraints.tcl
+set TOP $UNIT
+set SYNTH_GENERICS {}
 
 # ---- ordered RTL lists -----------------------------------------------------
 # Package files must precede modules that import them.
@@ -88,6 +90,21 @@ set FILES(pcie_rq_rc_top) {
   src/rc/pcie_rq_if.sv
   src/rc/pcie_rc_if.sv
   src/rc/pcie_rq_rc_top.sv
+}
+
+# The endpoint has a larger, independently maintained dependency manifest and
+# a three-clock Gen1 constraint set.  Keep the existing RC unit lists intact.
+if {$UNIT eq "endpoint"} {
+  set ENDPOINT_MANIFEST $REPO/synth/endpoint.tcl
+  if {![file exists $ENDPOINT_MANIFEST]} {
+    puts "ERROR: missing endpoint manifest $ENDPOINT_MANIFEST"
+    exit 1
+  }
+  source $ENDPOINT_MANIFEST
+  set FILES(endpoint) $ENDPOINT_FILES
+  set TOP $ENDPOINT_TOP
+  set SYNTH_GENERICS $ENDPOINT_GENERICS
+  set CONSTRAINT_GENERATOR $REPO/synth/endpoint_constraints.tcl
 }
 
 if {![info exists FILES($UNIT)]} {
@@ -151,6 +168,12 @@ puts $values_file "input_delay_min_ns=$INPUT_DELAY_MIN_NS"
 puts $values_file "input_delay_max_ns=$INPUT_DELAY_MAX_NS"
 puts $values_file "output_delay_min_ns=$OUTPUT_DELAY_MIN_NS"
 puts $values_file "output_delay_max_ns=$OUTPUT_DELAY_MAX_NS"
+if {[info exists PIPE_RX_PERIOD_NS]} {
+  puts $values_file "pipe_rx_period_ns=$PIPE_RX_PERIOD_NS"
+}
+if {[info exists PIPE_TX_PERIOD_NS]} {
+  puts $values_file "pipe_tx_period_ns=$PIPE_TX_PERIOD_NS"
+}
 close $values_file
 
 mark "constraints period=${CLK_PERIOD_NS}ns uncertainty=${CLK_UNCERTAINTY_NS}ns input=${INPUT_DELAY_MIN_NS}:${INPUT_DELAY_MAX_NS}ns output=${OUTPUT_DELAY_MIN_NS}:${OUTPUT_DELAY_MAX_NS}ns"
@@ -159,7 +182,12 @@ read_xdc $RUN_XDC
 
 # ---- synthesize ------------------------------------------------------------
 mark "PHASE synth_design"
-synth_design -mode out_of_context -top $UNIT -part $PART -flatten_hierarchy none
+set synth_args [list -mode out_of_context -top $TOP -part $PART \
+                     -flatten_hierarchy none]
+if {[llength $SYNTH_GENERICS] > 0} {
+  lappend synth_args -generic $SYNTH_GENERICS
+}
+synth_design {*}$synth_args
 
 # ---- validate required objects -------------------------------------------
 if {[llength [get_ports -quiet clk_i]] != 1} {
@@ -173,6 +201,18 @@ if {[llength [get_ports -quiet rst_i]] != 1} {
 if {[llength [get_clocks -quiet -of_objects [get_ports clk_i]]] != 1} {
   puts "ERROR: expected exactly one clock constraint on $UNIT/clk_i"
   exit 1
+}
+if {$UNIT eq "endpoint"} {
+  foreach port_name {pipe_rx_usr_clk_i pipe_tx_usr_clk_i} {
+    if {[llength [get_ports -quiet $port_name]] != 1} {
+      puts "ERROR: expected exactly one $port_name port on $TOP"
+      exit 1
+    }
+    if {[llength [get_clocks -quiet -of_objects [get_ports $port_name]]] != 1} {
+      puts "ERROR: expected exactly one clock constraint on $TOP/$port_name"
+      exit 1
+    }
+  }
 }
 
 # ---- reports ---------------------------------------------------------------
