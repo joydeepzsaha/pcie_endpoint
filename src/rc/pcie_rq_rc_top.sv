@@ -237,7 +237,12 @@ module pcie_rq_rc_top
     parameter int CONTEXT_WIDTH   = 16,
     parameter int TAG_COUNT       = 32,
     // Completion Timeout; 0 disables. See tlp_request_tracker.sv header.
-    parameter int unsigned CPL_TIMEOUT_CYCLES = 32'd4096
+    parameter int unsigned CPL_TIMEOUT_CYCLES = 32'd4096,
+    // Byte order of TLP headers on the DLL streams (tlp_layer.sv:13). The
+    // default 1'b0 keeps host Dword order, which is what every Dword-speaking
+    // RC bench drives; a top that stacks this module on the real Data Link
+    // Layer must pass 1'b1 so headers cross the seam in PCIe wire order.
+    parameter bit PCIE_WIRE_ORDER = 1'b0
 ) (
     input  logic                        clk_i,
     input  logic                        rst_i,
@@ -470,7 +475,8 @@ module pcie_rq_rc_top
       .USER_WIDTH   (TL_USER_WIDTH),
       .TAG_COUNT    (TAG_COUNT),
       .CONTEXT_WIDTH(CONTEXT_WIDTH),
-      .CPL_TIMEOUT_CYCLES(CPL_TIMEOUT_CYCLES)
+      .CPL_TIMEOUT_CYCLES(CPL_TIMEOUT_CYCLES),
+      .PCIE_WIRE_ORDER(PCIE_WIRE_ORDER)
   ) u_tlp_layer (
       .clk_i(clk_i),
       .rst_i(rst_i),

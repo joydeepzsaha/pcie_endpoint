@@ -94,6 +94,14 @@ filesets:
     files:
       - test_tlp_vc_buffer_wrap.py : {file_type : user, copyto : .}
 
+  # Four whole-layer tests that had never been referenced by any .core, of any
+  # flow, in the tree's history -- `git log -S'end_to_end' -- tb/tlp/tb_tlp.core`
+  # is empty.  They need no bench wrapper: every signal they touch is a real
+  # tlp_layer port, including outstanding_o.
+  cocotb_end_to_end:
+    files:
+      - test_tlp_end_to_end.py : {file_type : user, copyto : .}
+
   # Flow-control gating driven at the tlp_layer level: proves the credit
   # accounting fix where it throttles real traffic (vc_packet_ready,
   # tlp_layer.sv:280), not just at the credit manager's own boundary.
@@ -592,6 +600,26 @@ targets:
     filesets : [rtl, bench_vc_buffer, cocotb_vc_buffer_wrap]
     parameters : [PACKET_DEPTH=3, MAX_PACKET_WORDS=5]
     toplevel : [tb_tlp_vc_buffer]
+
+  # ---- The stranded end-to-end suite, wired for the first time ----
+  # Drives tlp_layer's own ports and loops its TX wire back into its RX wire, so
+  # generator and parser are checked against each other across all six request
+  # families, the optional packet sections (prefix / ECRC / unaligned BE), the
+  # 1024-DW maximum length, tag retirement, and the six malformed-TLP codes.
+  #
+  # Same shape as verilate_tlp_compile: no bench .sv, toplevel is the RTL module
+  # itself.  No --timing -- that is a src/dllp requirement and this is TL-only.
+  verilate_tlp_end_to_end:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tlp_end_to_end
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, cocotb_end_to_end]
+    toplevel : [tlp_layer]
 
 parameters:
   PACKET_DEPTH:

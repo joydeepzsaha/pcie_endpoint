@@ -8,6 +8,10 @@ module tb_pcie_endpoint_top;
   localparam int USER_WIDTH = 3;
   localparam int CONTEXT_WIDTH = 16;
   localparam int TLP_HEADER_WIDTH = $bits(tlp_header_t);
+  // Mirrors pcie_endpoint_top.sv:32. The instantiation below does not override
+  // MAX_NUM_LANES, so this must track that default; it sizes only the inert PHY
+  // nets declared just above the DUT.
+  localparam int MAX_NUM_LANES = 1;
 
   logic clk_i;
   logic rst_i;
@@ -160,6 +164,48 @@ module tb_pcie_endpoint_top;
   wire        mid_rx_axis_tlast = dut.dll_to_tlp_tlast;
   wire [2:0]  mid_rx_axis_tuser = dut.dll_to_tlp_tuser;
   wire        mid_rx_axis_tready = dut.dll_to_tlp_tready;
+
+  // Integrated Gen1 logical-PHY boundary (pcie_endpoint_top.sv:53-78), added at
+  // 58965ea. The DUT binds these through `.*`, so they must exist here even
+  // though this bench never exercises them: INTEGRATED_GEN1_PHY defaults to 1'b0
+  // (pcie_endpoint_top.sv:30), and every one of these ports is read only inside
+  // `generate if (INTEGRATED_GEN1_PHY)` at :356-630, which does not elaborate.
+  //
+  // Inputs are tied to a constant idle. That is unobservable, not merely
+  // harmless: the arm that does elaborate, gen_packet_phy_compatibility at
+  // :631-663, reads none of them -- it touches only s_phy_axis_*,
+  // m_phy_axis_tready, phy_link_up_i and idle_valid_i.
+  //
+  // Outputs are left undriven here; that same arm drives all sixteen to
+  // constants at :648-663, so they are deterministic rather than floating.
+  // Nothing in this bench reads them.
+  wire                              pipe_rx_usr_clk_i = '0;
+  wire                              pipe_tx_usr_clk_i = '0;
+  wire [(MAX_NUM_LANES*20)-1:0]     phy_rx_symbol_i = '0;
+  wire [MAX_NUM_LANES-1:0]          phy_rx_symbol_valid_i = '0;
+  wire [MAX_NUM_LANES-1:0]          phy_phystatus_i = '0;
+  wire                              phy_phystatus_rst_i = '0;
+  // Active high, so '0 reads as "not electrically idle". Unobservable for the
+  // reason above; it is the brief's default idle, not a modelling claim.
+  wire [MAX_NUM_LANES-1:0]          phy_rxelecidle_i = '0;
+  wire [(MAX_NUM_LANES*3)-1:0]      phy_rxstatus_i = '0;
+
+  wire [(MAX_NUM_LANES*20)-1:0]     phy_tx_symbol_o;
+  wire [MAX_NUM_LANES-1:0]          phy_tx_symbol_valid_o;
+  wire                              phy_txdetectrx_o;
+  wire [MAX_NUM_LANES-1:0]          phy_txelecidle_o;
+  wire [MAX_NUM_LANES-1:0]          phy_txcompliance_o;
+  wire [MAX_NUM_LANES-1:0]          phy_rxpolarity_o;
+  wire [1:0]                        phy_powerdown_o;
+  wire [2:0]                        phy_rate_o;
+  wire [2:0]                        phy_txmargin_o;
+  wire                              phy_txswing_o;
+  wire                              phy_txdeemph_o;
+  wire [5:0]                        phy_pipe_width_o;
+  wire                              phy_link_up_o;
+  wire [19:0]                       ltssm_state_o;
+  wire [MAX_NUM_LANES-1:0]          phy_rx_code_error_o;
+  wire [MAX_NUM_LANES-1:0]          phy_rx_disparity_error_o;
 
   pcie_endpoint_top #(
       .DATA_WIDTH(DATA_WIDTH),

@@ -31,6 +31,7 @@ filesets:
   rtl:
     depend:
       - ::tlp_core:1.0.0
+      - fusesoc:pcie:dllp_core:1.0.0
       - fusesoc:pcie:lint
     files:
       - pcie_axis_dw_downsize.sv
@@ -40,6 +41,7 @@ filesets:
       - pcie_rq_if.sv
       - pcie_rc_if.sv
       - pcie_rq_rc_top.sv
+      - pcie_rc_dl_top.sv
       - pcie_cfg_txn.sv
       - pcie_enum_scan.sv
       - pcie_enum_bar.sv
