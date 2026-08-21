@@ -43,6 +43,22 @@ def build_fc_dllp(dllp_type: DllpType, hdr_fc=32, data_fc=256) -> bytes:
     return payload + calculate_dllp_crc(payload).to_bytes(2, "little")
 
 
+# Base 2.1 SS2.6.1 Table 2-37 p.137-138, Endpoint rows, at the bench MPS of 128 bytes
+# (FC unit = 16 bytes, from the table's own 1024 -> 040h example): PH 1, PD 128/16 = 8,
+# NPH 1, NPD 1 (no AtomicOp support), CPLH/CPLD "infinite FC units - initial credit
+# value of all 0s".  Footnote 33 p.137: zero "is interpreted as infinite by the
+# Transmitter, which will, therefore, never throttle" -- so this profile cannot starve
+# completions; its power is NPH = 1, one non-posted request outstanding at a time.
+MIN_CREDIT_EP = {
+    DllpType.INIT_FC1_P:   (1, 8),
+    DllpType.INIT_FC2_P:   (1, 8),
+    DllpType.INIT_FC1_NP:  (1, 1),
+    DllpType.INIT_FC2_NP:  (1, 1),
+    DllpType.INIT_FC1_CPL: (0, 0),
+    DllpType.INIT_FC2_CPL: (0, 0),
+}
+
+
 def build_ack_nak(dllp_type: DllpType, sequence: int) -> bytes:
     packet = Dllp()
     packet.type = dllp_type
@@ -133,6 +149,30 @@ async def receive_dllp_type(sink: AxiStreamSink, dllp_type: DllpType):
             return decoded
 
 
+async def initialize_flow_control(dut, phy_source, credit_profile=None):
+    """The seven-DLLP InitFC exchange; credit_profile maps DllpType -> (hdr_fc, data_fc)."""
+    sequence = (
+        DllpType.INIT_FC1_P,
+        DllpType.INIT_FC1_NP,
+        DllpType.INIT_FC1_CPL,
+        DllpType.INIT_FC2_P,
+        DllpType.INIT_FC2_P,
+        DllpType.INIT_FC2_NP,
+        DllpType.INIT_FC2_CPL,
+    )
+    profile = credit_profile or {dllp_type: (32, 256) for dllp_type in sequence}
+    for dllp_type in sequence:
+        hdr_fc, data_fc = profile[dllp_type]
+        await send_axis(phy_source, build_fc_dllp(dllp_type, hdr_fc, data_fc),
+                        PHY_USER_IS_DLLP)
+        for _ in range(24):
+            await RisingEdge(dut.clk_i)
+    await wait_high(dut.clk_i, dut.fc_initialized_o)
+    assert int(dut.fc_ph_o.value) == profile[DllpType.INIT_FC2_P][0]
+    assert int(dut.fc_nph_o.value) == profile[DllpType.INIT_FC2_NP][0]
+    assert int(dut.fc_cplh_o.value) == profile[DllpType.INIT_FC2_CPL][0]
+
+
 class EndpointTB:
     def __init__(self, dut):
         self.dut = dut
@@ -193,24 +233,8 @@ class EndpointTB:
         for _ in range(8):
             await RisingEdge(d.clk_i)
 
-    async def initialize_flow_control(self):
-        sequence = (
-            DllpType.INIT_FC1_P,
-            DllpType.INIT_FC1_NP,
-            DllpType.INIT_FC1_CPL,
-            DllpType.INIT_FC2_P,
-            DllpType.INIT_FC2_P,
-            DllpType.INIT_FC2_NP,
-            DllpType.INIT_FC2_CPL,
-        )
-        for dllp_type in sequence:
-            await send_axis(self.phy_source, build_fc_dllp(dllp_type), PHY_USER_IS_DLLP)
-            for _ in range(24):
-                await RisingEdge(self.dut.clk_i)
-        await wait_high(self.dut.clk_i, self.dut.fc_initialized_o)
-        assert int(self.dut.fc_ph_o.value) == 32
-        assert int(self.dut.fc_nph_o.value) == 32
-        assert int(self.dut.fc_cplh_o.value) == 32
+    async def initialize_flow_control(self, credit_profile=None):
+        await initialize_flow_control(self.dut, self.phy_source, credit_profile)
 
     async def submit_command(self, command: int, address: int, byte_count: int,
                              payload: bytes = b"", context: int = 0x1234):
