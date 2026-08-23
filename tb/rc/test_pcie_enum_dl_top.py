@@ -302,13 +302,27 @@ class EnumDlTB(RcDlTB):
         await RisingEdge(self.dut.clk_i)
 
     async def wait_fc_init(self, cycles=4000):
-        """Bounded wait on the TRANSACTION LAYER's view of FC init.
+        """Bounded, EXPLICIT re-check of the Transaction Layer's view of FC init.
 
-        ⭐ THIS IS THE START GATE.  Not phy_link_up_i: Base 2.1 SS3.3.1 p.160 has
-        FC initialisation complete once per link-up, and a transmitter holds no
-        credit until it does.  fc_initialized_o is the wrapper's alias for
-        dut.u_rcdl.fc_init_sticky_r, the filtered signal that actually drives
-        u_rc.fc_initialized_i -- NOT the DLL's raw, glitching output.
+        The gate itself is Base 2.1 SS3.3.1 p.160: FC initialisation completes
+        once per link-up and a transmitter holds no credit until it does.
+        fc_initialized_o is the wrapper's alias for dut.u_rcdl.fc_init_sticky_r,
+        the filtered signal that actually drives u_rc.fc_initialized_i -- NOT
+        the DLL's raw, glitching output.
+
+        ⚠️ BUT THIS CALL IS NOT WHAT APPLIES THE GATE, and the mutation census
+        proved it.  M7 swapped this call with start_enum() and ALL FIVE TESTS
+        STILL PASSED, because initialize_flow_control() already ends with
+        `await wait_high(dut.clk_i, dut.fc_initialized_o)`
+        (test_pcie_endpoint_top.py:170) -- by the time it returns, FC init has
+        completed and no reordering of the two lines after it is observable.
+
+        So this is a deliberate, explicit restatement of a precondition, kept
+        because it names the gate at the call site where a reader looks for it.
+        It is NOT load-bearing, and the docstring said it was until the census
+        said otherwise.  The test that actually demonstrates the gate matters is
+        test_start_gate_negative_control, which omits initialize_flow_control
+        entirely.
         """
         for _ in range(cycles):
             await RisingEdge(self.dut.clk_i)
@@ -754,9 +768,27 @@ async def test_start_gate_negative_control(dut):
         "enum reported a timeout but cpl_timeout_valid_o never strobed -- the "
         "timeout must come from the tracker, the single timer for this job "
         "(pcie_cfg_txn.sv:92-98)")
+
+    # ⭐ ADDED AFTER THE MUTATION CENSUS (M2).  Tying tx_fc_blocked_i low at
+    # the seam SURVIVED the original five tests, because nothing asserted the
+    # one signal it feeds.  pcie_enum_scan.sv:160-172 is explicit that
+    # tx_fc_blocked_i is sampled ONLY to annotate a TXN_TIMEOUT here -- "say
+    # 'this timeout smells like credit starvation'" -- and that it appears in
+    # no next-state expression.  This test is the only one that reaches the
+    # annotation, because it is the only one that times out.
+    #
+    # That is the whole purpose of the diagnostic: it separates "the device is
+    # dead" from "we never got to ask", and THIS run is the second case.
+    assert int(dut.err_credit_blocked_o.value) == 1, (
+        "err_credit_blocked_o is low on a timeout that happened with the "
+        "request held for credit -- the diagnostic that distinguishes a dead "
+        "device from a request that never reached the wire is not working "
+        "(pcie_enum_scan.sv:160-172)")
+
     dut._log.info(
         f"D-P4: no frame in 4000 cycles; enum ended {err_name(code)} with "
-        f"{len(mon.timeouts)} tracker timeout strobe(s)")
+        f"{len(mon.timeouts)} tracker timeout strobe(s), "
+        f"err_credit_blocked_o={int(dut.err_credit_blocked_o.value)}")
 
 
 # ==========================================================================
@@ -824,6 +856,22 @@ async def test_parameter_coherence(dut):
     # The CRS budget the guard exists to bound, from the elaborated design.
     retries = param("dut.u_enum.u_txn", "CRS_RETRY_MAX")
     backoff = param("dut.u_enum.u_txn", "CRS_BACKOFF_CYCLES")
+
+    # ⭐ ADDED AFTER THE MUTATION CENSUS (M4).  Swapping these two parameters
+    # (3 <-> 8) SURVIVED the original five tests: the product is unchanged, so
+    # the budget check below could not see it, and no test this rung exercises
+    # the CRS path that would feel the difference (design test (c1), deferred).
+    # A product-only check is blind to any pair with the same product.
+    #
+    # The oracle is the design record, not the DUT: DESIGN_ENUM_STACK_TOP SS3.4
+    # pins 3 and 8 to match the three seam benches
+    # (tb_pcie_enum_bridge_tlp.sv:37-38) and to satisfy the guard against 4096.
+    assert retries == 3, (
+        f"CRS_RETRY_MAX elaborated to {retries}, expected 3 -- the seam "
+        "benches' value (DESIGN SS3.4)")
+    assert backoff == 8, (
+        f"CRS_BACKOFF_CYCLES elaborated to {backoff}, expected 8 -- the seam "
+        "benches' value (DESIGN SS3.4)")
     assert retries * backoff < timer_value, (
         f"P-CRS-BUDGET: {retries} retries x {backoff} cycles >= the "
         f"{timer_value}-cycle timeout -- CRS retries could outlast it")
