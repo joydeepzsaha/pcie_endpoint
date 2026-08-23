@@ -219,6 +219,27 @@ filesets:
       - test_pcie_rq_rc_top.py : {file_type : user, copyto : .}
       - ../endpoint/test_pcie_endpoint_top.py : {file_type : user, copyto : .}
 
+  # The whole enumeration engine stacked on the real TL+DLL stack: the first
+  # target with no Python between the enumerator and the wire.
+  bench_enum_dl_top:
+    files:
+      - tb_pcie_enum_dl_top.sv
+    file_type: systemVerilogSource
+
+  # Everything this bench needs it INHERITS -- the far-end device model and its
+  # BAR write masks from the Stage C bench, the golden sequence from the Stage D
+  # bench, and the data-link helpers from the rc_dl bench.  The only new Python
+  # is the frame shim.
+  cocotb_enum_dl_top:
+    files:
+      - enum_tb_common.py           : {file_type : user, copyto : .}
+      - test_pcie_enum_bar_tlp.py   : {file_type : user, copyto : .}
+      - test_pcie_enum_bridge_tlp.py: {file_type : user, copyto : .}
+      - test_pcie_rq_rc_top.py      : {file_type : user, copyto : .}
+      - test_pcie_rc_dl_top.py      : {file_type : user, copyto : .}
+      - ../endpoint/test_pcie_endpoint_top.py : {file_type : user, copyto : .}
+      - test_pcie_enum_dl_top.py    : {file_type : user, copyto : .}
+
 targets:
   # 2a-0: pcie_axis_dw_downsize / pcie_axis_dw_upsize, G1..G10.
   verilate_axis_gearbox:
@@ -457,6 +478,19 @@ targets:
         - waiver.vlt
     filesets : [rtl, bench_rc_dl_top, cocotb_rc_dl_top]
     toplevel : [tb_pcie_rc_dl_top]
+
+  # The enumeration engine on the real data link layer.  Appended last.
+  verilate_enum_dl_top:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_pcie_enum_dl_top
+      timescale: 1ns/1ps
+      verilator_options:
+        - --timing
+        - waiver.vlt
+    filesets : [rtl, bench_enum_dl_top, cocotb_enum_dl_top]
+    toplevel : [tb_pcie_enum_dl_top]
 
   # Waveform variant; debug-only, not part of the regression gate.
   verilate_enum_bar_tlp_trace:

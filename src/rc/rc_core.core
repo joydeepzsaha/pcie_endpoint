@@ -47,6 +47,7 @@ filesets:
       - pcie_enum_bar.sv
       - pcie_enum_bus.sv
       - pcie_enum_top.sv
+      - pcie_enum_dl_top.sv
     file_type: systemVerilogSource
 
 targets:
