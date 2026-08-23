@@ -193,10 +193,10 @@ module tb_pcie_enum_dl_top;
   // IT IS NO LONGER A HIERARCHICAL REACH.  It is an alias of the real port
   // fc_init_done_o, kept under the old name only because the shared helper
   // reads dut.fc_initialized_o by that name
-  // (test_pcie_endpoint_top.py:170).  The reach into fc_init_sticky_r that
-  // used to be here existed because the signal was not on pcie_rc_dl_top's
-  // port list; the start-gate rung put it there, and gating now happens in the
-  // DUT rather than in the bench.
+  // (test_pcie_endpoint_top.py:170).  The reach into the FC-init filter
+  // register (pcie_rc_dl_top.sv:181) that used to be here existed because that
+  // signal was not on pcie_rc_dl_top's port list; the start-gate rung put it
+  // there, and gating now happens in the DUT rather than in the bench.
   //
   // fc_initialized_dll is the DLL's raw, glitching output and STAYS a reach:
   // it is deliberately not a port, because nothing outside verification should

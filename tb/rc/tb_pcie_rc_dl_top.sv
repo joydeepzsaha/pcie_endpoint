@@ -87,20 +87,25 @@ module tb_pcie_rc_dl_top;
   logic [7:0] late_cpl_tag_o;
   logic [5:0] outstanding_o;
 
-  // Shape (iii) start-gate status ports.  Declared explicitly rather than left
-  // to .*'s implicit-net rule, matching every other signal in this wrapper.
-  // Nothing reads them yet; the hierarchical reach below is retired onto
-  // fc_init_done_o in the test commit.
+  // Start-gate status ports.  Declared explicitly rather than left to .*'s
+  // implicit-net rule, matching every other signal in this wrapper.
   logic       fc_init_done_o;
   logic       ok_to_issue_o;
 
   // Verification-only visibility of the FC seam between the two instances.
   // fc_initialized_o is the FILTER OUTPUT -- the wire u_rc.fc_initialized_i is
   // driven by -- so the shared initialize_flow_control helper waits on the
-  // TL's view of FC init; fc_initialized_dll is the DLL's raw, glitching
-  // fc_initialized_o (test (a)'s negative control).
+  // TL's view of FC init.
+  //
+  // IT IS NO LONGER A HIERARCHICAL REACH.  It is an alias of the real port
+  // fc_init_done_o, kept under the old name only because the shared helper
+  // reads dut.fc_initialized_o by that name (test_pcie_endpoint_top.py:170).
+  //
+  // fc_initialized_dll is the DLL's raw, glitching output and STAYS a reach:
+  // it is deliberately not a port, because nothing outside verification should
+  // consume an unfiltered FC-init.  It is test (a)'s negative control.
   wire        fc_initialized_dll = dut.dl_fc_initialized;
-  wire        fc_initialized_o   = dut.fc_init_sticky_r;
+  wire        fc_initialized_o   = fc_init_done_o;
   wire        fc_update_valid_o  = dut.dl_fc_update_valid;
   wire [7:0]  fc_ph_o   = dut.dl_fc_ph;
   wire [11:0] fc_pd_o   = dut.dl_fc_pd;
