@@ -337,6 +337,12 @@ module pcie_enum_dl_top
       .idle_valid_i     (idle_valid_i),
       .transmit_enable_i(transmit_enable_i),
 
+      // Named-empty for now, per the house rule at pcie_rc_dl_top.sv:326-328:
+      // omitting them would raise PINMISSING, which lint/waiver.vlt leaves
+      // enabled on purpose.  The start-gate commit connects both.
+      .fc_init_done_o(),
+      .ok_to_issue_o (),
+
       .s_phy_axis_tdata (s_phy_axis_tdata),
       .s_phy_axis_tkeep (s_phy_axis_tkeep),
       .s_phy_axis_tvalid(s_phy_axis_tvalid),

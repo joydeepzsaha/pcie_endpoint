@@ -58,6 +58,37 @@ module pcie_rc_dl_top
     input  logic                        idle_valid_i,
     input  logic                        transmit_enable_i,
 
+    // ---- start-gate status, outward (shape (iii)) ---------------------------
+    // Exposing these is the whole point of this rung: an integrator above this
+    // module could previously learn when it was safe to issue only by reaching
+    // hierarchically into fc_init_sticky_r, which pcie_enum_dl_top.sv:22-25
+    // recorded as the blocker that made an RTL start gate impossible.
+    //
+    // fc_init_done_o -- the FILTERED FC-init state, i.e. the sticky bit below,
+    // not the DLL's raw fc_initialized_o.  Monotonic within a link-up.
+    //
+    // ok_to_issue_o -- the standing preconditions for transmission.  The actual
+    // parking decision is tlp_layer.sv:280,
+    //     vc_packet_ready = credit_request_ready && transmit_enable_i && link_up_i
+    // which is FOUR terms; this port carries the three that are state.  The
+    // fourth, credit_request_ready, is deliberately excluded: it resolves to
+    // fc_initialized_i && selected_header_available && selected_data_available
+    // (tlp_credit_manager.sv:184), and those two availability terms are assigned
+    // inside a unique case (request_class_i) and compared against
+    // request_data_credits_i (:155-172).  They are a function of the request
+    // CURRENTLY PRESENTED, not of module state, so there is no class-independent
+    // "credit is ready" bit to export -- publishing one would mean picking a
+    // request class here, i.e. a second copy of a decision that already has an
+    // owner.  A consumer needing the credit view should use tx_fc_blocked_o,
+    // which is NOT this port's inverse: it is request-qualified
+    // (tlp_credit_manager.sv:186) and therefore reads 0 while idle.
+    //
+    // phy_link_up_i is not redundant with the sticky bit.  fc_init_sticky_r is
+    // registered, so it still reads 1 for the cycle after a link drop, while the
+    // :280 gate it mirrors is combinational.
+    output logic                        fc_init_done_o,
+    output logic                        ok_to_issue_o,
+
     // ---- PHY-facing streams (pcie_datalink_layer.sv:48-63,72) ---------------
     input  logic [31:0]                 s_phy_axis_tdata,
     input  logic [3:0]                  s_phy_axis_tkeep,
@@ -183,6 +214,14 @@ module pcie_rc_dl_top
     if (rst_i || !phy_link_up_i) fc_init_sticky_r <= 1'b0;
     else if (dl_fc_initialized)  fc_init_sticky_r <= 1'b1;
   end
+
+  // Outward view of the two states above.  Continuous assigns from signals that
+  // already exist and already drive u_rc -- fc_init_sticky_r remains the single
+  // source of truth for FC-init, and these ports read it rather than recompute
+  // it.  See the port declarations for why ok_to_issue_o carries three of the
+  // four conjuncts of tlp_layer.sv:280 and not the fourth.
+  assign fc_init_done_o = fc_init_sticky_r;
+  assign ok_to_issue_o  = fc_init_sticky_r && transmit_enable_i && phy_link_up_i;
 
   pcie_rq_rc_top #(
       .AXIS_DATA_WIDTH(AXIS_DATA_WIDTH),

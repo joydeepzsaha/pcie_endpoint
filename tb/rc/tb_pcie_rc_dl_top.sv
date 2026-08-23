@@ -87,6 +87,13 @@ module tb_pcie_rc_dl_top;
   logic [7:0] late_cpl_tag_o;
   logic [5:0] outstanding_o;
 
+  // Shape (iii) start-gate status ports.  Declared explicitly rather than left
+  // to .*'s implicit-net rule, matching every other signal in this wrapper.
+  // Nothing reads them yet; the hierarchical reach below is retired onto
+  // fc_init_done_o in the test commit.
+  logic       fc_init_done_o;
+  logic       ok_to_issue_o;
+
   // Verification-only visibility of the FC seam between the two instances.
   // fc_initialized_o is the FILTER OUTPUT -- the wire u_rc.fc_initialized_i is
   // driven by -- so the shared initialize_flow_control helper waits on the
