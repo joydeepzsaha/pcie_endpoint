@@ -8,9 +8,14 @@ end -- the device being enumerated -- which is where a model belongs.
 
 Everything is observed on m_phy_axis / s_phy_axis and the top's own status
 ports.  The only exceptions are the verification-only aliases in the wrapper
-(tb_pcie_enum_dl_top.sv), and they exist for two reasons the design names: the
-FC seam is the start gate this rung deliberately does NOT close in RTL, and the
-PG213 socket is internal by design so Mon needs three observation points.
+(tb_pcie_enum_dl_top.sv), and since the start-gate rung there is exactly one
+reason left for them: the PG213 socket is internal by design, so Mon needs
+three observation points.  The FC seam used to be the second reason -- it was
+reached hierarchically because pcie_rc_dl_top's FC-init filter register
+(pcie_rc_dl_top.sv:181) was not a port.  It is a port now (fc_init_done_o), the
+gate lives in the DUT, and dut.fc_initialized_o is kept only as an alias of it,
+under the old name, because the shared initialize_flow_control helper reads it
+by that name.
 
 Design record, predictions and the scored recon:
   ~/pcie_docs/evidence/enum-stack/DESIGN_ENUM_STACK_TOP.md
@@ -28,12 +33,15 @@ RTL cited:
   the conditional swap, DW1-3 only ... src/tlp/tlp_generator.sv:97-101
   3DW headers skip TX_DW3 ............ src/tlp/tlp_generator.sv:182-186
   RX is symmetric (DW0 raw) .......... src/tlp/tlp_parser.sv:56-61, :142
-  the start gate that is not a port .. src/rc/pcie_rc_dl_top.sv:181
+  the FC-init filter, now a port ..... src/rc/pcie_rc_dl_top.sv:181
+  the start gate itself .............. src/rc/pcie_enum_dl_top.sv, start_pending_r
+  S_IDLE re-samples every cycle ...... src/rc/pcie_enum_scan.sv:346
   timer runs from ALLOCATION ......... src/tlp/tlp_request_tracker.sv:39
 """
 
 import cocotb
 from cocotb.triggers import ReadOnly, RisingEdge
+from cocotb.utils import get_sim_time
 
 from cocotbext.pcie.core.dllp import DllpType
 from cocotbext.pcie.core.tlp import Tlp, TlpType
@@ -49,14 +57,16 @@ from test_pcie_endpoint_top import (
 )
 from test_pcie_rc_dl_top import RcDlTB
 from test_pcie_enum_bar_tlp import (
-    BarSpaceCompleter, acceptance_device, assert_acceptance_outcome,
-    assert_command_last, assert_rom_untouched, status,
+    ACCEPT_BAR_SIZE, BarSpaceCompleter, acceptance_device,
+    assert_acceptance_outcome, assert_command_last, assert_rom_untouched,
+    status,
 )
 from test_pcie_enum_bridge_tlp import DIRECT_GOLDEN_SEQUENCE, on_wire, render
 from enum_tb_common import (
-    CFG_BE_DWORD, CFG_REG_BAR0, CFG_REG_COMMAND_STATUS, CFG_REG_VENDOR_DEVICE,
-    CMD_ENABLE_VALUE, ENUM_ERR_NONE, ENUM_ERR_TIMEOUT, RID, SCAN_BUS,
-    Mon, TlpRequest,
+    BAR_MEM64, CFG_BE_DWORD, CFG_REG_BAR0, CFG_REG_COMMAND_STATUS,
+    CFG_REG_VENDOR_DEVICE, CMD_ENABLE_VALUE, ENUM_ERR_NONE, ENUM_ERR_TIMEOUT,
+    HDR_TYPE0, RID, SCAN_BUS,
+    BarSpec, ConfigDevice, Mon, TlpRequest,
     assert_sequence, cfg_wire_dw0, cfg_wire_dw1, cfg_wire_dw2, err_name,
     expect_count, nonempty,
 )
@@ -294,8 +304,14 @@ class EnumDlTB(RcDlTB):
             await RisingEdge(d.clk_i)
 
     async def start_enum(self):
-        """One scan_start_i pulse.  Callers gate this themselves -- see
-        wait_fc_init() -- because the RTL does not."""
+        """One scan_start_i pulse.
+
+        A PULSE, deliberately, and it is now load-bearing in a way it was not
+        before: the DUT's start gate has to REMEMBER a request made while the
+        gate is shut, and a pulse is the stimulus that can tell a latch from a
+        bare AND.  A level-held start would pass either implementation.
+        test_start_gate_rtl depends on this staying a pulse.
+        """
         self.dut.scan_start_i.value = 1
         await RisingEdge(self.dut.clk_i)
         self.dut.scan_start_i.value = 0
@@ -304,25 +320,25 @@ class EnumDlTB(RcDlTB):
     async def wait_fc_init(self, cycles=4000):
         """Bounded, EXPLICIT re-check of the Transaction Layer's view of FC init.
 
-        The gate itself is Base 2.1 SS3.3.1 p.160: FC initialisation completes
-        once per link-up and a transmitter holds no credit until it does.
-        fc_initialized_o is the wrapper's alias for dut.u_rcdl.fc_init_sticky_r,
-        the filtered signal that actually drives u_rc.fc_initialized_i -- NOT
-        the DLL's raw, glitching output.
+        The rule is Base 2.1 SS3.3.1 p.160: FC initialisation completes once per
+        link-up and a transmitter holds no credit until it does.
+        fc_initialized_o is the wrapper's alias for the DUT port fc_init_done_o
+        -- the filtered signal that drives u_rc.fc_initialized_i, NOT the DLL's
+        raw, glitching output.
 
-        ⚠️ BUT THIS CALL IS NOT WHAT APPLIES THE GATE, and the mutation census
-        proved it.  M7 swapped this call with start_enum() and ALL FIVE TESTS
-        STILL PASSED, because initialize_flow_control() already ends with
+        ⚠️ THIS CALL HAS NEVER BEEN WHAT APPLIES THE GATE, and it is now doubly
+        so.  The mutation census (M7) swapped it with start_enum() and ALL FIVE
+        TESTS STILL PASSED, because initialize_flow_control() already ends with
         `await wait_high(dut.clk_i, dut.fc_initialized_o)`
         (test_pcie_endpoint_top.py:170) -- by the time it returns, FC init has
         completed and no reordering of the two lines after it is observable.
 
-        So this is a deliberate, explicit restatement of a precondition, kept
-        because it names the gate at the call site where a reader looks for it.
-        It is NOT load-bearing, and the docstring said it was until the census
-        said otherwise.  The test that actually demonstrates the gate matters is
-        test_start_gate_negative_control, which omits initialize_flow_control
-        entirely.
+        Since the start-gate rung the gate is in the RTL, so this call is not
+        even the bench's last line of defence: starting early is now SAFE, and
+        test_start_gate_rtl proves it by doing exactly that on purpose.  The
+        call is kept as an explicit restatement of a precondition at the site a
+        reader looks for it, and for its bounded-wait diagnostic when the
+        InitFC exchange genuinely fails.  It is NOT load-bearing.
         """
         for _ in range(cycles):
             await RisingEdge(self.dut.clk_i)
@@ -330,7 +346,7 @@ class EnumDlTB(RcDlTB):
                     int(self.dut.fc_initialized_o.value):
                 return
         raise AssertionError(
-            f"fc_init_sticky_r did not assert within {cycles} cycles -- the "
+            f"fc_init_done_o did not assert within {cycles} cycles -- the "
             "InitFC exchange never completed, so no TLP could ever be sent")
 
 
@@ -454,14 +470,26 @@ async def wait_enum(dut, cycles=60000):
 
 
 async def bring_up(dut, credits=None, **completer_kwargs):
-    """Reset, InitFC, far end attached, start gated on the TL's FC view.
+    """Reset, InitFC, far end attached, then start.
 
-    Returns (tb, completer, mon).  The gate is applied HERE rather than inside
-    the DUT, which is the shape decision this rung records: fc_init_sticky_r is
-    not on pcie_rc_dl_top's port list, so the integrator sequences the start.
+    Returns (tb, completer, mon).
+
+    ⚠️ THE ORDERING HERE IS NO LONGER THE GATE, and that is the change the
+    start-gate rung made.  This helper used to sequence InitFC before the start
+    because it HAD to -- the FC-init filter (pcie_rc_dl_top.sv:181) was not on
+    that module's port list, so the DUT could not gate itself and the
+    integrator had to.  The DUT gates
+    itself now (pcie_enum_dl_top's start_pending_r), so this ordering is merely
+    the natural one, not a correctness requirement.  test_start_gate_rtl
+    deliberately inverts it and still enumerates.
+
+    Keeping the order means every other test in this file exercises the gate's
+    TRANSPARENT path -- start arrives after FC init, the latch never sets --
+    which is what makes their sim times a regression check on the gate being
+    free when it should be.
 
     Mon starts before scan_start_i so no error strobe can be missed; it reads
-    only real top-level ports plus the three seam aliases the wrapper provides.
+    only real top-level ports plus the seam aliases the wrapper provides.
     """
     tb = EnumDlTB(dut)
     await tb.reset()
@@ -691,34 +719,44 @@ async def test_nak_inside_sequence(dut):
 
 
 # ==========================================================================
-# (4) ⛔ THE START-GATE NEGATIVE CONTROL -- its pass condition is a FAILURE
+# (4) ⭐ THE START GATE, IN RTL -- this test used to assert the opposite
 # ==========================================================================
 @cocotb.test()
-async def test_start_gate_negative_control(dut):
-    """Scores D-P4.  Observation points: m_phy_axis frame count in a bounded
-    window, then enum_error_o / enum_error_code_o.
+async def test_start_gate_rtl(dut):
+    """An early scan_start_i is HELD by the RTL, then honoured when FC init lands.
 
-    ⭐ THIS TEST DEMONSTRATES THE HAZARD THAT SHAPE (iii) EXISTS TO CLOSE, rather
-    than describing it in a comment.  scan_start_i is pulsed at phy_link_up_i
-    and BEFORE flow control has initialised -- the mistake a self-starting top
-    gated on link-up would make.
+    ⭐ THIS TEST USED TO ASSERT THE OPPOSITE, and the pair of measurements is
+    the point of the whole rung.
 
-    The causal chain, all of it already in the RTL:
+    It was test_start_gate_negative_control, and it scored D-P4.  The STIMULUS
+    is unchanged -- scan_start_i pulsed while phy_link_up_i is high but BEFORE
+    flow control has initialised, the mistake a self-starting top gated on
+    link-up would make.  What changed is the verdict.  Before the gate existed
+    the first CfgRd was TAGGED, PARKED in the VC buffer, and TIMED OUT HAVING
+    NEVER BEEN TRANSMITTED; the test passed by asserting ENUM_ERR_TIMEOUT and
+    spent 33116.00 ns doing it.  That number is the before-picture, recorded at
+    ENUM_gate_fec4e68.txt:374 and reproduced at the port-only commit, which
+    changed no behaviour.
+
+    The causal chain it demonstrated is all still in the RTL:
       * a transmitter holds no credit until FC init completes -- Base 2.1
         SS3.3.1 p.160, quoted at pcie_rc_dl_top.sv:176-177;
       * tag allocation sits UPSTREAM of the credit gate --
         pcie_enum_scan.sv:137-144;
       * the completion timer measures from ALLOCATION --
         tlp_request_tracker.sv:39.
-    So the first CfgRd is tagged, parked in the VC buffer, and times out HAVING
-    NEVER BEEN TRANSMITTED.
+    pcie_enum_dl_top now refuses to hand the start to the engine until
+    fc_init_done_o is high, so the chain is never ENTERED.
 
-    ⛔ IF THIS TEST EVER SEES ENUMERATION SUCCEED, THAT IS A STOP CONDITION, not
-    a pass.  It would mean the hazard closed without the port being added and
-    the reasoning above is wrong somewhere.
-
-    This test deliberately leaves the DUT in an errored state, so every test is
-    written to reset first; bring_up() does.
+    !! ACT 2 IS THE ONE THAT MATTERS.  Without the hold window this is just a
+    slow test_full_enumeration_on_wire.  And within act 2 the assertion with
+    teeth is tags_presented == [], NOT the frame count: the OLD RTL also
+    produced no frame in this window -- that was the old test's own headline
+    assertion -- so "no frame" cannot distinguish gate-works from
+    hazard-still-present.  A tag WAS handed out under the old RTL
+    (pcie_rq_rc_top.sv:49-56 documents exactly this, and 2b-1 test i8 measured
+    it).  The absence of a tag strobe is what proves the request never entered
+    the engine at all, which is a strictly stronger claim than the old test's.
     """
     tb = EnumDlTB(dut)
     await tb.reset()
@@ -728,67 +766,81 @@ async def test_start_gate_negative_control(dut):
     completer.start()
     completer.serve()
 
-    # NO initialize_flow_control, and NO wait on fc_init_sticky_r.  The link is
-    # up; that is the whole point, and it is not enough.
+    # ---- act 1: the early start ------------------------------------------
+    # NO initialize_flow_control yet.  The link is up; that is the whole point,
+    # and it is not enough.
     await ReadOnly()
     assert int(dut.phy_link_up_i.value) == 1, "premise: the link must be up"
-    assert int(dut.fc_initialized_o.value) == 0, (
+    assert int(dut.fc_init_done_o.value) == 0, (
         "premise: flow control must NOT be initialised yet, or this test is "
         "just a slow version of test 1")
     await RisingEdge(dut.clk_i)
     await tb.start_enum()
 
-    # Nothing may reach the wire while the credit pool is empty.
-    for _ in range(4000):
+    # ---- act 2: THE HOLD ---------------------------------------------------
+    # 4000 cycles, the same window the old negative control used, so the two
+    # measurements are taken over the same span.  CPL_TIMEOUT_CYCLES is 4096,
+    # so this window is deliberately shorter than the timeout it is proving
+    # never arms -- the timeout assertion below is about the timer never
+    # STARTING, which the tag assertion already implies.
+    HOLD = 4000
+    for _ in range(HOLD):
         await RisingEdge(dut.clk_i)
+        await ReadOnly()
+        assert mon.tags_presented == [], (
+            "a tag was allocated while the start gate was shut. The gate must "
+            "stop the request ENTERING the engine; a tag strobe means it "
+            "entered and is now parked, which is exactly the hazard this rung "
+            "closes (pcie_rq_rc_top.sv:49-56)")
         assert completer.frames == [], (
-            "⛔ SURPRISE: a TLP reached m_phy_axis before flow control "
-            "initialised.  A transmitter holds no credit until FC init "
-            "completes (Base 2.1 SS3.3.1 p.160), so this falsifies either the "
-            "credit gate or the premise of the whole start-gate argument")
+            "a TLP reached m_phy_axis before flow control initialised")
+        assert not mon.timeouts, (
+            "the completion timer ran while the start gate was shut -- it "
+            "measures from ALLOCATION, so this means a tag was allocated")
+        assert int(dut.enum_error_o.value) == 0, (
+            "the engine reported an error while its start was still held")
+        assert int(dut.scan_busy_o.value) == 0, (
+            "the scan FSM left S_IDLE while its start was still held")
 
-    # ... and the request that never left times out, from ALLOCATION.
-    # CPL_TIMEOUT_CYCLES is 4096, so the bound is generous but finite.
-    await wait_enum(dut, cycles=20000)
-    await ReadOnly()
-    done = int(dut.enum_done_o.value)
-    error = int(dut.enum_error_o.value)
-    code = int(dut.enum_error_code_o.value)
+    # ---- act 3: the release ------------------------------------------------
+    # Stamp both edges so the ordering claim is a measurement, not an inference
+    # from ordering of awaits.
+    stamps = {}
 
-    assert not done, (
-        "⛔ STOP CONDITION: enumeration COMPLETED although it was started "
-        "before flow control initialised.  The hazard this rung documents is "
-        "not present, and the shape (iii) argument needs re-deriving")
-    assert error and code == ENUM_ERR_TIMEOUT, (
-        f"the parked request ended {err_name(code)}, expected a completion "
-        "timeout -- the failure mode is right but its classification is not")
-    assert completer.frames == [], (
-        "a frame escaped after the timeout fired")
-    assert mon.timeouts, (
-        "enum reported a timeout but cpl_timeout_valid_o never strobed -- the "
-        "timeout must come from the tracker, the single timer for this job "
-        "(pcie_cfg_txn.sv:92-98)")
+    async def _stamp():
+        while len(stamps) < 2:
+            await RisingEdge(dut.clk_i)
+            await ReadOnly()
+            if "fc" not in stamps and int(dut.fc_init_done_o.value):
+                stamps["fc"] = get_sim_time("ns")
+            if "frame" not in stamps and completer.frames:
+                stamps["frame"] = get_sim_time("ns")
 
-    # ⭐ ADDED AFTER THE MUTATION CENSUS (M2).  Tying tx_fc_blocked_i low at
-    # the seam SURVIVED the original five tests, because nothing asserted the
-    # one signal it feeds.  pcie_enum_scan.sv:160-172 is explicit that
-    # tx_fc_blocked_i is sampled ONLY to annotate a TXN_TIMEOUT here -- "say
-    # 'this timeout smells like credit starvation'" -- and that it appears in
-    # no next-state expression.  This test is the only one that reaches the
-    # annotation, because it is the only one that times out.
-    #
-    # That is the whole purpose of the diagnostic: it separates "the device is
-    # dead" from "we never got to ask", and THIS run is the second case.
-    assert int(dut.err_credit_blocked_o.value) == 1, (
-        "err_credit_blocked_o is low on a timeout that happened with the "
-        "request held for credit -- the diagnostic that distinguishes a dead "
-        "device from a request that never reached the wire is not working "
-        "(pcie_enum_scan.sv:160-172)")
+    cocotb.start_soon(_stamp())
+
+    await initialize_flow_control(dut, tb.phy_source)
+    await wait_enum(dut, cycles=60000)
+    snap = await status(dut)
+
+    assert snap["done"] == 1 and snap["error"] == 0, (
+        "the held start was released but enumeration did not succeed: "
+        f"done={snap['done']} error={err_name(snap['code'])}")
+    # The full device table, against the same Stage C acceptance goldens test 1
+    # checks -- a held start must produce an IDENTICAL result, not merely a
+    # successful-looking one.
+    assert_acceptance_outcome(snap, "after a held start: ")
+    assert_golden_on_the_wire(completer, "after a held start: ")
+
+    assert "fc" in stamps and "frame" in stamps, f"a stamp never landed: {stamps}"
+    assert stamps["frame"] > stamps["fc"], (
+        f"the first frame left at {stamps['frame']} ns but fc_init_done_o did "
+        f"not rise until {stamps['fc']} ns -- the gate did not order them")
 
     dut._log.info(
-        f"D-P4: no frame in 4000 cycles; enum ended {err_name(code)} with "
-        f"{len(mon.timeouts)} tracker timeout strobe(s), "
-        f"err_credit_blocked_o={int(dut.err_credit_blocked_o.value)}")
+        f"start gate: held {HOLD} cycles with no tag and no frame; "
+        f"fc_init_done_o at {stamps['fc']} ns, first frame at "
+        f"{stamps['frame']} ns (before the gate: no frame ever, "
+        f"ENUM_ERR_TIMEOUT at 33116 ns)")
 
 
 # ==========================================================================
@@ -901,3 +953,268 @@ async def test_parameter_coherence(dut):
 
     assert param("dut.u_rcdl", "TAG_COUNT") == 32, (
         "TAG_COUNT is not pcie_rc_dl_top's tested default")
+
+
+# ==========================================================================
+# (6) UR on the probe is ABSENCE, not an error -- through the real DLL
+# ==========================================================================
+@cocotb.test()
+async def test_probe_ur_is_absence_not_error(dut):
+    """A UR to the Function 0 probe exits NORMALLY with device_present_o low.
+
+    Oracle is the spec, not the RTL: Base 2.1 SS7.3.1 p.479 (an unimplemented
+    Function in an ARI Device) and SS7.3.3 p.480 (the general Endpoint rule).
+    pcie_enum_scan.sv:110-131 asserts the same thing in a comment; that comment
+    is the CLAIM UNDER TEST and is not evidence for itself.
+
+    !! WHY ABSENCE CANNOT MEAN "NO DEVICE ON THE LINK".  This is
+    point-to-point, and phy_link_up_i is asserted, so a device IS attached
+    whenever this scan runs.  A UR to the Function 0 probe therefore means
+    "nothing here to enumerate" -- which is a terminal, NON-ERROR outcome, and
+    is why there is no ENUM_ERR code for it.
+
+    Why run it here as well as at unit level: test_pcie_enum_scan.py's S12 pins
+    the companion property against a zero-latency socket.  This runs the same
+    spec rule through the real data link layer, where the completion is a
+    framed TLP carrying a sequence number and an LCRC and arrives through the
+    very credit gate the start gate controls.  Zero-latency models are blind to
+    ordering.
+    """
+    tb, completer, mon = await bring_up(dut, ur_regs={CFG_REG_VENDOR_DEVICE})
+    await wait_enum(dut, cycles=60000)
+    await ReadOnly()
+
+    # A guard never seen firing is not known to work.
+    assert completer.ur_injected_hits >= 1, (
+        "the UR arm never fired, so this test proves nothing about UR "
+        "handling -- the injection missed the register the probe reads")
+
+    assert int(dut.device_present_o.value) == 0, (
+        "a UR to the Function 0 probe must report the device ABSENT "
+        "(SS7.3.1 p.479, SS7.3.3 p.480)")
+    assert int(dut.enum_error_o.value) == 0, (
+        "UR on the probe was classified as an ERROR ("
+        f"{err_name(int(dut.enum_error_code_o.value))}); it is a NORMAL exit. "
+        "Absence is the one thing a UR to the probe means, and the design "
+        "deliberately has no ENUM_ERR code for it")
+
+    dut._log.info(
+        f"probe UR: present={int(dut.device_present_o.value)}, "
+        f"ur_injected_hits={completer.ur_injected_hits}, no error")
+
+
+# ==========================================================================
+# (7) ⭐ THE PIN: FFFFh from a Successful Completion is PRESENT, not absent
+# ==========================================================================
+@cocotb.test()
+async def test_vendor_ffff_on_success_is_present(dut):
+    """An SC carrying FFFFFFFF reports a PRESENT device with Vendor ID FFFFh.
+
+    Base 2.1 SS2.3.2 Implementation Note p.122 has a Root Complex synthesise an
+    all-1s read value "when UR Completion Status is returned for a
+    Configuration Read Request", FOR SOFTWARE ABOVE IT.  This stack sits where
+    that synthesis would be PERFORMED, not consumed -- it sees the UR itself,
+    as TXN_UR.  So absence is signalled by UR and by nothing else, and an SC is
+    an SC whatever data it carries.  Re-deriving absence from the sentinel
+    would discard information the spec took care to keep distinguishable.
+
+    Paired deliberately with test (6): together they are the two halves of one
+    claim, and a design that collapses them passes neither.
+
+    ⚠️ THE PAYLOAD IS A FIXED POINT OF THE DWORD TRANSFORM, UNAVOIDABLY.
+    FFFFFFFF is byte-reversal-invariant, so this register ALONE cannot show the
+    transform ran.  The usual rule -- pick a fixed-point-free payload -- cannot
+    be satisfied here, because the value IS the property under test.  Coverage
+    comes from the companion read in the same probe: register 3 answers
+    reg3(HDR_TYPE0) = 0x00000010, which is NOT byte-reversal-invariant, so the
+    header-type assertion below fails if the transform is broken.  That pairing
+    is why both assertions live in one test rather than two.
+    """
+    device = ConfigDevice(
+        bars={CFG_REG_BAR0: BarSpec(BAR_MEM64, ACCEPT_BAR_SIZE, prefetch=True)},
+        vendor=0xFFFF, device=0xFFFF)
+    tb, completer, mon = await bring_up(dut, device=device)
+    await wait_enum(dut, cycles=60000)
+    await ReadOnly()
+
+    assert int(dut.device_present_o.value) == 1, (
+        "a device that answered with a Successful Completion was reported "
+        "ABSENT because its Vendor ID was FFFFh. Absence is signalled by UR; "
+        "an SC is an SC whatever data it carries (SS2.3.2 p.122)")
+    assert int(dut.vendor_id_o.value) == 0xFFFF, (
+        f"the reported Vendor ID was altered: "
+        f"{int(dut.vendor_id_o.value):#06x}")
+    assert int(dut.device_id_o.value) == 0xFFFF, (
+        f"the reported Device ID was altered: "
+        f"{int(dut.device_id_o.value):#06x}")
+
+    # The non-fixed-point half of the pair: this one proves the Dword transform
+    # actually ran, which FFFFFFFF is structurally incapable of showing.
+    assert int(dut.header_type_o.value) == HDR_TYPE0, (
+        f"header type read back {int(dut.header_type_o.value):#04x}, expected "
+        f"{HDR_TYPE0:#04x} -- this is the register that is NOT a byte-reversal "
+        "fixed point, so a wrong value here means the Dword transform, not the "
+        "sentinel logic")
+    assert int(dut.enum_error_o.value) == 0, (
+        f"enumeration errored: {err_name(int(dut.enum_error_code_o.value))}")
+
+    dut._log.info(
+        "FFFFh sentinel: present=1, vendor=0xffff, device=0xffff, "
+        f"header_type={int(dut.header_type_o.value):#04x} (the "
+        "non-fixed-point companion)")
+
+
+# ==========================================================================
+# (8) ok_to_issue_o -- CLOSES MUTATION GAP M4
+# ==========================================================================
+@cocotb.test()
+async def test_ok_to_issue_tracks_all_three_conjuncts(dut):
+    """ok_to_issue_o is the three-term conjunction, and is NOT fc_init_done_o.
+
+    ⭐ THIS TEST EXISTS BECAUSE THE MUTATION CENSUS FOUND NOTHING WATCHING THE
+    PORT.  M4 replaced the whole expression with 1'b1 and ALL SEVEN tests
+    passed, on both rows that instantiate the module.  An output no test reads
+    is an output with no contract, however carefully its declaration is worded.
+
+    What the port means (pcie_rc_dl_top's declaration argues it at length): the
+    STANDING preconditions for transmission.  The real parking decision is
+    tlp_layer.sv:280,
+
+        vc_packet_ready = credit_request_ready && transmit_enable_i && link_up_i
+
+    and this port carries the three terms that are state.  The fourth,
+    credit_request_ready, is request-qualified rather than state and is
+    deliberately absent -- see that declaration for why exporting it would need
+    a request class to be chosen.
+
+    !! THE ASSERTION THAT MATTERS IS THE THIRD ONE.  Anyone reading the name
+    would guess ok_to_issue_o is an alias of fc_init_done_o; the recon found it
+    is not, and this is the point that proves it -- FC init is complete, so
+    fc_init_done_o is HIGH, while transmit_enable_i is low and ok_to_issue_o is
+    therefore LOW.  A design that collapsed the two ports would pass every other
+    assertion in this file and fail here.
+    """
+    tb = EnumDlTB(dut)
+    await tb.reset()
+
+    # (a) before FC init: no conjunct is satisfied.
+    await ReadOnly()
+    assert int(dut.fc_init_done_o.value) == 0, "premise: FC init not complete"
+    assert int(dut.ok_to_issue_o.value) == 0, (
+        "ok_to_issue_o is high before flow control initialised -- a "
+        "transmitter holds no credit until FC init completes "
+        "(Base 2.1 SS3.3.1 p.160)")
+
+    completer = PhyCompleter(tb, device=acceptance_device())
+    completer.start()
+    completer.serve()
+    await initialize_flow_control(dut, tb.phy_source)
+    await tb.wait_fc_init()
+
+    # (b) all three satisfied.
+    await ReadOnly()
+    assert int(dut.fc_init_done_o.value) == 1
+    assert int(dut.ok_to_issue_o.value) == 1, (
+        "FC init is complete, transmit is enabled and the link is up, but "
+        "ok_to_issue_o is low")
+
+    # (c) ⭐ THE DISCRIMINATING POINT: transmit_enable_i alone drops it, while
+    #     fc_init_done_o stays high.  This is what separates the two ports.
+    #     The RisingEdge leaves the read-only phase (b) put us in -- cocotb
+    #     refuses a write scheduled during ReadOnly.
+    await RisingEdge(dut.clk_i)
+    dut.transmit_enable_i.value = 0
+    await RisingEdge(dut.clk_i)
+    await ReadOnly()
+    assert int(dut.fc_init_done_o.value) == 1, (
+        "premise: dropping transmit_enable_i must not disturb FC init")
+    assert int(dut.ok_to_issue_o.value) == 0, (
+        "ok_to_issue_o stayed high with transmit_enable_i low. It is NOT an "
+        "alias of fc_init_done_o -- it carries the class-independent conjuncts "
+        "of the real parking decision (tlp_layer.sv:280), and transmit_enable_i "
+        "is one of them")
+    await RisingEdge(dut.clk_i)
+    dut.transmit_enable_i.value = 1
+
+    # (d) the link conjunct, which is not redundant with the sticky bit: the
+    #     sticky is REGISTERED and lags a link drop by a cycle, while the gate
+    #     this port mirrors is combinational.
+    await RisingEdge(dut.clk_i)
+    dut.phy_link_up_i.value = 0
+    await RisingEdge(dut.clk_i)
+    await ReadOnly()
+    assert int(dut.ok_to_issue_o.value) == 0, (
+        "ok_to_issue_o stayed high with the link down")
+
+    dut._log.info("ok_to_issue_o: 0 before FC init, 1 after, 0 on "
+                  "!transmit_enable_i with fc_init_done_o still 1, 0 on "
+                  "link-down")
+
+
+# ==========================================================================
+# (9) A link drop disarms a pending start -- CLOSES MUTATION GAP M6
+# ==========================================================================
+@cocotb.test()
+async def test_link_drop_disarms_pending_start(dut):
+    """A start held across a link drop is DISCARDED, not carried over.
+
+    ⭐ THIS TEST EXISTS BECAUSE A COMMENT CLAIMED IT AND NOTHING CHECKED IT.
+    start_pending_r is cleared by `rst_i || !phy_link_up_i`, and the RTL comment
+    says that is so "a link that drops mid-wait does not leave a stale request
+    armed for the next link-up".  Mutation M6 deleted the !phy_link_up_i term
+    and all seven tests still passed, so the claim was decoration.
+
+    Why the behaviour is right: FC initialisation is entered on entrance to
+    DL_Init and completes once per link-up (Base 2.1 SS3.3.1 p.160), so a link
+    that drops and returns is a NEW link-up with its own FC init.  A scan
+    request made against the previous one has no standing -- the topology may
+    have changed underneath it -- and the integrator has to ask again.
+
+    The failure this prevents is a self-starting enumeration nobody requested,
+    which is the same class of surprise the whole rung exists to remove.
+    """
+    tb = EnumDlTB(dut)
+    await tb.reset()
+    mon = Mon(dut)
+    mon.start()
+    completer = PhyCompleter(tb, device=acceptance_device())
+    completer.start()
+    completer.serve()
+
+    # Arm the latch: a start while the gate is shut.
+    await ReadOnly()
+    assert int(dut.fc_init_done_o.value) == 0, "premise: gate must be shut"
+    await RisingEdge(dut.clk_i)
+    await tb.start_enum()
+
+    # Bounce the link.  The sticky clears, and so must the pending request.
+    dut.phy_link_up_i.value = 0
+    for _ in range(16):
+        await RisingEdge(dut.clk_i)
+    dut.phy_link_up_i.value = 1
+    for _ in range(16):
+        await RisingEdge(dut.clk_i)
+
+    # A fresh FC init for the new link-up.
+    await initialize_flow_control(dut, tb.phy_source)
+    await tb.wait_fc_init()
+
+    # Nothing may start on its own.  Bounded window, then assert idle.
+    for _ in range(2000):
+        await RisingEdge(dut.clk_i)
+        await ReadOnly()
+        assert int(dut.scan_busy_o.value) == 0, (
+            "a scan started after a link bounce although the only start "
+            "request was made against the PREVIOUS link-up -- the pending "
+            "request was not disarmed by the link drop")
+    await ReadOnly()
+    assert mon.tags_presented == [], (
+        "a tag was allocated for a request nobody made on this link-up")
+    assert completer.frames == [], (
+        "a TLP reached the wire for a request nobody made on this link-up")
+    assert int(dut.enum_done_o.value) == 0 and int(dut.enum_error_o.value) == 0, (
+        "the engine reached a terminal state without ever being started")
+
+    dut._log.info(
+        "link bounce: pending start discarded; no scan, no tag, no frame in "
+        "2000 cycles after the new FC init")

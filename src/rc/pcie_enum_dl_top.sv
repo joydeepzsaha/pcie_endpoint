@@ -7,36 +7,49 @@
 // THE ENUMERATOR AND THE WIRE -- the Python that remains is the far end, the
 // device being enumerated, which is where a model belongs.
 //
-// SS SHAPE: PURE WIRING.  This module holds no state and no logic.  It is two
-// instantiations and sixteen internal wires, and neither child changes.  The
-// design record justifies that choice rather than defaulting into it:
-// ~/pcie_docs/evidence/enum-stack/DESIGN_ENUM_STACK_TOP.md SS2.
+// SS SHAPE: WIRING, PLUS ONE BIT OF STATE.  Two instantiations, sixteen
+// internal wires, and exactly one register -- start_pending_r, the start gate
+// below.  Neither child changes.  This module was PURE wiring until the start
+// gate landed; the design record justifies the original choice rather than
+// defaulting into it (~/pcie_docs/evidence/enum-stack/DESIGN_ENUM_STACK_TOP.md
+// SS2), and ~/pcie_docs/evidence/start-gate/ records why the one register had
+// to be added here rather than in either child.
 //
-// SS WHY scan_start_i IS A TOP-LEVEL INPUT AND NOT GATED HERE.
+// SS THE START GATE.  scan_start_i IS GATED HERE, AND THIS IS THE WHOLE RUNG.
 // The correct start condition is NOT phy_link_up_i.  It is the Transaction
 // Layer's filtered view of flow-control initialisation -- Base 2.1 SS3.3.1
 // p.160, quoted in pcie_rc_dl_top.sv:176-177: for VC0 the FC_INIT sequence is
 // entered on entrance to DL_Init and completes once per link-up, and a
 // transmitter holds no credit until it does.
 //
-// That signal is pcie_rc_dl_top's fc_init_sticky_r (pcie_rc_dl_top.sv:181) and
-// IT IS NOT ON ITS PORT LIST.  Gating scan_start_i inside this module is
-// therefore impossible without a surface change to a child, which is a
-// separate rung with its own brief (shape (iii); DESIGN SS9 D1).  So the
-// integrator sequences the start, exactly as bar_enable_i and bridge_enable_i
-// are already integrator-supplied levels, and exactly as all three existing
-// seam benches already do (tb/rc/test_pcie_enum_bridge_tlp.py:194-197).
+// This block previously said that signal "IS NOT ON ITS PORT LIST", and
+// deferred the gate to a later rung on that ground.  It is on the port list
+// now: pcie_rc_dl_top exposes fc_init_done_o, and this module consumes it.
 //
-// !! THIS HAS TEETH, AND THE BENCH DEMONSTRATES IT.  Tag allocation sits
-// UPSTREAM of the credit gate (pcie_enum_scan.sv:137-144) and the completion
-// timer measures from ALLOCATION (tlp_request_tracker.sv:39).  A scan_start_i
-// that fires on link-up alone produces a request that is tagged, parked in the
-// VC buffer, and TIMES OUT HAVING NEVER BEEN TRANSMITTED.  The enumerator
-// cannot see it coming: it reads neither outstanding_o nor any tag, and that
-// is structural, not an oversight (pcie_enum_scan.sv:145-150).
-// test_pcie_enum_dl_top.py's start-gate negative control drives exactly this
-// and asserts the failure, so the hazard shape (iii) closes is demonstrated
-// rather than described.
+// !! THE HAZARD THE GATE CLOSES.  Tag allocation sits UPSTREAM of the credit
+// gate (pcie_enum_scan.sv:137-144) and the completion timer measures from
+// ALLOCATION (tlp_request_tracker.sv:39).  A scan_start_i that fires on
+// link-up alone produces a request that is tagged, parked in the VC buffer,
+// and TIMES OUT HAVING NEVER BEEN TRANSMITTED.  The enumerator cannot see it
+// coming: it reads neither outstanding_o nor any tag, and that is structural,
+// not an oversight (pcie_enum_scan.sv:145-150).  Measured before the gate
+// existed: no frame in 4000 cycles, ENUM_ERR_TIMEOUT at 33116 ns.
+//
+// !! WHY A LATCH AND NOT JUST AN AND GATE.  A bare
+// scan_start_i && fc_init_done_o would ANNIHILATE a start request that arrives
+// early rather than delay it, because a requester is entitled to PULSE the
+// start -- and the bench does exactly that (test_pcie_enum_dl_top.py:296-302,
+// one cycle high).  The engine's start is a command, not a pulse train: a
+// request made before the gate opens must take effect WHEN it opens, not be
+// lost.  pcie_enum_scan re-samples scan_start_i every cycle it sits in S_IDLE
+// (pcie_enum_scan.sv:346), so it will accept the release whenever it comes --
+// but nothing in the engine REMEMBERS a request that was masked away, which is
+// why the memory has to live here.
+//
+// ONLY THE OUTER START IS GATED.  pcie_enum_top chains its second bus level
+// from bus_done_o (pcie_enum_top.sv:490); that path is downstream of a scan
+// that has already run, so ANDing FC-init into it would gate a condition
+// already implied and could only stall multi-bus traversal.
 //
 // SS IDENTITY.  A Root Complex's Requester ID is its own BDF, fixed at 00:00.0
 // for the whole run, so requester_id_i / completer_id_i / bus_number_i /
@@ -119,8 +132,22 @@ module pcie_enum_dl_top
     output logic [4:0]                  cfg_device_number_o,
     output logic [2:0]                  cfg_function_number_o,
 
+    // ---- start-gate status, forwarded from pcie_rc_dl_top -------------------
+    // Both are pass-throughs, exposed because hardware wants them: a status LED
+    // or an ILA probe answering "why is nothing happening?" without a
+    // hierarchical reach.  fc_init_done_o is also what this module's own start
+    // gate runs on, so probing it shows the gate's input, not a copy of it.
+    // ok_to_issue_o carries three of the four conjuncts of the real parking
+    // decision; pcie_rc_dl_top's port declaration explains which one is left
+    // out and why.
+    output logic                        fc_init_done_o,
+    output logic                        ok_to_issue_o,
+
     // ---- enumeration control ------------------------------------------------
-    // scan_start_i: sequenced by the integrator, NOT gated here -- see header.
+    // scan_start_i: a COMMAND, not a pulse train.  Assert it whenever you want
+    // the scan to run; if flow control has not initialised yet the request is
+    // held and honoured when it does.  Level or single-cycle pulse both work.
+    // See the start-gate block in the header.
     input  logic                        scan_start_i,
     input  logic [7:0]                  scan_bus_i,
     input  logic                        bar_enable_i,
@@ -235,6 +262,42 @@ module pcie_enum_dl_top
   logic                       rc_tready;
 
   // =========================================================================
+  // THE START GATE.  See the header block for the spec argument and for why
+  // this is a latch rather than a bare AND.
+  //
+  // start_pending_r remembers a start requested while the gate was shut, so a
+  // single-cycle scan_start_i is DELAYED rather than lost.  Cleared by the same
+  // condition that clears the FC-init state it waits on -- reset or link-down
+  // (pcie_rc_dl_top.sv:183) -- so a link that drops mid-wait does not leave a
+  // stale request armed for the next link-up.
+  //
+  // ARM ORDER: the release arm precedes the set arm, so a request arriving in
+  // the very cycle the gate opens is passed through by the scan_start_i term of
+  // the assign below and is never latched.
+  //
+  // !! THIS IS DEFENSIVE, NOT LOAD-BEARING, AND THE CENSUS PROVED IT.  This
+  // comment previously claimed the reverse order "would fire a SECOND, spurious
+  // scan one cycle later".  That is false here: reversing the arms leaves
+  // scan_start_gated high for one extra cycle, but pcie_enum_scan's terminal
+  // states hold until reset and the FSM never re-enters S_IDLE
+  // (pcie_enum_scan.sv:413-419), so nothing can consume the extra cycle.
+  // Mutation M5 swapped the arms and all 7 tests still passed -- an EQUIVALENT
+  // mutant, not a test gap, and no test was added because there is no
+  // behaviour left to observe.  The order is kept because it is the correct one
+  // if the engine ever gains a re-arm path; the claim that it mattered TODAY
+  // was wrong.
+  // =========================================================================
+  logic start_pending_r;
+  always_ff @(posedge clk_i) begin
+    if (rst_i || !phy_link_up_i) start_pending_r <= 1'b0;
+    else if (fc_init_done_o)     start_pending_r <= 1'b0;
+    else if (scan_start_i)       start_pending_r <= 1'b1;
+  end
+
+  logic scan_start_gated;
+  assign scan_start_gated = fc_init_done_o && (scan_start_i || start_pending_r);
+
+  // =========================================================================
   // The enumeration engine.  Only master on the RQ socket.
   // =========================================================================
   pcie_enum_top #(
@@ -248,7 +311,7 @@ module pcie_enum_dl_top
       .clk_i(clk_i),
       .rst_i(rst_i),
 
-      .scan_start_i   (scan_start_i),
+      .scan_start_i   (scan_start_gated),
       .scan_bus_i     (scan_bus_i),
       .bar_enable_i   (bar_enable_i),
       .bridge_enable_i(bridge_enable_i),
@@ -336,6 +399,9 @@ module pcie_enum_dl_top
       .phy_link_up_i    (phy_link_up_i),
       .idle_valid_i     (idle_valid_i),
       .transmit_enable_i(transmit_enable_i),
+
+      .fc_init_done_o(fc_init_done_o),
+      .ok_to_issue_o (ok_to_issue_o),
 
       .s_phy_axis_tdata (s_phy_axis_tdata),
       .s_phy_axis_tkeep (s_phy_axis_tkeep),
