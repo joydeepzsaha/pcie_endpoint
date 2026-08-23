@@ -1062,3 +1062,159 @@ async def test_vendor_ffff_on_success_is_present(dut):
         "FFFFh sentinel: present=1, vendor=0xffff, device=0xffff, "
         f"header_type={int(dut.header_type_o.value):#04x} (the "
         "non-fixed-point companion)")
+
+
+# ==========================================================================
+# (8) ok_to_issue_o -- CLOSES MUTATION GAP M4
+# ==========================================================================
+@cocotb.test()
+async def test_ok_to_issue_tracks_all_three_conjuncts(dut):
+    """ok_to_issue_o is the three-term conjunction, and is NOT fc_init_done_o.
+
+    ⭐ THIS TEST EXISTS BECAUSE THE MUTATION CENSUS FOUND NOTHING WATCHING THE
+    PORT.  M4 replaced the whole expression with 1'b1 and ALL SEVEN tests
+    passed, on both rows that instantiate the module.  An output no test reads
+    is an output with no contract, however carefully its declaration is worded.
+
+    What the port means (pcie_rc_dl_top's declaration argues it at length): the
+    STANDING preconditions for transmission.  The real parking decision is
+    tlp_layer.sv:280,
+
+        vc_packet_ready = credit_request_ready && transmit_enable_i && link_up_i
+
+    and this port carries the three terms that are state.  The fourth,
+    credit_request_ready, is request-qualified rather than state and is
+    deliberately absent -- see that declaration for why exporting it would need
+    a request class to be chosen.
+
+    !! THE ASSERTION THAT MATTERS IS THE THIRD ONE.  Anyone reading the name
+    would guess ok_to_issue_o is an alias of fc_init_done_o; the recon found it
+    is not, and this is the point that proves it -- FC init is complete, so
+    fc_init_done_o is HIGH, while transmit_enable_i is low and ok_to_issue_o is
+    therefore LOW.  A design that collapsed the two ports would pass every other
+    assertion in this file and fail here.
+    """
+    tb = EnumDlTB(dut)
+    await tb.reset()
+
+    # (a) before FC init: no conjunct is satisfied.
+    await ReadOnly()
+    assert int(dut.fc_init_done_o.value) == 0, "premise: FC init not complete"
+    assert int(dut.ok_to_issue_o.value) == 0, (
+        "ok_to_issue_o is high before flow control initialised -- a "
+        "transmitter holds no credit until FC init completes "
+        "(Base 2.1 SS3.3.1 p.160)")
+
+    completer = PhyCompleter(tb, device=acceptance_device())
+    completer.start()
+    completer.serve()
+    await initialize_flow_control(dut, tb.phy_source)
+    await tb.wait_fc_init()
+
+    # (b) all three satisfied.
+    await ReadOnly()
+    assert int(dut.fc_init_done_o.value) == 1
+    assert int(dut.ok_to_issue_o.value) == 1, (
+        "FC init is complete, transmit is enabled and the link is up, but "
+        "ok_to_issue_o is low")
+
+    # (c) ⭐ THE DISCRIMINATING POINT: transmit_enable_i alone drops it, while
+    #     fc_init_done_o stays high.  This is what separates the two ports.
+    #     The RisingEdge leaves the read-only phase (b) put us in -- cocotb
+    #     refuses a write scheduled during ReadOnly.
+    await RisingEdge(dut.clk_i)
+    dut.transmit_enable_i.value = 0
+    await RisingEdge(dut.clk_i)
+    await ReadOnly()
+    assert int(dut.fc_init_done_o.value) == 1, (
+        "premise: dropping transmit_enable_i must not disturb FC init")
+    assert int(dut.ok_to_issue_o.value) == 0, (
+        "ok_to_issue_o stayed high with transmit_enable_i low. It is NOT an "
+        "alias of fc_init_done_o -- it carries the class-independent conjuncts "
+        "of the real parking decision (tlp_layer.sv:280), and transmit_enable_i "
+        "is one of them")
+    await RisingEdge(dut.clk_i)
+    dut.transmit_enable_i.value = 1
+
+    # (d) the link conjunct, which is not redundant with the sticky bit: the
+    #     sticky is REGISTERED and lags a link drop by a cycle, while the gate
+    #     this port mirrors is combinational.
+    await RisingEdge(dut.clk_i)
+    dut.phy_link_up_i.value = 0
+    await RisingEdge(dut.clk_i)
+    await ReadOnly()
+    assert int(dut.ok_to_issue_o.value) == 0, (
+        "ok_to_issue_o stayed high with the link down")
+
+    dut._log.info("ok_to_issue_o: 0 before FC init, 1 after, 0 on "
+                  "!transmit_enable_i with fc_init_done_o still 1, 0 on "
+                  "link-down")
+
+
+# ==========================================================================
+# (9) A link drop disarms a pending start -- CLOSES MUTATION GAP M6
+# ==========================================================================
+@cocotb.test()
+async def test_link_drop_disarms_pending_start(dut):
+    """A start held across a link drop is DISCARDED, not carried over.
+
+    ⭐ THIS TEST EXISTS BECAUSE A COMMENT CLAIMED IT AND NOTHING CHECKED IT.
+    start_pending_r is cleared by `rst_i || !phy_link_up_i`, and the RTL comment
+    says that is so "a link that drops mid-wait does not leave a stale request
+    armed for the next link-up".  Mutation M6 deleted the !phy_link_up_i term
+    and all seven tests still passed, so the claim was decoration.
+
+    Why the behaviour is right: FC initialisation is entered on entrance to
+    DL_Init and completes once per link-up (Base 2.1 SS3.3.1 p.160), so a link
+    that drops and returns is a NEW link-up with its own FC init.  A scan
+    request made against the previous one has no standing -- the topology may
+    have changed underneath it -- and the integrator has to ask again.
+
+    The failure this prevents is a self-starting enumeration nobody requested,
+    which is the same class of surprise the whole rung exists to remove.
+    """
+    tb = EnumDlTB(dut)
+    await tb.reset()
+    mon = Mon(dut)
+    mon.start()
+    completer = PhyCompleter(tb, device=acceptance_device())
+    completer.start()
+    completer.serve()
+
+    # Arm the latch: a start while the gate is shut.
+    await ReadOnly()
+    assert int(dut.fc_init_done_o.value) == 0, "premise: gate must be shut"
+    await RisingEdge(dut.clk_i)
+    await tb.start_enum()
+
+    # Bounce the link.  The sticky clears, and so must the pending request.
+    dut.phy_link_up_i.value = 0
+    for _ in range(16):
+        await RisingEdge(dut.clk_i)
+    dut.phy_link_up_i.value = 1
+    for _ in range(16):
+        await RisingEdge(dut.clk_i)
+
+    # A fresh FC init for the new link-up.
+    await initialize_flow_control(dut, tb.phy_source)
+    await tb.wait_fc_init()
+
+    # Nothing may start on its own.  Bounded window, then assert idle.
+    for _ in range(2000):
+        await RisingEdge(dut.clk_i)
+        await ReadOnly()
+        assert int(dut.scan_busy_o.value) == 0, (
+            "a scan started after a link bounce although the only start "
+            "request was made against the PREVIOUS link-up -- the pending "
+            "request was not disarmed by the link drop")
+    await ReadOnly()
+    assert mon.tags_presented == [], (
+        "a tag was allocated for a request nobody made on this link-up")
+    assert completer.frames == [], (
+        "a TLP reached the wire for a request nobody made on this link-up")
+    assert int(dut.enum_done_o.value) == 0 and int(dut.enum_error_o.value) == 0, (
+        "the engine reached a terminal state without ever being started")
+
+    dut._log.info(
+        "link bounce: pending start discarded; no scan, no tag, no frame in "
+        "2000 cycles after the new FC init")

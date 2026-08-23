@@ -271,11 +271,21 @@ module pcie_enum_dl_top
   // (pcie_rc_dl_top.sv:183) -- so a link that drops mid-wait does not leave a
   // stale request armed for the next link-up.
   //
-  // !! ARM ORDER IS LOAD-BEARING.  The release arm precedes the set arm, so a
-  // request arriving in the very cycle the gate opens is passed through by the
-  // scan_start_i term of the assign below and is never latched.  With the arms
-  // the other way round it would latch and then fire a SECOND, spurious scan
-  // one cycle later.
+  // ARM ORDER: the release arm precedes the set arm, so a request arriving in
+  // the very cycle the gate opens is passed through by the scan_start_i term of
+  // the assign below and is never latched.
+  //
+  // !! THIS IS DEFENSIVE, NOT LOAD-BEARING, AND THE CENSUS PROVED IT.  This
+  // comment previously claimed the reverse order "would fire a SECOND, spurious
+  // scan one cycle later".  That is false here: reversing the arms leaves
+  // scan_start_gated high for one extra cycle, but pcie_enum_scan's terminal
+  // states hold until reset and the FSM never re-enters S_IDLE
+  // (pcie_enum_scan.sv:413-419), so nothing can consume the extra cycle.
+  // Mutation M5 swapped the arms and all 7 tests still passed -- an EQUIVALENT
+  // mutant, not a test gap, and no test was added because there is no
+  // behaviour left to observe.  The order is kept because it is the correct one
+  // if the engine ever gains a re-arm path; the claim that it mattered TODAY
+  // was wrong.
   // =========================================================================
   logic start_pending_r;
   always_ff @(posedge clk_i) begin
