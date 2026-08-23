@@ -73,6 +73,10 @@ module tb_pcie_enum_dl_top;
   logic [4:0] cfg_device_number_o;
   logic [2:0] cfg_function_number_o;
 
+  // ---- start-gate status, real ports since the start-gate rung -------------
+  logic       fc_init_done_o;
+  logic       ok_to_issue_o;
+
   // ---- enumeration control ------------------------------------------------
   logic       scan_start_i;
   logic [7:0] scan_bus_i;
@@ -182,16 +186,23 @@ module tb_pcie_enum_dl_top;
   // =========================================================================
   // Verification-only visibility, by hierarchical reference.
   // =========================================================================
-  // The FC seam, two levels deep -- one deeper than tb_pcie_rc_dl_top.sv:95-96,
-  // same mechanism.  fc_initialized_o is the FILTER OUTPUT, the wire
+  // The FC seam.  fc_initialized_o is the FILTER OUTPUT, the wire
   // u_rc.fc_initialized_i is driven by, so the shared initialize_flow_control
-  // helper waits on the TRANSACTION LAYER's view of FC init.  That is the
-  // start gate the design argues for, and the reason this alias exists:
-  // pcie_enum_dl_top deliberately does not gate scan_start_i itself, because
-  // fc_init_sticky_r is not on pcie_rc_dl_top's port list (DESIGN SS2).
-  // fc_initialized_dll is the DLL's raw, glitching output.
+  // helper waits on the TRANSACTION LAYER's view of FC init.
+  //
+  // IT IS NO LONGER A HIERARCHICAL REACH.  It is an alias of the real port
+  // fc_init_done_o, kept under the old name only because the shared helper
+  // reads dut.fc_initialized_o by that name
+  // (test_pcie_endpoint_top.py:170).  The reach into fc_init_sticky_r that
+  // used to be here existed because the signal was not on pcie_rc_dl_top's
+  // port list; the start-gate rung put it there, and gating now happens in the
+  // DUT rather than in the bench.
+  //
+  // fc_initialized_dll is the DLL's raw, glitching output and STAYS a reach:
+  // it is deliberately not a port, because nothing outside verification should
+  // consume an unfiltered FC-init.
   wire        fc_initialized_dll = dut.u_rcdl.dl_fc_initialized;
-  wire        fc_initialized_o   = dut.u_rcdl.fc_init_sticky_r;
+  wire        fc_initialized_o   = fc_init_done_o;
   wire        fc_update_valid_o  = dut.u_rcdl.dl_fc_update_valid;
   wire [7:0]  fc_ph_o   = dut.u_rcdl.dl_fc_ph;
   wire [11:0] fc_pd_o   = dut.u_rcdl.dl_fc_pd;
@@ -257,6 +268,9 @@ module tb_pcie_enum_dl_top;
       .cfg_bus_number_o     (cfg_bus_number_o),
       .cfg_device_number_o  (cfg_device_number_o),
       .cfg_function_number_o(cfg_function_number_o),
+
+      .fc_init_done_o(fc_init_done_o),
+      .ok_to_issue_o (ok_to_issue_o),
 
       .scan_start_i   (scan_start_i),
       .scan_bus_i     (scan_bus_i),
