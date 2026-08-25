@@ -3,6 +3,14 @@
 # This file is sourced by s1_ooc.tcl for UNIT=endpoint.  The SystemVerilog
 # hierarchy performs the instantiation; this manifest makes every dependency
 # available to Vivado in package-before-module order.
+#
+# Endpoint architecture:
+#   TLP -> DLL -> logical PHY -> Gen1 physical processing
+# The active physical processing retains the Gen1 byte scrambler and 8b/10b
+# encoder/decoder.  Gen3 scrambling is preserved in the repository for future
+# use, but is intentionally commented out of this Gen1 endpoint manifest:
+#   src/scrambler/gen3_byte_scramble.sv
+#   src/scrambler/gen3_scramble.sv
 
 set ENDPOINT_TOP pcie_endpoint_top
 set ENDPOINT_GENERICS {
@@ -72,9 +80,7 @@ set ENDPOINT_FILES {
   src/dllp/pcie_datalink_layer.sv
 
   src/scrambler/byte_scramble.sv
-  src/scrambler/gen3_byte_scramble.sv
   src/scrambler/gen1_scramble.sv
-  src/scrambler/gen3_scramble.sv
   src/scrambler/scrambler.sv
   src/scrambler/encode_8b10b.sv
   src/scrambler/decode_8b10b.sv

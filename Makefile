@@ -93,6 +93,10 @@ UNIT ?=
 # Integrated Gen1 endpoint inputs.  synth/endpoint.tcl remains the ordered
 # Vivado manifest; this list gives Make visibility of the complete dependency
 # set so missing or renamed endpoint sources fail before Vivado is launched.
+# Gen3 scrambling remains available for future generations but is commented
+# out of this Gen1 dependency set:
+#   src/scrambler/gen3_byte_scramble.sv
+#   src/scrambler/gen3_scramble.sv
 ENDPOINT_SYNTH_SOURCES := \
 	src/tlp/tlp_pkg.sv \
 	src/packages/pcie_datalink_pkg.sv \
@@ -147,9 +151,7 @@ ENDPOINT_SYNTH_SOURCES := \
 	src/dllp/pcie_flow_ctrl_init.sv \
 	src/dllp/pcie_datalink_layer.sv \
 	src/scrambler/byte_scramble.sv \
-	src/scrambler/gen3_byte_scramble.sv \
 	src/scrambler/gen1_scramble.sv \
-	src/scrambler/gen3_scramble.sv \
 	src/scrambler/scrambler.sv \
 	src/scrambler/encode_8b10b.sv \
 	src/scrambler/decode_8b10b.sv \
