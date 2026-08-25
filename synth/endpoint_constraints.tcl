@@ -1,14 +1,14 @@
 # Timing-constraint generator for the integrated Gen1 x1 endpoint OOC flow.
 # Gen1 uses the logical PHY's 16-bit PIPE width: 2.5 GT/s / 10 * 16 = 125 MHz.
 
-set CLK_PERIOD_NS        10.000
+set CLK_PERIOD_NS        9.000
 set PIPE_RX_PERIOD_NS     8.000
 set PIPE_TX_PERIOD_NS     8.000
 set CLK_UNCERTAINTY_NS    0.100
 set INPUT_DELAY_MIN_NS    0.000
-set INPUT_DELAY_MAX_NS    2.000
+set INPUT_DELAY_MAX_NS    4.523
 set OUTPUT_DELAY_MIN_NS   0.000
-set OUTPUT_DELAY_MAX_NS   2.000
+set OUTPUT_DELAY_MAX_NS   4.000
 
 proc write_pcie_ooc_constraints {xdc_path} {
     global CLK_PERIOD_NS PIPE_RX_PERIOD_NS PIPE_TX_PERIOD_NS

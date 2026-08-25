@@ -76,7 +76,7 @@ module packet_reg #(
         end
       end
       ST_READOUT: begin
-        for (i = (DEPTH - 1); i > 0; i--) begin
+        for (int i = (DEPTH - 1); i > 0; i--) begin
           data[i-1] <= data[i];
         end
         cnt[DEPTH_W-1:0]   <= cnt[DEPTH_W-1:0] - 1'b1;

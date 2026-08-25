@@ -25,6 +25,14 @@ module scrambler
   logic [31:0] gen1_data;
   logic gen1_valid;
 
+  /*
+   * Future Gen3 scrambling path.
+   *
+   * The integrated endpoint is currently Gen1-only, so this path is kept as
+   * commented source and is not elaborated during endpoint synthesis or test.
+   * Restore these declarations together with gen3_scramble_inst and the rate
+   * selection mux below when a separately verified Gen3 PHY is enabled.
+   *
   logic [3:0] gen3_data_k;
   logic [31:0] gen3_data;
   logic gen3_valid;
@@ -43,6 +51,7 @@ module scrambler
       .pipe_width_i(pipe_width_i),
       .data_k_out_o(gen3_data_k)
   );
+  */
 
   gen1_scramble gen1_scramble_inst (
       .clk_i(clk_i),
@@ -71,6 +80,11 @@ module scrambler
   end
 
   always_comb begin
+    // The endpoint physical path is fixed to the functional Gen1 scrambler.
+    data_k_out_o = gen1_data_k;
+    data_out_o   = gen1_data;
+
+    /* Future Gen3 rate-selection mux; intentionally disabled for Gen1.
     if (curr_data_rate_i < gen3) begin
       data_k_out_o = gen1_data_k;
       data_out_o = gen1_data;
@@ -80,6 +94,7 @@ module scrambler
       data_out_o = gen3_data;
       // data_valid_o = gen3_valid;
     end
+    */
   end
 
 
