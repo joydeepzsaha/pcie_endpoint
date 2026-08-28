@@ -270,3 +270,21 @@ async def dllp_frame_reaches_the_axis_port(dut):
                              for d, k, l in beats))
     assert beats, ("a framed DLLP (SDP + 6 bytes + END, sec 4.2.2 p.195) "
                    "produced no beat on m_dllp_axis_*")
+
+    # The payload must arrive DESCRAMBLED and in order.  Both expectations are
+    # computed from what was sent, never from what was seen: sec 4.2.3 p.199
+    # scrambles D characters on the wire and the receiver must undo exactly that.
+    want0 = (payload[0] | payload[1] << 8 | payload[2] << 16 | payload[3] << 24)
+    assert beats[0][0] == want0, (
+        "first DLLP beat: got %08x want %08x (payload %s)"
+        % (beats[0][0], want0, " ".join("%02x" % p for p in payload)))
+    assert len(beats) >= 2, "a 6-byte DLLP payload needs two 32-bit beats"
+    want1_lo = payload[4] | payload[5] << 8
+    assert (beats[1][0] & 0xFFFF) == want1_lo, (
+        "second DLLP beat, low half: got %04x want %04x"
+        % (beats[1][0] & 0xFFFF, want1_lo))
+    assert beats[-1][2] == 1, "the last DLLP beat must assert tlast"
+    # Not asserted, but recorded: tkeep on the final beat is 0xF even though only
+    # two payload bytes remain (data_handler.sv:247).  That is an AXIS-convention
+    # question, not a Base 2.1 claim, so it is a finding rather than a check.
+    dut._log.info("final-beat tkeep = 0x%x (2 payload bytes remain)" % beats[-1][1])

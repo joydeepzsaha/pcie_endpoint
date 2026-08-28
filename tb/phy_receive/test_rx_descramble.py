@@ -33,7 +33,14 @@ PIPE_WIDTH = 8          # Gen1 PIPE: one Symbol per clock
 FLUSH = 10              # extra valid Symbols to push the 4-stage pipeline out
 
 
-async def setup(dut):
+async def setup(dut, settle=4):
+    """settle -- idle clocks between reset release and the first Symbol.
+
+    It is a parameter because gen1_scramble.sv:97 advances the LFSR on every
+    clock rather than every Symbol, so idle clocks are not neutral: they move
+    the descrambler's state.  seed_is_ffff_before_any_com sets settle=0 to
+    remove that variable and leave only the pipeline offset.
+    """
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     dut.rst_i.value = 1
     dut.data_in_i.value = 0
@@ -42,7 +49,8 @@ async def setup(dut):
     dut.pipe_width_i.value = PIPE_WIDTH
     await ClockCycles(dut.clk_i, 8)
     dut.rst_i.value = 0
-    await ClockCycles(dut.clk_i, 4)
+    if settle:
+        await ClockCycles(dut.clk_i, settle)
 
 
 async def drive(dut, stream, gap_after=None, gap_len=0):
@@ -332,3 +340,47 @@ async def non_ts_ordered_set_suppresses_descrambling(dut):
     got = await drive(dut, stream)
     n = compare(dut, got, golden(stream), "data after a 4-Symbol FTS Ordered Set")
     assert n >= len(prefix) + len(payload), "only %d Symbols compared" % n
+
+
+# --------------------------------------------------------------- A2, alone
+
+@cocotb.test(expect_fail=True)
+async def seed_is_ffff_before_any_com(dut):
+    """A2 in isolation: sec 4.2.3 p.199 -- "The initialized value of an LFSR seed
+    (D0-D15) is FFFFh."  App. C.1 p.699 starts `lfsr = 0xffff` and XORs the very
+    first byte with it.
+
+    Every other test in this file anchors on a COM first, and a COM re-seeds the
+    LFSR through a different path (gen1_scramble.sv:~230 scramble_reset, forcing
+    '1 at :76-77).  None of them can tell the reset seed from the COM seed, so
+    this drives data straight out of reset with no COM at all.
+
+    DIVERGENCE, and NOT the one predicted.  PREDICTIONS_PHY_RX.md sec 2 called
+    this "conforms" on the strength of gen1_scramble.sv:85 holding the right
+    value -- that reasoning was about the register and not about what is
+    observable, and it is scored a loss.
+
+    The seed register IS FFFFh.  What fails is alignment: :85 loads the LFSR the
+    instant reset releases, while the data it must XOR against is still three
+    stages away from the output (the XOR at :272 pairs the current lfsr_out with
+    Q.data[NumPipelines-2]).  By the time the first Symbol arrives at that stage
+    the LFSR has advanced three times, so it descrambles with the fourth state
+    instead of the seed.  A COM hides this because its reset propagates through
+    the same pipeline and re-anchors both sides together -- which is why a link
+    that always begins with training sequences never notices.
+
+    settle=0 removes the idle-clock variable (:97 advances the LFSR every clock,
+    the A8 defect), leaving the pipeline offset as the only cause.
+    """
+    await setup(dut, settle=0)
+    payload = [(0x2A + 3 * i) & 0xFF for i in range(16)]
+    tx = Descrambler()                       # starts at the spec seed, no COM
+    on_wire = [tx.symbol(p, is_k=False) for p in payload]
+    stream = data_syms(on_wire) + data_syms([0x00] * FLUSH)
+    got = await drive(dut, stream)
+    n = compare(dut, got, golden(stream), "reset seed, no COM")
+    assert n >= len(payload), "only %d Symbols compared" % n
+    body = [g[0] for g in got[:len(payload)]]
+    assert body == payload, ("descrambled from the reset seed: got %s want %s"
+                             % (" ".join("%02x" % b for b in body),
+                                " ".join("%02x" % b for b in payload)))
