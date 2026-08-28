@@ -28,6 +28,10 @@ filesets:
     files:
       - test_rx_descramble.py : {file_type : user, copyto : .}
 
+  cocotb_os:
+    files:
+      - test_rx_os.py : {file_type : user, copyto : .}
+
 targets:
   # T1 -- byte_scramble, the 8-shift LFSR advance of Base 2.1 App. C.1 p.698.
   # Combinational and 16 bits of state, so the oracle is settled EXHAUSTIVELY
@@ -62,3 +66,20 @@ targets:
         - waiver.vlt
     filesets : [scrambler_rtl, golden, cocotb_descramble]
     toplevel : [gen1_scramble]
+
+  # T3 -- ordered_set_handler at pipe_width_i=8.  TS1/TS2 recognition (Tables 4-2
+  # and 4-3), Lane polarity inversion (4.2.4.4 p.208), the EIOS (Table 4-4) and
+  # the EIEOS (Table 4-5, which does not exist at 2.5 GT/s).  eieos_valid_o is
+  # observable only here -- phy_receive.sv:180 discards the port.
+  verilate_rx_os:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_rx_os
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, golden, cocotb_os]
+    toplevel : [ordered_set_handler]
