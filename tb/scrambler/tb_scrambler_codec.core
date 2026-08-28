@@ -1,0 +1,53 @@
+CAPI=2:
+name: fusesoc:pcie:tb_scrambler_codec:1.0.0
+description: Exhaustive spec-golden bench for decode_8b10b (Base 2.1 Appendix B)
+
+# Oracles, page citations and the MindShare cross-check for every assertion live
+# in pcie_docs/evidence/decode-8b10b/ORACLES_8B10B.md.  Expected values are
+# computed from PCI Express Base Spec Rev 2.1 Tables B-1/B-2 by
+# tb/scrambler/golden_8b10b.py, which carries those tables verbatim; none is
+# captured from the DUT.
+#
+# decode_8b10b takes 10 code bits plus one running-disparity bit, so the input
+# space is 2048 combinations and ALL of them are driven.  For a combinational
+# module that is a complete proof rather than a sample -- the same standing as
+# byte_scramble's 65536-state sweep in Rung 3.
+#
+# This is the first target in the repository to name a member of the 8b/10b codec
+# as a toplevel.  The module is in the compile set of every phy_scrambler
+# dependant but was elaborated by none of the 68 pre-existing gate rows; the two
+# testbenches that instantiate it (tb/scrambler/test_8b10b.v and
+# tb/dllp/tb_pcie_datalink_layer.v) are referenced by no .core.  See
+# CENSUS_8B10B.md sec 5.
+
+filesets:
+  rtl:
+    depend:
+      - fusesoc:pcie:phy_scrambler
+
+  golden:
+    files:
+      - golden_8b10b.py : {file_type : user, copyto : .}
+
+  cocotb_decode:
+    files:
+      - test_decode_8b10b.py : {file_type : user, copyto : .}
+
+targets:
+  # T6 -- decode_8b10b, exhaustively.  Purely combinational: no clock, no reset,
+  # no state (CENSUS_8B10B.md sec 2), so running disparity enters as dispin and
+  # leaves as dispout and the sequence tests chain the DUT's own dispout back
+  # into its dispin.  No parameters exist on this module, so unlike the Rung-3
+  # RX benches there is no second geometry to run.
+  verilate_decode_8b10b:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_decode_8b10b
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, golden, cocotb_decode]
+    toplevel : [decode_8b10b]
