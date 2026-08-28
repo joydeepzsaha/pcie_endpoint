@@ -1,0 +1,43 @@
+CAPI=2:
+name: fusesoc:pcie:tb_phy_receive:1.0.0
+description: Spec-golden RX benches for the phy_receive closure (Base 2.1 ch.4, Gen1 x1)
+
+# Oracles, citations and the MindShare cross-check for every assertion in these
+# benches live in pcie_docs/evidence/phy-rx-golden/ORACLES_PHY_RX.md.  Expected
+# values are computed from PCI Express Base Spec Rev 2.1 by tb/phy_receive/rx_golden.py;
+# none is captured from the DUT.
+
+filesets:
+  rtl:
+    depend:
+      - fusesoc:pcie:phy_receive
+
+  scrambler_rtl:
+    depend:
+      - fusesoc:pcie:phy_scrambler
+
+  golden:
+    files:
+      - rx_golden.py : {file_type : user, copyto : .}
+
+  cocotb_lfsr:
+    files:
+      - test_rx_lfsr.py : {file_type : user, copyto : .}
+
+targets:
+  # T1 -- byte_scramble, the 8-shift LFSR advance of Base 2.1 App. C.1 p.698.
+  # Combinational and 16 bits of state, so the oracle is settled EXHAUSTIVELY
+  # (all 65536 states), then anchored against the two golden tables printed in
+  # Base 2.1 p.700.
+  verilate_rx_lfsr:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_rx_lfsr
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [scrambler_rtl, golden, cocotb_lfsr]
+    toplevel : [byte_scramble]
