@@ -32,6 +32,10 @@ filesets:
     files:
       - test_rx_os.py : {file_type : user, copyto : .}
 
+  cocotb_closure:
+    files:
+      - test_rx_closure.py : {file_type : user, copyto : .}
+
 targets:
   # T1 -- byte_scramble, the 8-shift LFSR advance of Base 2.1 App. C.1 p.698.
   # Combinational and 16 bits of state, so the oracle is settled EXHAUSTIVELY
@@ -83,3 +87,42 @@ targets:
         - waiver.vlt
     filesets : [rtl, golden, cocotb_os]
     toplevel : [ordered_set_handler]
+
+  # T4 -- the whole phy_receive closure at MAX_NUM_LANES=1: scrambler ->
+  # ordered_set_handler per lane, then block_alignment -> pack_data ->
+  # data_handler -> axis_register -> axis_async_fifo.  Drives PIPE Symbols and
+  # asserts the top-level ports.
+  verilate_rx_closure:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_rx_closure
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, golden, cocotb_closure]
+    toplevel : [phy_receive]
+
+  # T5 -- the same bench at MAX_NUM_LANES=3.  Brief sec 2's geometry rule asks a
+  # depth-parameterized structure to be re-run at a non-power-of-two size; this
+  # closure has no elastic buffer to vary (both FIFO instantiations are commented
+  # out, phy_receive.sv:229-261), so the rule is discharged against the lane
+  # count.  Three exercises the per-lane generate and the MAX_NUM_LANES-derived
+  # bus widths off every power-of-two boundary, killing wrap and off-by-one
+  # mutants that x1 and x4 are both blind to.
+  verilate_rx_closure_x3:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_rx_closure
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GMAX_NUM_LANES=3
+        - waiver.vlt
+    filesets : [rtl, golden, cocotb_closure]
+    toplevel : [phy_receive]
