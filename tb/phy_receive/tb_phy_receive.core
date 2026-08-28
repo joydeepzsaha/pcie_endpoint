@@ -24,6 +24,10 @@ filesets:
     files:
       - test_rx_lfsr.py : {file_type : user, copyto : .}
 
+  cocotb_descramble:
+    files:
+      - test_rx_descramble.py : {file_type : user, copyto : .}
+
 targets:
   # T1 -- byte_scramble, the 8-shift LFSR advance of Base 2.1 App. C.1 p.698.
   # Combinational and 16 bits of state, so the oracle is settled EXHAUSTIVELY
@@ -41,3 +45,20 @@ targets:
         - waiver.vlt
     filesets : [scrambler_rtl, golden, cocotb_lfsr]
     toplevel : [byte_scramble]
+
+  # T2 -- gen1_scramble, the Gen1 descrambler, at pipe_width_i=8 (one Symbol per
+  # clock).  Oracles A2-A8: seed FFFFh, COM re-seeds, SKP does not advance the
+  # LFSR, K codes and TS bodies are not descrambled, and the LFSR advances once
+  # per Symbol.  Expected streams come from the Appendix C.1 golden model.
+  verilate_rx_descramble:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_rx_descramble
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [scrambler_rtl, golden, cocotb_descramble]
+    toplevel : [gen1_scramble]
