@@ -670,8 +670,52 @@ def check_chaining():
     return stuck
 
 
+# The comma is the 7-bit singular pattern 0011111 / 1100000 (Widmer-Franaszek).
+# In 8b/10b exactly three Special Symbols contain it, and PCIe's COM is K28.5.
+COMMA_SYMBOLS = frozenset(("K28.1", "K28.5", "K28.7"))
+
+
+def check_comma():
+    """Exactly K28.1, K28.5 and K28.7 may contain the comma pattern.
+
+    This check is deliberately INDEPENDENT of everything else in this file.  It
+    does not use the parser's column assignment, the round trip, or the partition
+    -- it reads the transmission-order bit string and looks for a 7-bit pattern
+    whose position depends on the `abcdei fghj` split being right.  If a column
+    had been mis-split, or the a..j order reversed, this would not come out.
+
+    It is the strongest single piece of evidence that the committed table is the
+    specification's and not an artifact of the extraction, because the property
+    is documented outside PCIe entirely (it is a property of 8b/10b itself).
+
+    The check is on (symbol, disparity) PAIRS, not on symbol names.  An earlier
+    version collected names across both columns, and a negative control showed it
+    could not see a one-bit corruption of a single column: K28.5's RD+ encoding
+    still carried the comma, so the name stayed in the set and the guard passed.
+    Both columns of all three comma symbols carry the pattern, so the correct
+    assertion is over all six pairs.
+    """
+    expected = frozenset((n, rd) for n in COMMA_SYMBOLS for rd in (RD_NEG, RD_POS))
+    found = set()
+    for sym in SYMBOLS:
+        for rd in (RD_NEG, RD_POS):
+            abcdei, fghj = datain_to_code(sym.code[rd])
+            bits = abcdei + fghj
+            if bits.startswith("0011111") or bits.startswith("1100000"):
+                found.add((sym.name, rd))
+    if found != expected:
+        missing = sorted((n, "RD-" if r == RD_NEG else "RD+") for n, r in expected - found)
+        extra = sorted((n, "RD-" if r == RD_NEG else "RD+") for n, r in found - expected)
+        raise SpecError(
+            "comma-bearing (symbol, disparity) pairs are wrong -- the abcdei/fghj "
+            "column split or the a..j bit order is off. missing=%s extra=%s"
+            % (missing, extra))
+    return sorted({n for n, _ in found})
+
+
 def self_test(verbose=False):
     check_table()
+    check_comma()
     check_spot_vectors()
     check_round_trip()
     counts = check_partition()
@@ -679,6 +723,7 @@ def self_test(verbose=False):
     if verbose:
         print("golden_8b10b self-test: PASS")
         print("  rows parsed              268  (256 D + 12 K)")
+        print("  comma pattern            %s only" % ", ".join(check_comma()))
         print("  round trip               536/536 symbols x disparities")
         print("  distinct valid codes     464 of 1024")
         for rd, label in ((RD_NEG, "RD-"), (RD_POS, "RD+")):
