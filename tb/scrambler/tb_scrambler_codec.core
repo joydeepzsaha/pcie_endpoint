@@ -33,6 +33,10 @@ filesets:
     files:
       - test_decode_8b10b.py : {file_type : user, copyto : .}
 
+  cocotb_encode:
+    files:
+      - test_encode_8b10b.py : {file_type : user, copyto : .}
+
 targets:
   # T6 -- decode_8b10b, exhaustively.  Purely combinational: no clock, no reset,
   # no state (CENSUS_8B10B.md sec 2), so running disparity enters as dispin and
@@ -51,3 +55,26 @@ targets:
         - waiver.vlt
     filesets : [rtl, golden, cocotb_decode]
     toplevel : [decode_8b10b]
+
+  # T7 -- encode_8b10b, exhaustively.  9 data bits + 1 disparity bit = 1024
+  # combinations, all driven.  Unlike the decoder, only 536 of them have a
+  # spec-defined output: k=1 with a byte that is not one of the twelve Special
+  # Symbols is a request Base 2.1 gives no encoding for, and this module has NO
+  # error output to reject it with.  The bench asserts on the 536 and reports the
+  # 488 as declined rather than skipping them silently.
+  #
+  # The round trip through the decoder is deliberately NOT the verdict -- an
+  # encoder and its exact inverse round-trip perfectly whether or not either
+  # matches the spec.  Comparison is against the transcribed Appendix B.
+  verilate_encode_8b10b:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_encode_8b10b
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, golden, cocotb_encode]
+    toplevel : [encode_8b10b]
