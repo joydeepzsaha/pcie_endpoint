@@ -1,0 +1,128 @@
+CAPI=2:
+name: fusesoc:pcie:tb_phy_receive:1.0.0
+description: Spec-golden RX benches for the phy_receive closure (Base 2.1 ch.4, Gen1 x1)
+
+# Oracles, citations and the MindShare cross-check for every assertion in these
+# benches live in pcie_docs/evidence/phy-rx-golden/ORACLES_PHY_RX.md.  Expected
+# values are computed from PCI Express Base Spec Rev 2.1 by tb/phy_receive/rx_golden.py;
+# none is captured from the DUT.
+
+filesets:
+  rtl:
+    depend:
+      - fusesoc:pcie:phy_receive
+
+  scrambler_rtl:
+    depend:
+      - fusesoc:pcie:phy_scrambler
+
+  golden:
+    files:
+      - rx_golden.py : {file_type : user, copyto : .}
+
+  cocotb_lfsr:
+    files:
+      - test_rx_lfsr.py : {file_type : user, copyto : .}
+
+  cocotb_descramble:
+    files:
+      - test_rx_descramble.py : {file_type : user, copyto : .}
+
+  cocotb_os:
+    files:
+      - test_rx_os.py : {file_type : user, copyto : .}
+
+  cocotb_closure:
+    files:
+      - test_rx_closure.py : {file_type : user, copyto : .}
+
+targets:
+  # T1 -- byte_scramble, the 8-shift LFSR advance of Base 2.1 App. C.1 p.698.
+  # Combinational and 16 bits of state, so the oracle is settled EXHAUSTIVELY
+  # (all 65536 states), then anchored against the two golden tables printed in
+  # Base 2.1 p.700.
+  verilate_rx_lfsr:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_rx_lfsr
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [scrambler_rtl, golden, cocotb_lfsr]
+    toplevel : [byte_scramble]
+
+  # T2 -- gen1_scramble, the Gen1 descrambler, at pipe_width_i=8 (one Symbol per
+  # clock).  Oracles A2-A8: seed FFFFh, COM re-seeds, SKP does not advance the
+  # LFSR, K codes and TS bodies are not descrambled, and the LFSR advances once
+  # per Symbol.  Expected streams come from the Appendix C.1 golden model.
+  verilate_rx_descramble:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_rx_descramble
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [scrambler_rtl, golden, cocotb_descramble]
+    toplevel : [gen1_scramble]
+
+  # T3 -- ordered_set_handler at pipe_width_i=8.  TS1/TS2 recognition (Tables 4-2
+  # and 4-3), Lane polarity inversion (4.2.4.4 p.208), the EIOS (Table 4-4) and
+  # the EIEOS (Table 4-5, which does not exist at 2.5 GT/s).  eieos_valid_o is
+  # observable only here -- phy_receive.sv:180 discards the port.
+  verilate_rx_os:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_rx_os
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, golden, cocotb_os]
+    toplevel : [ordered_set_handler]
+
+  # T4 -- the whole phy_receive closure at MAX_NUM_LANES=1: scrambler ->
+  # ordered_set_handler per lane, then block_alignment -> pack_data ->
+  # data_handler -> axis_register -> axis_async_fifo.  Drives PIPE Symbols and
+  # asserts the top-level ports.
+  verilate_rx_closure:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_rx_closure
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, golden, cocotb_closure]
+    toplevel : [phy_receive]
+
+  # T5 -- the same bench at MAX_NUM_LANES=3.  Brief sec 2's geometry rule asks a
+  # depth-parameterized structure to be re-run at a non-power-of-two size; this
+  # closure has no elastic buffer to vary (both FIFO instantiations are commented
+  # out, phy_receive.sv:229-261), so the rule is discharged against the lane
+  # count.  Three exercises the per-lane generate and the MAX_NUM_LANES-derived
+  # bus widths off every power-of-two boundary, killing wrap and off-by-one
+  # mutants that x1 and x4 are both blind to.
+  verilate_rx_closure_x3:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_rx_closure
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GMAX_NUM_LANES=3
+        - waiver.vlt
+    filesets : [rtl, golden, cocotb_closure]
+    toplevel : [phy_receive]
