@@ -105,10 +105,10 @@ def _check(dut, bad, label, data, kmask, lane_num):
                    % (label, sym2, k2, want_k2))
 
 
-# expect_fail at HEAD: this is the defect, pre-registered.  F2 removes the
-# marker in the same commit that fixes os_generator.sv:189.  Committing the
-# proof as a GREEN row keeps every commit in this arc individually bisectable.
-@cocotb.test(expect_fail=True)
+# Was expect_fail for exactly one commit (77315ab), which pre-registered the
+# defect as a green row.  F2 made os_generator.sv:189 value-determined; the
+# marker comes off here, in that same commit.
+@cocotb.test()
 async def symbol2_k_flag_follows_the_value_rule(dut):
     """T2a: Symbol 2 is K iff its byte is PAD -- across all four control states.
 

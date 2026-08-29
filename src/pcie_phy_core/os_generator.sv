@@ -181,19 +181,37 @@ module os_generator
               D.special_k[1] = '1;
             end
 
-            // Decision 1: lane_num comes from the per-lane LTSSM ordered set
-            // (ordered_set_i[i], already in Q.ordered_set[i]) -- os_generator no
-            // longer stamps a positional lane_num=i, so the LTSSM's PAD-until-
-            // assigned echo survives. special_k[2] semantics unchanged: mark the
-            // lane-number symbol K when no lane is being assigned (set_lane low).
-            if (!gen_os_ctrl_i.set_lane) begin
-              D.special_k[2] = '1;
-            end
-
             // if (Q.ordered_set[i].ts_s6.ts1.ec != '0) begin
             //   D.ordered_set[i].ts_s6.ts1.trans_preset =
             //   preset_i[i].lane_equal_reg.downstream_tx_preset;
             // end
+          end
+
+          // Symbol 2 (Lane Number) is a K code iff its VALUE is PAD_, exactly as
+          // Symbol 1 is handled at :180.  Base 2.1 Table 4-2 p.201 gives Symbol 2
+          // as "D0.0 - D31.0, K23.7"; Base 3.0's TS1 table agrees and spells it
+          // out ("0-31, PAD.  PAD is encoded as K23.7").  K-ness is a property of
+          // the byte, not of any LTSSM control signal.
+          //
+          // This replaces a check on gen_os_ctrl_i.set_lane, which is only
+          // *correlated* with PAD-ness.  The two disagreed in 2 of the 4 control
+          // states (tb/os_generator/test_os_generator_k_mask.py): a real Lane
+          // Number marked K while set_lane was low -- the state the LTSSM holds
+          // for all of Configuration.Lanenum.Wait -- and a PAD left unmarked
+          // while set_lane was high.
+          //
+          // LANE 0 ONLY, deliberately.  The K-mask is not per-lane: os_generator
+          // emits one mask in tuser's lane-0 slice and lane_management.sv:409-412
+          // broadcasts it to every lane, on the stated assumption that it "is
+          // identical on every lane (COM is byte 0 on all)".  That holds for every
+          // symbol except this one -- Lane Numbers legitimately differ per lane at
+          // x4, so their PAD-ness can too.  ORing across lanes here would let one
+          // lane's PAD mark another lane's real Lane Number as K.  Sourcing from
+          // lane 0 matches what the broadcast actually carries and is exact at x1.
+          // TODO(x4): a genuinely per-lane K-mask needs the tuser packing and the
+          // lane_management broadcast changed together; see FINDINGS_RUNG8.
+          if (Q.ordered_set[0].lane_num == PAD_) begin
+            D.special_k[2] = '1;
           end
         end
 
