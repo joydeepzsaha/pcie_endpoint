@@ -1,0 +1,30 @@
+CAPI=2:
+name: fusesoc:pcie:tb_os_generator:1.0.0
+description: Spec-golden bench for os_generator's TS ordered-set K-mask (Base 2.1 Table 4-2 p.201)
+
+filesets:
+  rtl:
+    depend:
+      - fusesoc:pcie:phy_transmit
+
+  cocotb_k_mask:
+    files:
+      - test_os_generator_k_mask.py : {file_type : user, copyto : .}
+
+targets:
+  # os_generator as toplevel, x1.  Until Rung 8 this module had no bench of its
+  # own -- every LTSSM target's toplevel is pcie_ltssm_downstream, and
+  # os_generator is reached only through phy_transmit -- which is why the K-mask
+  # defect Rung 7 found was invisible to all 70 gate rows.
+  verilate_os_gen_kmask:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_os_generator_k_mask
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, cocotb_k_mask]
+    toplevel : [os_generator]
