@@ -76,6 +76,10 @@ module pcie_endpoint_top
     output logic [19:0]              ltssm_state_o,
     output logic [MAX_NUM_LANES-1:0] phy_rx_code_error_o,
     output logic [MAX_NUM_LANES-1:0] phy_rx_disparity_error_o,
+    // Transmit-side dual of phy_rx_code_error_o: the encoder was asked for a K
+    // code-group Base 2.1 Appendix B does not define.  Same shape and same
+    // valid-gating as the RX pair below.
+    output logic [MAX_NUM_LANES-1:0] phy_tx_illegal_k_o,
 
     input  logic                     memory_enable_i,
     input  logic                     extended_tag_enable_i,
@@ -453,6 +457,7 @@ module pcie_endpoint_top
         logic [2:0] rx_disparity;
         logic [1:0] rx_code_error;
         logic [1:0] rx_disparity_error;
+        logic [1:0] tx_illegal_k;
 
         assign tx_disparity[0] = tx_running_disparity[lane];
         assign rx_disparity[0] = rx_running_disparity[lane];
@@ -465,7 +470,8 @@ module pcie_endpoint_top
                         phy_txdata[lane*DATA_WIDTH+symbol*8 +: 8]}),
               .dispin (tx_disparity[symbol]),
               .dataout(phy_tx_symbol_o[lane*20+symbol*10 +: 10]),
-              .dispout(tx_disparity[symbol+1])
+              .dispout(tx_disparity[symbol+1]),
+              .illegal_k_o(tx_illegal_k[symbol])
           );
 
           decode_8b10b rx_decoder_inst (
@@ -500,6 +506,8 @@ module pcie_endpoint_top
             phy_rx_symbol_valid_i[lane] && |rx_code_error;
         assign phy_rx_disparity_error_o[lane] =
             phy_rx_symbol_valid_i[lane] && |rx_disparity_error;
+        assign phy_tx_illegal_k_o[lane] =
+            phy_txdata_valid[lane] && |tx_illegal_k;
       end
 
       phy_receive #(
@@ -661,6 +669,7 @@ module pcie_endpoint_top
       assign ltssm_state_o                   = '0;
       assign phy_rx_code_error_o             = '0;
       assign phy_rx_disparity_error_o        = '0;
+      assign phy_tx_illegal_k_o              = '0;
     end
   endgenerate
 

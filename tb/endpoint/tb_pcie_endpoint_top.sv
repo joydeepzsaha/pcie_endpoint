@@ -206,6 +206,8 @@ module tb_pcie_endpoint_top;
   wire [19:0]                       ltssm_state_o;
   wire [MAX_NUM_LANES-1:0]          phy_rx_code_error_o;
   wire [MAX_NUM_LANES-1:0]          phy_rx_disparity_error_o;
+  // Rung 8 / F1: the DUT is connected with .*, so a new port needs its wire here.
+  wire [MAX_NUM_LANES-1:0]          phy_tx_illegal_k_o;
 
   pcie_endpoint_top #(
       .DATA_WIDTH(DATA_WIDTH),
