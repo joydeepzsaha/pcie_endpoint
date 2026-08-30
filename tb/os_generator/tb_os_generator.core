@@ -11,6 +11,10 @@ filesets:
     files:
       - test_os_generator_k_mask.py : {file_type : user, copyto : .}
 
+  cocotb_x4:
+    files:
+      - test_os_generator_x4.py : {file_type : user, copyto : .}
+
 targets:
   # os_generator as toplevel, x1.  Until Rung 8 this module had no bench of its
   # own -- every LTSSM target's toplevel is pcie_ltssm_downstream, and
@@ -27,4 +31,22 @@ targets:
         - -GMAX_NUM_LANES=1
         - waiver.vlt
     filesets : [rtl, cocotb_k_mask]
+    toplevel : [os_generator]
+
+  # Rung 9: the x4 extension of the same module.  Every lane-0 read inside
+  # os_generator degenerates to the identity at MAX_NUM_LANES=1, so x1 cannot
+  # distinguish a per-lane rule from a lane-0 rule.  This target drives ordered
+  # sets that DIFFER FROM LANE TO LANE -- the only stimulus that can -- and also
+  # raises link_up_i, which reaches ST_SKP for the first time in the project.
+  verilate_os_gen_x4:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_os_generator_x4
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GMAX_NUM_LANES=4
+        - waiver.vlt
+    filesets : [rtl, cocotb_x4]
     toplevel : [os_generator]

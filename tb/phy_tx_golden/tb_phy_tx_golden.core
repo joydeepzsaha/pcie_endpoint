@@ -1,0 +1,94 @@
+CAPI=2:
+name: fusesoc:pcie:tb_phy_tx_golden:1.0.0
+description: Rung 9 spec-golden transmit benches (Base 2.1 ch.4 oracles) -- ordered sets, SKP, CDC, framing
+
+filesets:
+  rtl:
+    depend:
+      - fusesoc:pcie:phy_transmit
+
+  cocotb_os_golden:
+    files:
+      - test_tx_os_golden.py : {file_type : user, copyto : .}
+
+  cocotb_skp:
+    files:
+      - test_tx_skp.py : {file_type : user, copyto : .}
+
+  cocotb_cdc:
+    files:
+      - test_tx_cdc.py : {file_type : user, copyto : .}
+
+  cocotb_framing:
+    files:
+      - test_tx_framing.py : {file_type : user, copyto : .}
+
+targets:
+  # Ordered sets checked against packers built from Base 2.1 Table 4-2 p.201,
+  # Table 4-3 p.203 and Table 4-4 p.205.  The inherited verilate_tx_golden row
+  # states in its own header that its expectations were "empirically
+  # established" from DUT dumps; this row's are spec-derived.  Both are kept.
+  verilate_tx_os_golden:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tx_os_golden
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, cocotb_os_golden]
+    toplevel : [phy_transmit]
+
+  # SKP Ordered Set: composition and scheduling interval (Base 2.1 sec 4.2.7.1
+  # p.261).  This target raises link_up_i, which is what arms os_generator's SKP
+  # timer (os_generator.sv:139).  Every pre-Rung-9 bench holds it at 0, so
+  # ST_SKP was dead in all 71 rows of the 03cea650 baseline.
+  verilate_tx_skp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tx_skp
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, cocotb_skp]
+    toplevel : [phy_transmit]
+
+  # The two async-FIFO crossings driven at UNEQUAL frequencies.  Every earlier
+  # bench starts all three clocks at 10 ns; Base 2.1 sec 4.2.7 p.261 guarantees
+  # only that the Transmit and Receive clocks are within 600 ppm of each other,
+  # never that they are equal.
+  verilate_tx_cdc:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tx_cdc
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, cocotb_cdc]
+    toplevel : [phy_transmit]
+
+  # frame_symbols standalone -- the one closure module with no bench of its own.
+  # USER_WIDTH=5 matches the width phy_transmit instantiates it with
+  # (phy_transmit.sv:12,130); the module default of 1 would truncate the K-mask
+  # literals at frame_symbols.sv:148,182,187 and test something that is not in
+  # the design.
+  verilate_tx_framing:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tx_framing
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GUSER_WIDTH=5
+        - waiver.vlt
+    filesets : [rtl, cocotb_framing]
+    toplevel : [frame_symbols]
