@@ -1,8 +1,13 @@
 """Exhaustive spec-golden bench for encode_8b10b.
 
 Toplevel: encode_8b10b.  Purely combinational -- datain[8:0] + dispin in;
-dataout[9:0], dispout out.  No clock, no reset, no state, and NO ERROR OUTPUT
-(pcie_docs/evidence/encode-8b10b/ORACLES_ENCODE.md sec 1.1).
+dataout[9:0], dispout, illegal_k_o out.  No clock, no reset, no state.
+
+    illegal_k_o was added by Rung 8 / F1.  Until then the detector existed as an
+    internal wire with no port -- correct and unobservable -- so this bench could
+    only DECLINE the 488 undefined requests.  It can now assert on them; see T1
+    at the end of this file.  ORACLES_ENCODE.md sec 1.1 describes the pre-F1
+    state and is superseded on that one point only.
 
 INPUT SPACE, AND THE PART OF IT THE SPEC DOES NOT DEFINE
     9 data bits + 1 disparity bit = 1024 combinations.  All are driven.  But
@@ -263,8 +268,10 @@ async def undefined_k_requests_are_driven_and_declined(dut):
     """Oracle X7: the 488 inputs with no defined encoding.
 
     k=1 with a byte that is not one of the twelve Special Symbols is a request the
-    spec gives no encoding for, and encode_8b10b has NO ERROR OUTPUT to reject it
-    with (census sec 1.1a).  So this test asserts NOTHING about dataout or dispout.
+    spec gives no encoding for.  This test asserts NOTHING about dataout or dispout
+    and still should not: Base 2.1 defines no output for these inputs, so any
+    assertion here would invent a requirement.  (What the module DOES now do is
+    raise illegal_k_o on all 488 -- asserted by T1a, not here.)
 
     What it does do is drive all 488, confirm the count matches the arithmetic,
     and record what the module actually emits -- so the silence is measured rather
@@ -337,3 +344,93 @@ async def assertions_were_reached(dut):
     assert not wrong, "%d tests drove the wrong number of cases" % len(wrong)
     dut._log.info("executed-count guard: %d tests, %d DUT evaluations recorded"
                   % (len(EXECUTED), sum(EXECUTED.values())))
+
+
+# ---------------------------------------------------------------------------
+# T1 (Rung 8 / F1): the illegal-K detector, now that it has a port.
+#
+# Before F1 the detector existed as an internal wire and drove nothing.  That
+# was proved, not assumed: Rung 5's M12b mutation forced `illegalk` permanently
+# false and the suite still passed 10/10 (pcie_docs/evidence/rung5/
+# MUTANTS_ENCODE.md).  F1 added `illegal_k_o`; these three tests are the first
+# that can observe it.
+#
+# The rule is exact and needs no oracle table: a request is illegal iff it asks
+# for a K encoding (datain[8]=1) of a byte that is not one of the twelve Special
+# Symbols.  DEFINED_DATAIN already carries that set.
+# ---------------------------------------------------------------------------
+
+
+def _is_illegal_request(datain):
+    """True iff datain asks for a K code that Base 2.1 Appendix B does not define."""
+    return bool(datain & 0x100) and datain not in DEFINED_DATAIN
+
+
+@cocotb.test()
+async def illegal_k_o_flags_exactly_the_undefined_requests(dut):
+    """T1a: over all 1024 inputs, illegal_k_o == "this request has no encoding".
+
+    Exhaustive and two-sided: 488 must flag, 536 must not.  A detector that is
+    merely correlated with illegality -- say, one that flags all 256 k=1 bytes --
+    fails on the 24 Special-Symbol cases.
+    """
+    bad = []
+    flagged = clear = 0
+    for datain in range(512):
+        want = _is_illegal_request(datain)
+        for rd in (RD_NEG, RD_POS):
+            await drive(dut, datain, rd)
+            got = int(dut.illegal_k_o.value) & 1
+            if got:
+                flagged += 1
+            else:
+                clear += 1
+            if got != int(want):
+                bad.append("datain=%03x rd=%s: illegal_k_o=%d want %d"
+                           % (datain, "-" if rd == RD_NEG else "+", got, want))
+    dut._log.info("illegal_k_o: %d flagged, %d clear" % (flagged, clear))
+    assert flagged == 488, "expected 488 illegal requests flagged, got %d" % flagged
+    assert clear == 536, "expected 536 defined requests clear, got %d" % clear
+    _record("illegal_k_o_exact", 1024)
+    _report(dut, "T1a illegal_k_o == undefined-request", bad, 1024, 1024)
+
+
+@cocotb.test()
+async def illegal_k_o_is_low_for_every_defined_encoding(dut):
+    """T1b: no false positive on any input the spec DOES define.
+
+    Stated separately from T1a because this is the direction that would break a
+    working link: a detector that fired on a legal Symbol would reject valid
+    traffic.  536 cases -- the 256 D Symbols and 12 K Symbols, both disparities.
+    """
+    bad = []
+    for sym in SYMBOLS:
+        for rd in (RD_NEG, RD_POS):
+            await drive(dut, sym.dataout, rd)
+            if int(dut.illegal_k_o.value) & 1:
+                bad.append("%s (datain=%03x) rd=%s: illegal_k_o asserted on a DEFINED Symbol"
+                           % (sym.name, sym.dataout, "-" if rd == RD_NEG else "+"))
+    _record("illegal_k_o_no_false_positive", len(SYMBOLS) * 2)
+    _report(dut, "T1b illegal_k_o low on defined Symbols", bad,
+            len(SYMBOLS) * 2, 536)
+
+
+@cocotb.test()
+async def illegal_k_o_is_independent_of_running_disparity(dut):
+    """T1c: illegality is a property of the request, not of the link state.
+
+    Whether a code-group exists is a table-membership question; running disparity
+    only selects which column.  So the two disparity columns must agree on every
+    one of the 512 datain values.  If they ever disagreed, the detector would be
+    reading disparity logic it has no business reading.
+    """
+    bad = []
+    for datain in range(512):
+        await drive(dut, datain, RD_NEG)
+        neg = int(dut.illegal_k_o.value) & 1
+        await drive(dut, datain, RD_POS)
+        pos = int(dut.illegal_k_o.value) & 1
+        if neg != pos:
+            bad.append("datain=%03x: illegal_k_o RD- =%d but RD+ =%d" % (datain, neg, pos))
+    _record("illegal_k_o_disparity_independent", 512)
+    _report(dut, "T1c illegal_k_o independent of dispin", bad, 512, 512)

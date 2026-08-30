@@ -2,12 +2,19 @@ module encode_8b10b (
     datain,
     dispin,
     dataout,
-    dispout
+    dispout,
+    illegal_k_o
 );
   input [8:0] datain;
   input dispin;  // 0 = neg disp; 1 = pos disp
   output [9:0] dataout;
   output dispout;
+  // Asserted when datain requests a K encoding (datain[8]=1) for a byte that is
+  // not one of the twelve Special Symbols -- a code-group Base 2.1 Appendix B
+  // does not define.  The detector already existed as the internal `illegalk`
+  // wire below; it had no port, so nothing could observe it.  Combinational,
+  // valid in the same cycle as datain.
+  output illegal_k_o;
 
 
   wire ai = datain[0];
@@ -79,6 +86,10 @@ module encode_8b10b (
   //	K30 is 11110 - so K23/27/29/30 are ei & l31
   wire illegalk = ki & (ai | bi | !ci | !di | !ei) &  // not K28.0->7
   (!fi | !gi | !hi | !ei | !l31);  // not K23/27/29/30.7
+
+  // Expose the detector.  Base 2.1 SS4.2.4.6 p.209 makes 8b/10b coding errors the
+  // one Link Error source a receiver must check; this is the transmit-side dual.
+  assign illegal_k_o = illegalk;
 
   // now determine whether to do the complementing
   // complement if prev disp is - and pd1s6 is set, or + and nd1s6 is set
