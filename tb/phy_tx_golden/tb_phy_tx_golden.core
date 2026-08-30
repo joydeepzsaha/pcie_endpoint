@@ -1,0 +1,30 @@
+CAPI=2:
+name: fusesoc:pcie:tb_phy_tx_golden:1.0.0
+description: Rung 9 spec-golden transmit benches (Base 2.1 ch.4 oracles) -- ordered sets, SKP, CDC, framing
+
+filesets:
+  rtl:
+    depend:
+      - fusesoc:pcie:phy_transmit
+
+  cocotb_os_golden:
+    files:
+      - test_tx_os_golden.py : {file_type : user, copyto : .}
+
+targets:
+  # Ordered sets checked against packers built from Base 2.1 Table 4-2 p.201,
+  # Table 4-3 p.203 and Table 4-4 p.205.  The inherited verilate_tx_golden row
+  # states in its own header that its expectations were "empirically
+  # established" from DUT dumps; this row's are spec-derived.  Both are kept.
+  verilate_tx_os_golden:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tx_os_golden
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, cocotb_os_golden]
+    toplevel : [phy_transmit]
