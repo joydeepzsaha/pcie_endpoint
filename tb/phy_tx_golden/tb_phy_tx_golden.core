@@ -15,6 +15,10 @@ filesets:
     files:
       - test_tx_skp.py : {file_type : user, copyto : .}
 
+  cocotb_cdc:
+    files:
+      - test_tx_cdc.py : {file_type : user, copyto : .}
+
 targets:
   # Ordered sets checked against packers built from Base 2.1 Table 4-2 p.201,
   # Table 4-3 p.203 and Table 4-4 p.205.  The inherited verilate_tx_golden row
@@ -48,4 +52,21 @@ targets:
         - -GMAX_NUM_LANES=1
         - waiver.vlt
     filesets : [rtl, cocotb_skp]
+    toplevel : [phy_transmit]
+
+  # The two async-FIFO crossings driven at UNEQUAL frequencies.  Every earlier
+  # bench starts all three clocks at 10 ns; Base 2.1 sec 4.2.7 p.261 guarantees
+  # only that the Transmit and Receive clocks are within 600 ppm of each other,
+  # never that they are equal.
+  verilate_tx_cdc:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tx_cdc
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, cocotb_cdc]
     toplevel : [phy_transmit]
