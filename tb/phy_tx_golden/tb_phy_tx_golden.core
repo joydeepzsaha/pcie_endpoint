@@ -11,6 +11,10 @@ filesets:
     files:
       - test_tx_os_golden.py : {file_type : user, copyto : .}
 
+  cocotb_skp:
+    files:
+      - test_tx_skp.py : {file_type : user, copyto : .}
+
 targets:
   # Ordered sets checked against packers built from Base 2.1 Table 4-2 p.201,
   # Table 4-3 p.203 and Table 4-4 p.205.  The inherited verilate_tx_golden row
@@ -27,4 +31,21 @@ targets:
         - -GMAX_NUM_LANES=1
         - waiver.vlt
     filesets : [rtl, cocotb_os_golden]
+    toplevel : [phy_transmit]
+
+  # SKP Ordered Set: composition and scheduling interval (Base 2.1 sec 4.2.7.1
+  # p.261).  This target raises link_up_i, which is what arms os_generator's SKP
+  # timer (os_generator.sv:139).  Every pre-Rung-9 bench holds it at 0, so
+  # ST_SKP was dead in all 71 rows of the 03cea650 baseline.
+  verilate_tx_skp:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tx_skp
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, cocotb_skp]
     toplevel : [phy_transmit]
