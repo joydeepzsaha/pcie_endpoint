@@ -19,6 +19,10 @@ filesets:
     files:
       - test_tx_cdc.py : {file_type : user, copyto : .}
 
+  cocotb_framing:
+    files:
+      - test_tx_framing.py : {file_type : user, copyto : .}
+
 targets:
   # Ordered sets checked against packers built from Base 2.1 Table 4-2 p.201,
   # Table 4-3 p.203 and Table 4-4 p.205.  The inherited verilate_tx_golden row
@@ -70,3 +74,21 @@ targets:
         - waiver.vlt
     filesets : [rtl, cocotb_cdc]
     toplevel : [phy_transmit]
+
+  # frame_symbols standalone -- the one closure module with no bench of its own.
+  # USER_WIDTH=5 matches the width phy_transmit instantiates it with
+  # (phy_transmit.sv:12,130); the module default of 1 would truncate the K-mask
+  # literals at frame_symbols.sv:148,182,187 and test something that is not in
+  # the design.
+  verilate_tx_framing:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_tx_framing
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GUSER_WIDTH=5
+        - waiver.vlt
+    filesets : [rtl, cocotb_framing]
+    toplevel : [frame_symbols]
