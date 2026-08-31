@@ -67,6 +67,21 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_detect_d7.py : {file_type : user, copyto : .}
 
+  cocotb_ltssm_l0:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_l0.py : {file_type : user, copyto : .}
+
+  cocotb_ltssm_ridle:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_ridle.py : {file_type : user, copyto : .}
+
+  cocotb_ltssm_a3:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_a3.py : {file_type : user, copyto : .}
+
   cocotb_polling_p3:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -562,6 +577,51 @@ targets:
         - -GMAX_NUM_LANES=4
         - waiver.vlt
     filesets : [rtl,cocotb_ltssm_24ms]
+    toplevel : [pcie_ltssm_downstream]
+
+  verilate_ltssm_l0:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_l0
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=4
+        - waiver.vlt
+    filesets : [rtl,cocotb_ltssm_l0]
+    toplevel : [pcie_ltssm_downstream]
+
+  verilate_ltssm_ridle:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_ridle
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=4
+        - waiver.vlt
+    filesets : [rtl,cocotb_ltssm_ridle]
+    toplevel : [pcie_ltssm_downstream]
+
+  verilate_ltssm_a3:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_a3
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=4
+        - waiver.vlt
+    filesets : [rtl,cocotb_ltssm_a3]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
