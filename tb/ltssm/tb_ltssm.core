@@ -82,6 +82,16 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_config_conforms.py : {file_type : user, copyto : .}
 
+  cocotb_polling_p11:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_polling_p11.py : {file_type : user, copyto : .}
+
+  cocotb_polling_p12:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_polling_p12.py : {file_type : user, copyto : .}
+
   cocotb_rc_linkup:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -431,6 +441,45 @@ targets:
         - -GMAX_NUM_LANES=1
         - waiver.vlt
     filesets : [rtl,cocotb_config_conforms]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b / oracle P11 (predicted CONFORMS): Polling.Configuration ->
+  # Configuration on 8 consecutive TS2 PAD/PAD plus 16 transmitted after
+  # receiving one. Negative control: a non-PAD Link must not advance it.
+  verilate_polling_p11:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_polling_p11
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_polling_p11]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b / oracle P12 (predicted CONFORMS): Polling.Configuration's 48 ms
+  # timeout to Detect, bracketed from both sides so the constant is pinned
+  # rather than merely observed.
+  # EXPENSIVE BY CONSTRUCTION: FourtyEightMsTimeOut is not SIM_FAST_LINK
+  # scaled, so this row runs a real 4.8 M cycles (~8 min). Own target so the
+  # cost is visible per-row.
+  verilate_polling_p12:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_polling_p12
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_polling_p12]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
