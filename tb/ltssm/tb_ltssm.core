@@ -92,6 +92,11 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_polling_p12.py : {file_type : user, copyto : .}
 
+  cocotb_x4_oracles:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_x4_oracles.py : {file_type : user, copyto : .}
+
   cocotb_rc_linkup:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -480,6 +485,28 @@ targets:
         - -GMAX_NUM_LANES=1
         - waiver.vlt
     filesets : [rtl,cocotb_polling_p12]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b: the oracles that only exist at x4 -- D9/D10 (ST_DETECT_RX is
+  # structurally unreachable at x1), the |-vs-& reduction at :660 (an
+  # equivalent mutant at x1; this discharges Rung 1 LTSSM_ARCS.md section 6.3,
+  # which required a test that is x4 AND in the gate), and per-lane Lane Number
+  # assignment (a documented no-op at x1, :2004-2006).
+  verilate_ltssm_x4_oracles:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_x4_oracles
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GIS_ROOT_PORT=1
+        - -GLINK_NUM=1
+        - -GMAX_NUM_LANES=4
+        - waiver.vlt
+    filesets : [rtl,cocotb_x4_oracles]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
