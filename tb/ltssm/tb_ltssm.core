@@ -97,6 +97,11 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_x4_oracles.py : {file_type : user, copyto : .}
 
+  cocotb_config_gaps:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_config_gaps.py : {file_type : user, copyto : .}
+
   cocotb_rc_linkup:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -507,6 +512,29 @@ targets:
         - -GMAX_NUM_LANES=4
         - waiver.vlt
     filesets : [rtl,cocotb_x4_oracles]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b: four cheap Configuration/Polling gaps -- C18 (the data rate
+  # identifier limb is never compared), C9 and C16 (the spec's non-timeout
+  # exits to Detect are absent, and C16's substate has no spec timeout at all
+  # yet the RTL adds one), and P9 (polarity inversion lives in Polling.Active,
+  # not Polling.Configuration where p.224 places the requirement). All four
+  # expect_fail; P9 carries a positive control.
+  verilate_config_gaps:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_config_gaps
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GIS_ROOT_PORT=1
+        - -GLINK_NUM=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_config_gaps]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
