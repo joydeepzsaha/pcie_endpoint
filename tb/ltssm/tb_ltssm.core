@@ -77,6 +77,11 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_config_c8.py : {file_type : user, copyto : .}
 
+  cocotb_config_conforms:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_config_conforms.py : {file_type : user, copyto : .}
+
   cocotb_rc_linkup:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -405,6 +410,27 @@ targets:
         - -GMAX_NUM_LANES=1
         - waiver.vlt
     filesets : [rtl,cocotb_config_c8]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b: the predicted-CONFORMS Configuration oracles -- C3, C11, C14, C25.
+  # Ordinary PASS rows, not expect_fail. Each ships a negative control that
+  # withholds the spec condition and asserts the DUT does NOT advance, so a
+  # green result cannot be a tautology.
+  verilate_config_conforms:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_config_conforms
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GIS_ROOT_PORT=1
+        - -GLINK_NUM=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_config_conforms]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
