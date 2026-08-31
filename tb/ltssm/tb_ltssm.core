@@ -57,6 +57,11 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_polling_p4.py : {file_type : user, copyto : .}
 
+  cocotb_cfgidle_c26a:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_cfgidle_c26a.py : {file_type : user, copyto : .}
+
   cocotb_rc_linkup:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -304,6 +309,29 @@ targets:
         - -GMAX_NUM_LANES=1
         - waiver.vlt
     filesets : [rtl,cocotb_polling_p4]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b / oracle C26a: how many times Configuration.Idle's 2 ms timeout
+  # may divert to Recovery. Base 2.1 4.2.6.3.6 p.237 permits exactly one;
+  # :979 compares the whole rate_id_t struct instead of .rate, so the 8'hFF
+  # saturation is dead and 255 are admitted. expect_fail row.
+  # Long by construction: TwoMsTimeOut is not SIM_FAST_LINK scaled, so each
+  # of the two timeouts costs a real 200 000 cycles.
+  verilate_cfgidle_c26a:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_cfgidle_c26a
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GIS_ROOT_PORT=1
+        - -GLINK_NUM=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_cfgidle_c26a]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
