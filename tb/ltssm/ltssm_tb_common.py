@@ -79,12 +79,32 @@ TSOS_WIDTH = 128
 GEN1_RATE = 0x01
 
 
-def pack_tsos(link_num=None, lane_num=None, rate=0, speed_change=0):
-    """Build one pcie_tsos_t as an int. None -> PAD for link/lane."""
+# ---- TS Symbol 5 (Training Control), Base 2.1 Table 4-2 ----
+# Spec bit assignment: 0 Hot Reset, 1 Disable Link, 2 Loopback,
+# 3 Disable Scrambling, 4 Compliance Receive, 7:5 Reserved.
+# NOTE: training_ctrl_t (pcie_phy_pkg.sv:209-215) is
+#   {rsvd[7:4], scramble[3], loopback[2], dis_link[1], hot_rst[0]}
+# so the RTL has no named member for Compliance Receive -- bit 4 falls inside
+# its rsvd field. These masks are taken from the SPEC, not from the struct,
+# which is why COMPLIANCE_RCV has no RTL counterpart to be checked against.
+S5_HOT_RESET      = 1 << 0
+S5_DISABLE_LINK   = 1 << 1
+S5_LOOPBACK       = 1 << 2
+S5_DISABLE_SCRAM  = 1 << 3
+S5_COMPLIANCE_RCV = 1 << 4
+
+
+def pack_tsos(link_num=None, lane_num=None, rate=0, speed_change=0,
+              train_ctrl=0):
+    """Build one pcie_tsos_t as an int. None -> PAD for link/lane.
+
+    train_ctrl is TS Symbol 5 as a raw byte (see the S5_* masks above);
+    it defaults to 0, so every pre-existing caller is unaffected."""
     ln = PAD if link_num is None else link_num
     la = PAD if lane_num is None else lane_num
     rate_id_byte = ((speed_change & 0x1) << 7) | ((rate & 0x1F) << 1)
     v = 0
+    v |= (train_ctrl & 0xFF)   << 40  # train_ctrl (Symbol 5), offset 40
     v |= (rate_id_byte & 0xFF) << 32  # rate_id   field, offset 32
     v |= (la & 0xFF)           << 16  # lane_num  field, offset 16
     v |= (ln & 0xFF)           << 8   # link_num  field, offset 8
@@ -160,11 +180,16 @@ def _verify_unpack_roundtrip():
     discriminator bytes 0 (that path is exercised only on DUT output), so a
     packed value has ts_type None by construction."""
     cases = [
-        dict(link_num=None, lane_num=None, rate=0,          speed_change=0),
-        dict(link_num=0x01, lane_num=None, rate=GEN1_RATE,  speed_change=0),
-        dict(link_num=0x01, lane_num=0,    rate=GEN1_RATE,  speed_change=0),
-        dict(link_num=0x5A, lane_num=0x03, rate=0x07,       speed_change=1),
-        dict(link_num=0xFF, lane_num=0xFE, rate=0x1F,       speed_change=1),
+        dict(link_num=None, lane_num=None, rate=0,          speed_change=0,
+             train_ctrl=0),
+        dict(link_num=0x01, lane_num=None, rate=GEN1_RATE,  speed_change=0,
+             train_ctrl=0),
+        dict(link_num=0x01, lane_num=0,    rate=GEN1_RATE,  speed_change=0,
+             train_ctrl=S5_COMPLIANCE_RCV),
+        dict(link_num=0x5A, lane_num=0x03, rate=0x07,       speed_change=1,
+             train_ctrl=S5_LOOPBACK | S5_DISABLE_SCRAM),
+        dict(link_num=0xFF, lane_num=0xFE, rate=0x1F,       speed_change=1,
+             train_ctrl=0xFF),
     ]
     for c in cases:
         u = unpack_tsos(pack_tsos(**c))
@@ -174,7 +199,15 @@ def _verify_unpack_roundtrip():
         assert u["lane_num"] == exp_lane, (c, u["lane_num"], exp_lane)
         assert u["rate"] == c["rate"], (c, u["rate"])
         assert u["speed_change"] == c["speed_change"], (c, u["speed_change"])
+        assert u["train_ctrl"] == c["train_ctrl"], (c, u["train_ctrl"])
         assert u["ts_type"] is None, (c, u["ts_type"])
+    # Negative control: the Symbol 5 byte must land in its own field and not
+    # bleed into a neighbour. If train_ctrl were written at the wrong offset
+    # this would silently corrupt rate_id or ts_s6 instead of failing.
+    probe = unpack_tsos(pack_tsos(train_ctrl=0xFF))
+    assert probe["train_ctrl"] == 0xFF, probe["train_ctrl"]
+    assert probe["rate_id_byte"] == 0, probe["rate_id_byte"]
+    assert probe["ts_s6"] == 0, probe["ts_s6"]
     return True
 
 

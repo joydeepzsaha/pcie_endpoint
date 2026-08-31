@@ -52,6 +52,31 @@ filesets:
       - test_ltssm_partial_lanes.py : {file_type : user, copyto : .}
       - test_ltssm_recovery_partial_lanes.py : {file_type : user, copyto : .}
 
+  cocotb_polling_p4:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_polling_p4.py : {file_type : user, copyto : .}
+
+  cocotb_cfgidle_c26a:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_cfgidle_c26a.py : {file_type : user, copyto : .}
+
+  cocotb_detect_d7:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_detect_d7.py : {file_type : user, copyto : .}
+
+  cocotb_polling_p3:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_polling_p3.py : {file_type : user, copyto : .}
+
+  cocotb_config_c8:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_config_c8.py : {file_type : user, copyto : .}
+
   cocotb_rc_linkup:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -280,6 +305,106 @@ targets:
         - -GSIM_FAST_LINK=1
         - waiver.vlt
     filesets : [rtl,cocotb_recovery_partial_lanes]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b / oracle P4: WHEN the "1024 TS1 transmitted" limb must be met.
+  # Base 2.1 4.2.6.2.1 p.220 counts it from entry to Polling.Active; the
+  # "after receiving one TS1" qualifier on p.221 belongs to the 24 ms branch
+  # only. :651 applies it to both. expect_fail row.
+  verilate_polling_p4:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_polling_p4
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_polling_p4]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b / oracle C26a: how many times Configuration.Idle's 2 ms timeout
+  # may divert to Recovery. Base 2.1 4.2.6.3.6 p.237 permits exactly one;
+  # :979 compares the whole rate_id_t struct instead of .rate, so the 8'hFF
+  # saturation is dead and 255 are admitted. expect_fail row.
+  # Long by construction: TwoMsTimeOut is not SIM_FAST_LINK scaled, so each
+  # of the two timeouts costs a real 200 000 cycles.
+  verilate_cfgidle_c26a:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_cfgidle_c26a
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GIS_ROOT_PORT=1
+        - -GLINK_NUM=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_cfgidle_c26a]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b / oracle D7: Detect.Active's "no Receiver detected" exit. Base 2.1
+  # 4.2.6.1.2 p.219 requires Detect.Quiet; :592 goes to ST_IDLE, whose only
+  # exit is `if (en_i)`. expect_fail row.
+  verilate_detect_d7:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_detect_d7
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_detect_d7]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b / oracle P3: Polling.Active never reads TS Symbol 5, so a TS1 with
+  # Compliance Receive = 1b and Loopback = 0b -- which qualifies under none of
+  # Base 2.1 4.2.6.2.1 p.220's three conditions, and is p.221's
+  # Polling.Compliance trigger -- is counted anyway. expect_fail row.
+  verilate_polling_p3:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_polling_p3
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_polling_p3]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b / oracle C8: Configuration.Linkwidth.Accept adds an
+  # `ordered_set_sent_cnt_r >= 8` gate that Base 2.1 4.2.6.3.2.1 p.230 does not
+  # state -- the spec's condition is two consecutive matching TS1 alone.
+  # expect_fail row.
+  verilate_config_c8:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_config_c8
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GIS_ROOT_PORT=1
+        - -GLINK_NUM=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_config_c8]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
