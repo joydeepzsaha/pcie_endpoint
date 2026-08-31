@@ -67,6 +67,11 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_detect_d7.py : {file_type : user, copyto : .}
 
+  cocotb_polling_p3:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_polling_p3.py : {file_type : user, copyto : .}
+
   cocotb_rc_linkup:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -355,6 +360,25 @@ targets:
         - -GMAX_NUM_LANES=1
         - waiver.vlt
     filesets : [rtl,cocotb_detect_d7]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b / oracle P3: Polling.Active never reads TS Symbol 5, so a TS1 with
+  # Compliance Receive = 1b and Loopback = 0b -- which qualifies under none of
+  # Base 2.1 4.2.6.2.1 p.220's three conditions, and is p.221's
+  # Polling.Compliance trigger -- is counted anyway. expect_fail row.
+  verilate_polling_p3:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_polling_p3
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_polling_p3]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
