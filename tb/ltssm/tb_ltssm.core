@@ -102,6 +102,11 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_config_gaps.py : {file_type : user, copyto : .}
 
+  cocotb_ltssm_24ms:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_24ms.py : {file_type : user, copyto : .}
+
   cocotb_rc_linkup:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -535,6 +540,28 @@ targets:
         - -GMAX_NUM_LANES=1
         - waiver.vlt
     filesets : [rtl,cocotb_config_gaps]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b: the two oracles behind the unscaled 24 ms watchdog.
+  # D11 characterises Detect.Active's extra-spec timeout (Base 2.1 p.219 gives
+  # the substate none) and brackets the constant; P6 shows the 24 ms
+  # Polling.Active branch ignores p.221's Electrical-Idle-exit limb.
+  # EXPENSIVE BY CONSTRUCTION: TwentyFourMsTimeOut is not SIM_FAST_LINK scaled,
+  # so each test runs a real 2.4 M cycles. x4 -- P6 is vacuous at x1 because
+  # its premise is that the primary exit at :660 is blocked.
+  verilate_ltssm_24ms:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_24ms
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=4
+        - waiver.vlt
+    filesets : [rtl,cocotb_ltssm_24ms]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
