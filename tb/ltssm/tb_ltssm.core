@@ -62,6 +62,11 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_cfgidle_c26a.py : {file_type : user, copyto : .}
 
+  cocotb_detect_d7:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_detect_d7.py : {file_type : user, copyto : .}
+
   cocotb_rc_linkup:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -332,6 +337,24 @@ targets:
         - -GMAX_NUM_LANES=1
         - waiver.vlt
     filesets : [rtl,cocotb_cfgidle_c26a]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b / oracle D7: Detect.Active's "no Receiver detected" exit. Base 2.1
+  # 4.2.6.1.2 p.219 requires Detect.Quiet; :592 goes to ST_IDLE, whose only
+  # exit is `if (en_i)`. expect_fail row.
+  verilate_detect_d7:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_detect_d7
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_detect_d7]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
