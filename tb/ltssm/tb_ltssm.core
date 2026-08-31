@@ -52,6 +52,11 @@ filesets:
       - test_ltssm_partial_lanes.py : {file_type : user, copyto : .}
       - test_ltssm_recovery_partial_lanes.py : {file_type : user, copyto : .}
 
+  cocotb_polling_p4:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_polling_p4.py : {file_type : user, copyto : .}
+
   cocotb_rc_linkup:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -280,6 +285,25 @@ targets:
         - -GSIM_FAST_LINK=1
         - waiver.vlt
     filesets : [rtl,cocotb_recovery_partial_lanes]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Rung 10b / oracle P4: WHEN the "1024 TS1 transmitted" limb must be met.
+  # Base 2.1 4.2.6.2.1 p.220 counts it from entry to Polling.Active; the
+  # "after receiving one TS1" qualifier on p.221 belongs to the 24 ms branch
+  # only. :651 applies it to both. expect_fail row.
+  verilate_polling_p4:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_polling_p4
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl,cocotb_polling_p4]
     toplevel : [pcie_ltssm_downstream]
 
   synth:
