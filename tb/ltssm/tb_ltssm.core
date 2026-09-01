@@ -77,6 +77,11 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_ridle.py : {file_type : user, copyto : .}
 
+  cocotb_ltssm_obs:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_obs.py : {file_type : user, copyto : .}
+
   cocotb_ltssm_a3:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -607,6 +612,27 @@ targets:
         - -GMAX_NUM_LANES=4
         - waiver.vlt
     filesets : [rtl,cocotb_ltssm_ridle]
+    toplevel : [pcie_ltssm_downstream]
+
+  # Fix-arc 1 / defect register #2 (FINDINGS_LTSSM.md section 2, B1+B2):
+  # error_o and success_o are declared and never driven, which also makes the
+  # four error_o assertions on rows 58/63 tautologies.  x4 because the cheapest
+  # reachable error_c site is :614 in ST_DETECT_RX, and ST_DETECT_RX is
+  # unreachable at x1 (|receiver_detected_i and &receiver_detected_i coincide).
+  # 2 expect_fail rows plus 1 control.
+  verilate_ltssm_obs:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_obs
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=4
+        - waiver.vlt
+    filesets : [rtl,cocotb_ltssm_obs]
     toplevel : [pcie_ltssm_downstream]
 
   verilate_ltssm_a3:
