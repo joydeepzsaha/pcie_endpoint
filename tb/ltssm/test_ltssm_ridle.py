@@ -22,30 +22,39 @@ its assertion and loses its marker.
 
   R9  (p.244) "Next state is Recovery.Idle if eight consecutive TS2 Ordered
       Sets are received on ALL configured Lanes..."
-      :1246 reduces with `|(ts2_cnt_satisfied & lane_active_r)` -- ANY active
-      Lane. ts2_cnt_satisfied is already lane-gated at :1577, so the
-      spec-correct form is a bare `&ts2_cnt_satisfied`.
+      The exit reduced with `|(ts2_cnt_satisfied & lane_active_r)` -- ANY
+      active Lane.
+      STATUS: FIXED (fix-arc 1, Phase 3B) -- :1269 now reduces with a bare
+      `&ts2_cnt_satisfied`, which is the spec form because ts2_cnt_satisfied is
+      already lane-gated at :1613; the explicit `& lane_active_r` had to go
+      with the `|`, or every inactive Lane would zero the reduction.
 
   R13 (p.246) "Next state is L0 if eight consecutive Symbol Times of Idle data
       are received on ALL configured Lanes and 16 Idle data Symbols are sent
       after receiving one Idle data Symbol."
-      :1441 reduces with `|lanes_idle_satisfied` -- ANY Lane. And unlike its
-      siblings at :1575-:1577, lanes_idle_satisfied (:1582) is NOT gated by
-      lane_active_r, so the fix is two changes, not one.
+      The exit reduced with `|lanes_idle_satisfied` -- ANY Lane. And unlike its
+      siblings, lanes_idle_satisfied was NOT gated by lane_active_r, so the fix
+      was two changes, not one.
+      STATUS: FIXED (fix-arc 1, Phase 3A) -- :1471 reduces with `&` and :1623
+      gates the operand, in one commit. The half-fix (reduction without the
+      gate) hangs a reduced-width link; gate row 63
+      verilate_recovery_partial_lanes is the oracle that catches it, and a
+      mutant confirmed it fails 2 of its 3 tests with `never reached L0 (via
+      Recovery)` rather than hanging the harness.
 
   R14a (p.245) "...two CONSECUTIVE TS1 Ordered Sets..."
-      The exit at :1446 fires on at_least_one_ts1_ts2, which in this state is
+      The exit at :1476 fires on at_least_one_ts1_ts2, which in this state is
       armed by ts2_cnt != 0 -- a threshold of ONE, not two. This row drives a
       single TS1 with Lane = PAD (both spec-correct) so the count limb is the
       only thing under test.
 
   R14b (p.245) "...two consecutive TS1 Ordered Sets..." -- the TYPE limb.
-      :1803 arms the same counter on (ts1_valid_i || ts2_valid_i), so a TS2
+      :1844 arms the same counter on (ts1_valid_i || ts2_valid_i), so a TS2
       also sends the link back to Configuration. This row drives TWO TS2 with
       Lane = PAD (spec-correct count, spec-correct Lane) so the type limb is
       the only thing under test.
 
-      NOTE: the Lane-number limb of R14 CONFORMS -- :1804 requires
+      NOTE: the Lane-number limb of R14 CONFORMS -- :1845 requires
       ordered_set_i[lane].lane_num == PAD before the counter moves at all. An
       earlier draft of the oracle claimed it was missing; it is not. Both rows
       below therefore use PAD Lane numbers, which is what makes them isolate
@@ -134,7 +143,7 @@ async def drive_to_recovery_idle(dut):
     dut.ts2_valid_i.value = ALL
     await wait_state(dut, ST_RECOVERY_IDLE, 2000, "RECOVERY_IDLE")
     dut.ts2_valid_i.value = 0
-    # The global transition reset (:1659-1671) clears every per-lane count on
+    # The global transition reset (:1631 onward) clears every per-lane count on
     # the state change, so we enter with ts1_cnt = ts2_cnt = idle_cnt = 0.
 
 
@@ -307,8 +316,8 @@ async def test_r15_second_timeout_reaches_detect(dut):
 
     # ---- drive back around to Recovery.Idle for the second timeout.
     # Nothing on this loop clears idle_to_rlock_transitioned: its clearing
-    # sites are :526 (ST_IDLE), :972 and :1001 (L0 entry/L0), :1445
-    # (Recovery.Idle -> L0) and :1486 (SendSDS -> L0), none of which we pass.
+    # sites are :534 (ST_IDLE), :980 and :1017 (L0 entry/L0), :1475
+    # (Recovery.Idle -> L0) and :1522 (SendSDS -> L0), none of which we pass.
     dut.ordered_set_i.value = pack_tsos_all_lanes(
         link_num=LINK_NUM, lane_num="index", rate=GEN1_RATE, speed_change=0)
     dut.ts1_valid_i.value = ALL
