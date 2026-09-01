@@ -1454,7 +1454,14 @@ module pcie_ltssm_downstream
             ordered_set_sent_cnt_c = ordered_set_sent_cnt_r + 1'b1;
           end
         end
-        if (((|lanes_idle_satisfied) && ordered_set_sent_cnt_r >= 8'd16)) begin
+        // ALL configured Lanes, not any: Base 2.1 4.2.6.4.4 p.246 requires
+        // eight consecutive Symbol Times of Idle "on all configured Lanes".
+        // The `|` let one Lane of four declare the link trained.  Reducing
+        // with `&` needs the lane gate added in the same commit --
+        // lanes_idle_satisfied was the only member of its family not gated by
+        // lane_active_r, so `&` alone would wait forever on a Lane that is not
+        // part of a reduced-width link.  The gate is at :1616.
+        if (((&lanes_idle_satisfied) && ordered_set_sent_cnt_r >= 8'd16)) begin
         gen_os_ctrl_c                = '0;
         gen_os_ctrl_c.valid          = '0;
         next_state                   = ST_L0;
@@ -1601,7 +1608,12 @@ module pcie_ltssm_downstream
         //assignments for state exit scenarios
         lanes_ts1_satisfied[lane]        <= receiver_detected_i[lane] ? (ts1_cnt == 8'h8) : '1;
         lanes_ts2_satisfied[lane]        <= receiver_detected_i[lane] ? (ts2_cnt == 8'h8) : '1;
-        lanes_idle_satisfied[lane]       <= idle_cnt >= 8'h8;
+        // Gated by lane_active_r like link_idle_satisfied/ts1_cnt_satisfied/
+        // ts2_cnt_satisfied above, so an inactive Lane on a reduced-width link
+        // contributes a trivial '1' to the &-reduction at ST_RECOVERY_IDLE's
+        // exit (:1464) instead of blocking it forever.  This was the only
+        // member of the family without the gate.
+        lanes_idle_satisfied[lane]       <= lane_active_r[lane] ? (idle_cnt >= 8'h8) : '1;
         speed_change_bit_set[lane]       <= lane_speed_change_bit != '0;
       end
 

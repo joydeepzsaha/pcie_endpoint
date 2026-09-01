@@ -185,13 +185,17 @@ async def test_r9_rcvrcfg_exit_requires_all_lanes(dut):
 #  R13 -- Recovery.Idle -> L0 must require ALL configured Lanes.
 # ==========================================================================
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_r13_idle_to_l0_requires_all_lanes(dut):
     """R13 (p.246): 8 consecutive Idle Symbol Times on ALL configured Lanes.
 
     Four lanes are configured; Idle is presented on lane 0 only. A conforming
-    DUT stays in Recovery.Idle. This DUT reaches L0, because :1441 reduces with
-    `|` over a lanes_idle_satisfied that :1582 never lane-gates.
+    DUT stays in Recovery.Idle. Before fix-arc 1 this DUT reached L0, because
+    the exit reduced with `|` over a lanes_idle_satisfied that was never
+    lane-gated. STATUS: FIXED (fix-arc 1, Phase 3A) -- :1464 now reduces with
+    `&` and :1616 gates the operand by lane_active_r. Both edits were required:
+    the reduction alone would hang a reduced-width link, which is what row 63
+    verilate_recovery_partial_lanes exists to catch.
     """
     await drive_to_recovery_idle(dut)
 
