@@ -159,12 +159,16 @@ async def test_recovery_idle_reached(dut):
 #  R9 -- RcvrCfg -> Recovery.Idle must require ALL configured Lanes.
 # ==========================================================================
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_r9_rcvrcfg_exit_requires_all_lanes(dut):
     """R9 (p.244): 8 consecutive TS2 on ALL configured Lanes.
 
     Four lanes are configured; TS2 is presented on lane 0 only. A conforming
-    DUT stays in RcvrCfg. This DUT leaves, because :1246 reduces with `|`.
+    DUT stays in RcvrCfg. Before fix-arc 1 this DUT left, because the exit
+    reduced with `|`. STATUS: FIXED (fix-arc 1, Phase 3B) -- :1269 now reduces
+    with a bare `&`, which is the spec form here because ts2_cnt_satisfied is
+    already lane-gated at :1613; the `& lane_active_r` had to go with the `|`,
+    or every inactive Lane would zero the reduction.
     """
     await drive_to_rcvr_cfg(dut)
 
@@ -192,8 +196,8 @@ async def test_r13_idle_to_l0_requires_all_lanes(dut):
     Four lanes are configured; Idle is presented on lane 0 only. A conforming
     DUT stays in Recovery.Idle. Before fix-arc 1 this DUT reached L0, because
     the exit reduced with `|` over a lanes_idle_satisfied that was never
-    lane-gated. STATUS: FIXED (fix-arc 1, Phase 3A) -- :1464 now reduces with
-    `&` and :1616 gates the operand by lane_active_r. Both edits were required:
+    lane-gated. STATUS: FIXED (fix-arc 1, Phase 3A) -- :1471 now reduces with
+    `&` and :1623 gates the operand by lane_active_r. Both edits were required:
     the reduction alone would hang a reduced-width link, which is what row 63
     verilate_recovery_partial_lanes exists to catch.
     """

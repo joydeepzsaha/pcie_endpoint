@@ -1259,7 +1259,14 @@ module pcie_ltssm_downstream
           ordered_set_sent_cnt_c = ordered_set_sent_cnt_r + 1'b1;
         end
         //recovery idle scenario
-        if((|(ts2_cnt_satisfied & lane_active_r)
+        // ALL configured Lanes, not any: Base 2.1 4.2.6.4.3 p.244 requires
+        // eight consecutive TS2 "on all configured Lanes".  The `|` let one
+        // Lane of four leave RcvrCfg.  The bare `&` is the spec form here
+        // because ts2_cnt_satisfied is ALREADY lane-gated at :1613 (an
+        // inactive Lane yields '1); keeping the `& lane_active_r` under a
+        // &-reduction would zero every inactive Lane's term and hang a
+        // reduced-width link -- the mirror of the trap at :1471/:1623.
+        if(((&ts2_cnt_satisfied)
             && (speed_change_bit_set=='0)
             && ordered_set_sent_cnt_r >= 8'd16) && ordered_set_tranmitted_i)
         begin
@@ -1460,7 +1467,7 @@ module pcie_ltssm_downstream
         // with `&` needs the lane gate added in the same commit --
         // lanes_idle_satisfied was the only member of its family not gated by
         // lane_active_r, so `&` alone would wait forever on a Lane that is not
-        // part of a reduced-width link.  The gate is at :1616.
+        // part of a reduced-width link.  The gate is at :1623.
         if (((&lanes_idle_satisfied) && ordered_set_sent_cnt_r >= 8'd16)) begin
         gen_os_ctrl_c                = '0;
         gen_os_ctrl_c.valid          = '0;
@@ -1611,7 +1618,7 @@ module pcie_ltssm_downstream
         // Gated by lane_active_r like link_idle_satisfied/ts1_cnt_satisfied/
         // ts2_cnt_satisfied above, so an inactive Lane on a reduced-width link
         // contributes a trivial '1' to the &-reduction at ST_RECOVERY_IDLE's
-        // exit (:1464) instead of blocking it forever.  This was the only
+        // exit (:1471) instead of blocking it forever.  This was the only
         // member of the family without the gate.
         lanes_idle_satisfied[lane]       <= lane_active_r[lane] ? (idle_cnt >= 8'h8) : '1;
         speed_change_bit_set[lane]       <= lane_speed_change_bit != '0;
