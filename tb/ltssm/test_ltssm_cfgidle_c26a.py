@@ -65,9 +65,20 @@ buggy increment yields 0+1 = 1, which are the same observable. The divergence
 is only visible from timeout #2 onward; do not "simplify" this test down to one
 timeout.
 
-The assertion states the SPEC outcome, so this is an expect_fail row recording
-the divergence (oracle C26/C26a, evidence/rung10/ORACLES_LTSSM.md). It is not a
-repair: no src/ file is touched by this rung.
+STATUS: FIXED (fix-arc 1, Phase 1).
+  :979 now compares curr_data_rate_r.rate, so the saturation at :980 is live and
+  the second timeout reaches Detect. This was an expect_fail row for oracle
+  C26/C26a (evidence/rung10/ORACLES_LTSSM.md) from Rung 10b until the fix landed;
+  the marker was removed in the same commit as the fix, per the fix-arc contract
+  (rule 22.75).
+
+  NOTE for anyone reading a gate record: flipping this row did NOT change its
+  T/A row. cocotb reports an expect_fail raise as STATUS=PASS, and this test
+  diverged on the very cycle it now conforms on, so both STATUS and SIM TIME are
+  the same before and after. The observable difference is in the raw log only:
+  "passed: failed as expected (result was AssertionError)" became "passed".
+  The proof that the fix works is the mutation in evidence/fix-arc-1/, not the
+  gate hash.
 
 NOTE ON RUNTIME: TwoMsTimeOut is NOT scaled by SIM_FAST_LINK
 (evidence/rung10/CENSUS_LTSSM.md section 6), so each timeout costs a real
@@ -154,7 +165,7 @@ async def quiesce_in_cfg_idle(dut):
     dut.ordered_set_i.value = 0
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_cfgidle_c26a(dut):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
 

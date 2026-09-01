@@ -976,7 +976,15 @@ module pcie_ltssm_downstream
         else if (timer_r >= TwoMsTimeOut)
         begin
           if (idle_to_rlock_transitioned_r < 8'hFF) begin
-            if (curr_data_rate_r == gen1 || curr_data_rate_r == gen2) begin 
+            // Compare the rate FIELD, not the whole rate_id_t.  The struct is
+            // {speed_change[7], autonomous_change[6], rate[5:1], rsvd0[0]}
+            // (pcie_phy_pkg.sv:247-252), so a rate_id_t carrying gen1 holds
+            // gen1<<1 == 2 while the bare enum zero-extends to 1: the struct
+            // form was identically false for every rate, the 8'hFF saturation
+            // below was dead, and the else-branch increment admitted 255
+            // diversions to Recovery.RcvrLock where Base 2.1 4.2.6.3.6 p.237
+            // permits one.  :530, :1327, :1477 and :1480 all compare the field.
+            if (curr_data_rate_r.rate == gen1 || curr_data_rate_r.rate == gen2) begin
               idle_to_rlock_transitioned_c = 8'hFF;
             end else begin
               idle_to_rlock_transitioned_c = idle_to_rlock_transitioned_r + 1;
@@ -1459,9 +1467,15 @@ module pcie_ltssm_downstream
             gen_os_ctrl_c.valid    = '0;
             ordered_set_sent_cnt_c = '0;
             //check data rate for retry options
+            // Saturate at Gen1 exactly as the Gen2 arm below does.  Base 2.1
+            // 4.2.6.4.4 p.246 makes idle_to_rlock_transitioned a 0b/1b
+            // variable: one diversion to Recovery.RcvrLock, and the next 2 ms
+            // timeout goes to Detect.  Incrementing against the `!= '1` guard
+            // at :1465 spent 255 timeouts -- roughly 510 ms -- before reaching
+            // the else arm, and disagreed with Configuration.Idle's own
+            // treatment of the same variable at :987-:991.
             if (curr_data_rate_r.rate == gen1) begin
-              idle_to_rlock_transitioned_c = idle_to_rlock_transitioned_r == '1 ?
-              '1 : idle_to_rlock_transitioned_r + 1'b1;
+              idle_to_rlock_transitioned_c = '1;
             end
             if (curr_data_rate_r.rate == gen2) begin
               idle_to_rlock_transitioned_c = '1;
