@@ -311,6 +311,14 @@ module pcie_ltssm_downstream
   assign equalization_requested = (equal_req != '0 | !(equal_status_r.equal_complete));
   assign phy_rxpolarity_o       = phy_rxpolarity_r;
   assign link_up_o              = link_up_r;
+  // error_o and success_o were declared at :42-:43 and never driven, so the
+  // FSM's 12 error_c raise sites reached no port and no integrator could
+  // observe a training failure.  Note the two are not symmetric: error_c
+  // defaults to error_r (:490) and no site ever assigns it 0, so error_o is
+  // STICKY once raised and clears only on rst_i; success_c defaults to 0
+  // (:491), so success_o is a level, high throughout ST_L0.
+  assign error_o                = error_r;
+  assign success_o              = success_r;
 
  
   always_comb begin : detect_phy_rxelecidle_exit_detected

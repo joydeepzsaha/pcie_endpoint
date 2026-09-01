@@ -28,9 +28,12 @@ WHAT THIS BENCH ASSERTS -- one divergent assertion per expect_fail row
   obs_error   `error_o` rises after a training failure the FSM already detects.
   obs_success `success_o` is high while the link is up in L0.
 
-  Both are expect_fail on unfixed RTL, where the ports read 0 no matter what
-  the FSM does. `assign error_o = error_r;` / `assign success_o = success_r;`
-  flips both.
+  Both were expect_fail on unfixed RTL, where the ports read 0 no matter what
+  the FSM did. STATUS: FIXED (fix-arc 1, Phase 2) -- `assign error_o = error_r;`
+  and `assign success_o = success_r;` landed at :320-:321 and both markers were
+  removed in that same commit (rule 22.75). Flipping them did not move either
+  gate row: cocotb reports an expect_fail raise as STATUS=PASS, and each test
+  samples at a point fixed by its drive sequence, not by the sampled value.
 
 THE PROVOCATION, and why this one
   The cheapest reachable error_c site is :614, Detect.Rx:
@@ -231,14 +234,14 @@ async def test_obs_control_provocation_reaches_error_site(dut):
 #  B1 -- error_o must report a training failure the FSM already detected.
 # ==========================================================================
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_obs_error_o_reports_training_failure(dut):
-    """B1: `error_o` is never driven, so it reads 0 even though error_r is 1.
+    """B1: error_o must report the training failure the FSM detected at :614.
 
-    The control above proves :614 ran. error_r is sticky (:482 defaults
+    The control above proves :614 ran. error_r is sticky (:490 defaults
     error_c to error_r and no site clears it), so by the time this samples,
-    error_r has been 1 since the provocation. A conforming module reports that
-    on its port.
+    error_r has been 1 since the provocation, and :320 puts it on the port.
+    Before fix-arc 1 this read 0 no matter what the FSM did.
     """
     _waited, landed = await drive_to_detect_rx_mismatch(dut)
     assert landed == ST_IDLE, (
@@ -263,13 +266,14 @@ async def test_obs_error_o_reports_training_failure(dut):
 #  B2 -- success_o must report a trained link.
 # ==========================================================================
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_obs_success_o_reports_link_trained(dut):
-    """B2: `success_o` is never driven, so it reads 0 while the link is up.
+    """B2: success_o must report a trained link.
 
     success_c is unconditional in ST_L0 (:999) and success_r registers it
-    (:417), so a driven port reads 1 for as long as the FSM stays in L0. This
-    samples while link_up_o is high, which pins the two together.
+    (:425), so the port at :321 reads 1 for as long as the FSM stays in L0.
+    This samples while link_up_o is high, which pins the two together.
+    Before fix-arc 1 it read 0 with the link up.
     """
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     check_geometry(dut)
