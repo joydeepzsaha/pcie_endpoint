@@ -311,6 +311,14 @@ module pcie_ltssm_downstream
   assign equalization_requested = (equal_req != '0 | !(equal_status_r.equal_complete));
   assign phy_rxpolarity_o       = phy_rxpolarity_r;
   assign link_up_o              = link_up_r;
+  // error_o and success_o were declared at :42-:43 and never driven, so the
+  // FSM's 12 error_c raise sites reached no port and no integrator could
+  // observe a training failure.  Note the two are not symmetric: error_c
+  // defaults to error_r (:490) and no site ever assigns it 0, so error_o is
+  // STICKY once raised and clears only on rst_i; success_c defaults to 0
+  // (:491), so success_o is a level, high throughout ST_L0.
+  assign error_o                = error_r;
+  assign success_o              = success_r;
 
  
   always_comb begin : detect_phy_rxelecidle_exit_detected
@@ -976,7 +984,15 @@ module pcie_ltssm_downstream
         else if (timer_r >= TwoMsTimeOut)
         begin
           if (idle_to_rlock_transitioned_r < 8'hFF) begin
-            if (curr_data_rate_r == gen1 || curr_data_rate_r == gen2) begin 
+            // Compare the rate FIELD, not the whole rate_id_t.  The struct is
+            // {speed_change[7], autonomous_change[6], rate[5:1], rsvd0[0]}
+            // (pcie_phy_pkg.sv:247-252), so a rate_id_t carrying gen1 holds
+            // gen1<<1 == 2 while the bare enum zero-extends to 1: the struct
+            // form was identically false for every rate, the 8'hFF saturation
+            // below was dead, and the else-branch increment admitted 255
+            // diversions to Recovery.RcvrLock where Base 2.1 4.2.6.3.6 p.237
+            // permits one.  :530, :1327, :1477 and :1480 all compare the field.
+            if (curr_data_rate_r.rate == gen1 || curr_data_rate_r.rate == gen2) begin
               idle_to_rlock_transitioned_c = 8'hFF;
             end else begin
               idle_to_rlock_transitioned_c = idle_to_rlock_transitioned_r + 1;
@@ -1243,7 +1259,14 @@ module pcie_ltssm_downstream
           ordered_set_sent_cnt_c = ordered_set_sent_cnt_r + 1'b1;
         end
         //recovery idle scenario
-        if((|(ts2_cnt_satisfied & lane_active_r)
+        // ALL configured Lanes, not any: Base 2.1 4.2.6.4.3 p.244 requires
+        // eight consecutive TS2 "on all configured Lanes".  The `|` let one
+        // Lane of four leave RcvrCfg.  The bare `&` is the spec form here
+        // because ts2_cnt_satisfied is ALREADY lane-gated at :1613 (an
+        // inactive Lane yields '1); keeping the `& lane_active_r` under a
+        // &-reduction would zero every inactive Lane's term and hang a
+        // reduced-width link -- the mirror of the trap at :1471/:1623.
+        if(((&ts2_cnt_satisfied)
             && (speed_change_bit_set=='0)
             && ordered_set_sent_cnt_r >= 8'd16) && ordered_set_tranmitted_i)
         begin
@@ -1438,7 +1461,14 @@ module pcie_ltssm_downstream
             ordered_set_sent_cnt_c = ordered_set_sent_cnt_r + 1'b1;
           end
         end
-        if (((|lanes_idle_satisfied) && ordered_set_sent_cnt_r >= 8'd16)) begin
+        // ALL configured Lanes, not any: Base 2.1 4.2.6.4.4 p.246 requires
+        // eight consecutive Symbol Times of Idle "on all configured Lanes".
+        // The `|` let one Lane of four declare the link trained.  Reducing
+        // with `&` needs the lane gate added in the same commit --
+        // lanes_idle_satisfied was the only member of its family not gated by
+        // lane_active_r, so `&` alone would wait forever on a Lane that is not
+        // part of a reduced-width link.  The gate is at :1623.
+        if (((&lanes_idle_satisfied) && ordered_set_sent_cnt_r >= 8'd16)) begin
         gen_os_ctrl_c                = '0;
         gen_os_ctrl_c.valid          = '0;
         next_state                   = ST_L0;
@@ -1459,9 +1489,15 @@ module pcie_ltssm_downstream
             gen_os_ctrl_c.valid    = '0;
             ordered_set_sent_cnt_c = '0;
             //check data rate for retry options
+            // Saturate at Gen1 exactly as the Gen2 arm below does.  Base 2.1
+            // 4.2.6.4.4 p.246 makes idle_to_rlock_transitioned a 0b/1b
+            // variable: one diversion to Recovery.RcvrLock, and the next 2 ms
+            // timeout goes to Detect.  Incrementing against the `!= '1` guard
+            // at :1465 spent 255 timeouts -- roughly 510 ms -- before reaching
+            // the else arm, and disagreed with Configuration.Idle's own
+            // treatment of the same variable at :987-:991.
             if (curr_data_rate_r.rate == gen1) begin
-              idle_to_rlock_transitioned_c = idle_to_rlock_transitioned_r == '1 ?
-              '1 : idle_to_rlock_transitioned_r + 1'b1;
+              idle_to_rlock_transitioned_c = '1;
             end
             if (curr_data_rate_r.rate == gen2) begin
               idle_to_rlock_transitioned_c = '1;
@@ -1579,7 +1615,12 @@ module pcie_ltssm_downstream
         //assignments for state exit scenarios
         lanes_ts1_satisfied[lane]        <= receiver_detected_i[lane] ? (ts1_cnt == 8'h8) : '1;
         lanes_ts2_satisfied[lane]        <= receiver_detected_i[lane] ? (ts2_cnt == 8'h8) : '1;
-        lanes_idle_satisfied[lane]       <= idle_cnt >= 8'h8;
+        // Gated by lane_active_r like link_idle_satisfied/ts1_cnt_satisfied/
+        // ts2_cnt_satisfied above, so an inactive Lane on a reduced-width link
+        // contributes a trivial '1' to the &-reduction at ST_RECOVERY_IDLE's
+        // exit (:1471) instead of blocking it forever.  This was the only
+        // member of the family without the gate.
+        lanes_idle_satisfied[lane]       <= lane_active_r[lane] ? (idle_cnt >= 8'h8) : '1;
         speed_change_bit_set[lane]       <= lane_speed_change_bit != '0;
       end
 

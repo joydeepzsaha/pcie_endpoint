@@ -15,35 +15,46 @@ WHY THIS TARGET IS x4
   asserts the width first so a -G that failed to reach the DUT fails the row
   instead of faking a pass.
 
-THE FOUR DIVERGENCES, one expect_fail row each (10b rule: one divergent
-assertion per row, never mixed with a conforming one)
+THE FOUR DIVERGENCES as first recorded in Rung 10c, one expect_fail row each
+(10b rule: one divergent assertion per row, never mixed with a conforming one).
+Each entry carries its own STATUS line; a row whose defect has been fixed keeps
+its assertion and loses its marker.
 
   R9  (p.244) "Next state is Recovery.Idle if eight consecutive TS2 Ordered
       Sets are received on ALL configured Lanes..."
-      :1246 reduces with `|(ts2_cnt_satisfied & lane_active_r)` -- ANY active
-      Lane. ts2_cnt_satisfied is already lane-gated at :1577, so the
-      spec-correct form is a bare `&ts2_cnt_satisfied`.
+      The exit reduced with `|(ts2_cnt_satisfied & lane_active_r)` -- ANY
+      active Lane.
+      STATUS: FIXED (fix-arc 1, Phase 3B) -- :1269 now reduces with a bare
+      `&ts2_cnt_satisfied`, which is the spec form because ts2_cnt_satisfied is
+      already lane-gated at :1613; the explicit `& lane_active_r` had to go
+      with the `|`, or every inactive Lane would zero the reduction.
 
   R13 (p.246) "Next state is L0 if eight consecutive Symbol Times of Idle data
       are received on ALL configured Lanes and 16 Idle data Symbols are sent
       after receiving one Idle data Symbol."
-      :1441 reduces with `|lanes_idle_satisfied` -- ANY Lane. And unlike its
-      siblings at :1575-:1577, lanes_idle_satisfied (:1582) is NOT gated by
-      lane_active_r, so the fix is two changes, not one.
+      The exit reduced with `|lanes_idle_satisfied` -- ANY Lane. And unlike its
+      siblings, lanes_idle_satisfied was NOT gated by lane_active_r, so the fix
+      was two changes, not one.
+      STATUS: FIXED (fix-arc 1, Phase 3A) -- :1471 reduces with `&` and :1623
+      gates the operand, in one commit. The half-fix (reduction without the
+      gate) hangs a reduced-width link; gate row 63
+      verilate_recovery_partial_lanes is the oracle that catches it, and a
+      mutant confirmed it fails 2 of its 3 tests with `never reached L0 (via
+      Recovery)` rather than hanging the harness.
 
   R14a (p.245) "...two CONSECUTIVE TS1 Ordered Sets..."
-      The exit at :1446 fires on at_least_one_ts1_ts2, which in this state is
+      The exit at :1476 fires on at_least_one_ts1_ts2, which in this state is
       armed by ts2_cnt != 0 -- a threshold of ONE, not two. This row drives a
       single TS1 with Lane = PAD (both spec-correct) so the count limb is the
       only thing under test.
 
   R14b (p.245) "...two consecutive TS1 Ordered Sets..." -- the TYPE limb.
-      :1803 arms the same counter on (ts1_valid_i || ts2_valid_i), so a TS2
+      :1844 arms the same counter on (ts1_valid_i || ts2_valid_i), so a TS2
       also sends the link back to Configuration. This row drives TWO TS2 with
       Lane = PAD (spec-correct count, spec-correct Lane) so the type limb is
       the only thing under test.
 
-      NOTE: the Lane-number limb of R14 CONFORMS -- :1804 requires
+      NOTE: the Lane-number limb of R14 CONFORMS -- :1845 requires
       ordered_set_i[lane].lane_num == PAD before the counter moves at all. An
       earlier draft of the oracle claimed it was missing; it is not. Both rows
       below therefore use PAD Lane numbers, which is what makes them isolate
@@ -55,19 +66,24 @@ assertion per row, never mixed with a conforming one)
       idle_to_rlock_transitioned variable is set to 1b upon transitioning to
       Recovery.RcvrLock. Else the next state is Detect."
       The variable is binary, so the SECOND 2 ms timeout must reach Detect.
-      :1457's guard is `!= '1`, i.e. != 8'hFF, and at Gen1 :1462-:1464
-      INCREMENTS instead of saturating -- so it takes 255 timeouts, not one.
-      This is C26a's mirror image, and unlike C26a it is live at Gen1 with no
+      :1457's guard is `!= '1`, i.e. != 8'hFF, and at Gen1 the arm below it
+      INCREMENTED instead of saturating -- so it took 255 timeouts, not one.
+      This was C26a's mirror image, and unlike C26a it was live at Gen1 with no
       precondition. See ORACLES_LTSSM.md R15a.
+      STATUS: FIXED (fix-arc 1, Phase 1) -- the Gen1 arm now saturates, as its
+      own Gen2 arm two lines below always did. Marker removed in the fix commit
+      (rule 22.75). Flipping it did NOT change the T/A row: cocotb reports an
+      expect_fail raise as STATUS=PASS, and the test diverged on the very cycle
+      it now conforms on. Only the raw log moved, from "passed: failed as
+      expected" to "passed".
 
 NEGATIVE CONTROL
   test_recovery_idle_reached is an ordinary PASS row running the identical
-  drive sequence from an independent reset. Every row above is expect_fail, and
-  an expect_fail row goes green if ANYTHING in it raises -- including a broken
-  setup. If the control is red, the four rows below prove nothing and are void.
+  drive sequence from an independent reset. An expect_fail row goes green if
+  ANYTHING in it raises -- including a broken setup. If the control is red, the
+  expect_fail rows above prove nothing and are void.
 
 Requires SIM_FAST_LINK=1, MAX_NUM_LANES=4 (verilate_ltssm_ridle target).
-No src/ edit.
 """
 import cocotb
 from cocotb.clock import Clock
@@ -127,7 +143,7 @@ async def drive_to_recovery_idle(dut):
     dut.ts2_valid_i.value = ALL
     await wait_state(dut, ST_RECOVERY_IDLE, 2000, "RECOVERY_IDLE")
     dut.ts2_valid_i.value = 0
-    # The global transition reset (:1659-1671) clears every per-lane count on
+    # The global transition reset (:1631 onward) clears every per-lane count on
     # the state change, so we enter with ts1_cnt = ts2_cnt = idle_cnt = 0.
 
 
@@ -152,12 +168,16 @@ async def test_recovery_idle_reached(dut):
 #  R9 -- RcvrCfg -> Recovery.Idle must require ALL configured Lanes.
 # ==========================================================================
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_r9_rcvrcfg_exit_requires_all_lanes(dut):
     """R9 (p.244): 8 consecutive TS2 on ALL configured Lanes.
 
     Four lanes are configured; TS2 is presented on lane 0 only. A conforming
-    DUT stays in RcvrCfg. This DUT leaves, because :1246 reduces with `|`.
+    DUT stays in RcvrCfg. Before fix-arc 1 this DUT left, because the exit
+    reduced with `|`. STATUS: FIXED (fix-arc 1, Phase 3B) -- :1269 now reduces
+    with a bare `&`, which is the spec form here because ts2_cnt_satisfied is
+    already lane-gated at :1613; the `& lane_active_r` had to go with the `|`,
+    or every inactive Lane would zero the reduction.
     """
     await drive_to_rcvr_cfg(dut)
 
@@ -178,13 +198,17 @@ async def test_r9_rcvrcfg_exit_requires_all_lanes(dut):
 #  R13 -- Recovery.Idle -> L0 must require ALL configured Lanes.
 # ==========================================================================
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_r13_idle_to_l0_requires_all_lanes(dut):
     """R13 (p.246): 8 consecutive Idle Symbol Times on ALL configured Lanes.
 
     Four lanes are configured; Idle is presented on lane 0 only. A conforming
-    DUT stays in Recovery.Idle. This DUT reaches L0, because :1441 reduces with
-    `|` over a lanes_idle_satisfied that :1582 never lane-gates.
+    DUT stays in Recovery.Idle. Before fix-arc 1 this DUT reached L0, because
+    the exit reduced with `|` over a lanes_idle_satisfied that was never
+    lane-gated. STATUS: FIXED (fix-arc 1, Phase 3A) -- :1471 now reduces with
+    `&` and :1623 gates the operand by lane_active_r. Both edits were required:
+    the reduction alone would hang a reduced-width link, which is what row 63
+    verilate_recovery_partial_lanes exists to catch.
     """
     await drive_to_recovery_idle(dut)
 
@@ -268,16 +292,18 @@ async def test_r14b_config_exit_requires_ts1_not_ts2(dut):
 #  R15 -- the second 2 ms timeout must reach Detect.
 # ==========================================================================
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_r15_second_timeout_reaches_detect(dut):
     """R15 (p.246): idle_to_rlock_transitioned is BINARY -- one retry only.
 
     Timeout 1: Recovery.Idle -> Recovery (RcvrLock). Spec sets the variable to
     1b here. Timeout 2 must therefore reach Detect.
 
-    This DUT increments instead of saturating at Gen1 (:1462-:1464) against a
-    guard of != 8'hFF (:1457), so the second timeout diverts to Recovery again
-    -- and would keep doing so ~255 times, roughly 510 ms.
+    Before fix-arc 1 this DUT incremented instead of saturating at Gen1, against
+    a guard of != 8'hFF (:1457), so the second timeout diverted to Recovery again
+    -- and would have kept doing so ~255 times, roughly 510 ms. The Gen1 arm now
+    saturates like the Gen2 arm beside it, so the second timeout reaches ST_IDLE
+    via :1476 and this row asserts the spec outcome directly.
 
     Cost: two unscaled 2 ms timeouts = ~400k cycles.
     """
@@ -290,8 +316,8 @@ async def test_r15_second_timeout_reaches_detect(dut):
 
     # ---- drive back around to Recovery.Idle for the second timeout.
     # Nothing on this loop clears idle_to_rlock_transitioned: its clearing
-    # sites are :526 (ST_IDLE), :972 and :1001 (L0 entry/L0), :1445
-    # (Recovery.Idle -> L0) and :1486 (SendSDS -> L0), none of which we pass.
+    # sites are :534 (ST_IDLE), :980 and :1017 (L0 entry/L0), :1475
+    # (Recovery.Idle -> L0) and :1522 (SendSDS -> L0), none of which we pass.
     dut.ordered_set_i.value = pack_tsos_all_lanes(
         link_num=LINK_NUM, lane_num="index", rate=GEN1_RATE, speed_change=0)
     dut.ts1_valid_i.value = ALL
