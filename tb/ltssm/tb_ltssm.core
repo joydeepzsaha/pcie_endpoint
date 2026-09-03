@@ -82,6 +82,11 @@ filesets:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
       - test_ltssm_obs.py : {file_type : user, copyto : .}
 
+  cocotb_recovery_skew:
+    files:
+      - ltssm_tb_common.py : {file_type : user, copyto : .}
+      - test_ltssm_recovery_skew.py : {file_type : user, copyto : .}
+
   cocotb_ltssm_a3:
     files:
       - ltssm_tb_common.py : {file_type : user, copyto : .}
@@ -620,6 +625,28 @@ targets:
   # reachable error_c site is :614 in ST_DETECT_RX, and ST_DETECT_RX is
   # unreachable at x1 (|receiver_detected_i and &receiver_detected_i coincide).
   # 2 expect_fail rows plus 1 control.
+  # Fix-arc 2 / MG1+MG2 closure: the ONLY bench where lane_active_r and
+  # receiver_detected_i diverge WHILE traversing Recovery.  Every reader of
+  # ts2_cnt_satisfied is in a Recovery state, and the one pre-existing bench
+  # with a divergent mask (verilate_ltssm_x4_oracles) never enters Recovery --
+  # so before this target the lane_active_r-vs-receiver_detected_i gate choice
+  # at :1613, and :1269's choice of operand, were both untested.  x4, because
+  # the skew needs at least two lanes to exist at all.  2 ordinary PASS rows.
+  verilate_recovery_skew:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_ltssm_recovery_skew
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GSIM_FAST_LINK=1
+        - -GMAX_NUM_LANES=4
+        - waiver.vlt
+    filesets : [rtl,cocotb_recovery_skew]
+    toplevel : [pcie_ltssm_downstream]
+
   verilate_ltssm_obs:
     flow: sim
     flow_options:
