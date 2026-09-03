@@ -274,16 +274,37 @@ async def lfsr_advances_per_symbol_not_per_clock(dut):
     advance the LFSR.
 
     PREDICTED DIVERGENCE (PREDICTIONS_PHY_RX.md sec 2, T2).
-    gen1_scramble.sv:97 assigns
-        D.lfsr_in = lfsr_out[(pipe_width_i>>3)];
-    OUTSIDE the `if (data_valid_i)` guard that opens at :101, so the LFSR steps on
-    every clock edge.  The data pipeline does stall (D.data[] is written only
-    inside the guard), so after a gap the two are out of step and every
-    subsequent Symbol descrambles wrongly.
 
-    Consequence on real hardware: any PIPE stall -- and the RX interface is not
-    guaranteed gapless -- silently corrupts the rest of the packet stream.  Kept
-    as expect_fail; see FINDINGS_PHY_RX_GOLDEN.md.
+    ⚠️ THE CAUSE NAMED BELOW WAS FIXED BY FIX-ARC 3, AND THIS ROW STILL FAILS --
+    for a DIFFERENT reason.  Read both paragraphs before debugging it.
+
+    ORIGINAL cause, now FIXED (tracker §54 #4 half A): gen1_scramble.sv:97
+    assigned `D.lfsr_in = lfsr_out[(pipe_width_i>>3)]` OUTSIDE the
+    `if (data_valid_i)` guard, so the LFSR stepped on every clock edge while the
+    data pipeline stalled, and every Symbol after a gap descrambled wrongly.
+    That assignment now sits inside the guard.
+
+    REMAINING cause, measured: the LFSR is CORRECT and exactly one Symbol is
+    DROPPED.  The captured stream is the golden stream with a single element
+    deleted at the gap and the remaining 14 Symbols byte-identical after it:
+
+        got : ... da 10 ef    8e 3b 3e 4b 16 f1 08 82 e0 a7 5d 24 b1 9b a1
+        want: ... da 10 ef de 8e 3b 3e 4b 16 f1 08 82 e0 a7 5d 24 b1 9b
+                            ^^ Symbol 23 (0xDE) never published
+
+    This is NOT a scrambling defect.  It is the valid-alignment defect O-ALIGN
+    clause (b) quantifies: `drive()` samples gated on data_valid_o, which on this
+    DUT is Q.data_valid[NumPipelines-1] -- and that chain swallows exactly one
+    Symbol per gap, because gen1_scramble.sv:99 drives stage 0's valid OUTSIDE
+    the `if` while :119 copies stages 1-3 INSIDE it, so the resume edge loads a
+    zero written during the gap.  Measured independently at 1 per gap at both
+    gap lengths by tb/scrambler/test_gen1_align.py; this row is the same defect
+    reaching a different bench by a different mechanism.
+
+    So this row is now a witness for the P2.g omission, not for the LFSR.  It
+    stays expect_fail: a dropped Symbol is still a real divergence from the
+    spec-golden stream.  See pcie_docs/evidence/fix-arc-3/ORACLE.md and
+    FINDINGS_ALIGN.md; originally FINDINGS_PHY_RX_GOLDEN.md.
     """
     await setup(dut)
     stream = [(COM, 1, False)]
