@@ -62,6 +62,11 @@ from cocotb.triggers import ClockCycles, RisingEdge, Timer
 
 GEN1 = 0x01         # rate_speed_e.gen1
 IDLE_CYCLES = 200   # a long, entirely quiet window: no OS requested, no DLLP
+TRAFFIC_CYCLES = 200  # the second arm: the same window WITH a TS1 requested
+
+# gen_os_ctrl_i bit positions, as tb/phy_tx_golden/test_tx_os_golden.py:40-41.
+G_VALID = 1 << 0
+G_GEN_TS1 = 1 << 1
 
 
 async def start_clocks(dut):
@@ -107,41 +112,75 @@ async def sample_valid(dut, cycles):
 
 
 # ==========================================================================
-#  Control arm -- ordinary PASS.  Records the CURRENT behaviour at the port,
-#  which is the only way to witness the cancellation on unfixed RTL (the same
-#  pattern fix-arc 1 used for error_o before it was driven).
+#  The two-sided oracle.  Ordinary PASS.
+#
+#  ⚠️ REWRITTEN BY FIX-ARC 3, and the rewrite was owed rather than optional.
+#  This row used to assert `pipe_data_valid_o == 1 on all 200 idle cycles` --
+#  an observe-current-behaviour row that RECORDED the defect (the same pattern
+#  fix-arc 1 used for error_o before it was driven).  The pair fix removes the
+#  hardwire, so the old row failed BY DESIGN, exactly as FA-2 predicted when it
+#  wrote the debt down (FINDINGS_STALL.md §4).  That is not a regression, and
+#  the flip is not evidence of one.
+#
+#  ⚠️ It is rewritten TWO-SIDED, and that is the load-bearing decision.  A
+#  replacement that only asserted "valid is 0 while idle" would be passed by a
+#  port tied to '0 -- and the divergence row below (`zeros > 0`) would pass
+#  too.  Both rows would be green over a dead port.  That is precisely the
+#  blindness fix-arc 1 MEASURED on error_o: its four assertions were all
+#  `error_o == 0`, so tying the port to '0 moved neither row while tying it to
+#  '1 turned seven tests red (tracker §55, §58.4).  The lesson is applied here
+#  before the same hole can open, not after.
 # ==========================================================================
 
 @cocotb.test()
-async def test_stall_control_pipe_valid_is_constant_one_when_idle(dut):
-    """C4: the cancellation, OBSERVED rather than inferred.
+async def test_stall_pipe_valid_is_two_sided_idle_low_and_traffic_high(dut):
+    """C4 (rewritten): pipe_data_valid_o must both FALL and RISE.
 
-    Hold the DUT completely quiet -- no ordered set requested, no DLLP, link
-    down -- for IDLE_CYCLES and assert pipe_data_valid_o is 1 on every single
-    cycle.  There is nothing to transmit for the whole window, so a
-    Symbol-accurate valid would be 0 throughout; measuring a constant 1 is the
-    direct observation that lane_management.sv:571's hardwire reaches the port.
+    Base 2.1 §4.2.3 p.199 advances the scrambler LFSR once per SYMBOL, so the
+    valid that accompanies the data must distinguish a clock carrying a Symbol
+    from one that does not.  A signal that cannot do both is not a valid,
+    whichever constant it is stuck at.
 
-    This is an ordinary PASS row deliberately: it asserts what the RTL does
-    today, so it stays green until fix-arc 3 changes it, and it is the row that
-    proves the drive sequence reached the sampling point for the expect_fail
-    row below."""
+    Arm 1 -- quiet: no ordered set requested, no DLLP, link down.  Nothing is
+             being transmitted, so valid must read 0 throughout.
+    Arm 2 -- traffic: request a TS1 ordered set.  os_generator now has Symbols
+             to hand to lane_management, so valid must rise at least once.
+
+    Arm 2 is what a dead port cannot fake.  Together the two arms bound the
+    signal on both sides, which is the property the old row lacked."""
     await start_clocks(dut)
     await reset_quiet(dut)
-    seen = await sample_valid(dut, IDLE_CYCLES)
 
-    assert len(seen) == IDLE_CYCLES
-    assert all(v == 1 for v in seen), (
-        f"pipe_data_valid_o was not constant 1 across {IDLE_CYCLES} idle "
-        f"cycles: {seen.count(0)} cycles read 0. If this fails, "
-        f"lane_management.sv:571 is no longer hardwired and the cancellation "
-        f"described in this file's header no longer holds -- re-read §54 #4."
+    quiet = await sample_valid(dut, IDLE_CYCLES)
+    ones_when_quiet = quiet.count(1)
+
+    # Arm 2: give the transmitter something to send.  Same request idiom as the
+    # Rung-9 golden benches (tb/phy_tx_golden/test_tx_os_golden.py:158-162).
+    dut.link_up_i.value = 1
+    dut.ordered_set_i.value = 0
+    dut.gen_os_ctrl_i.value = G_VALID | G_GEN_TS1
+    busy = await sample_valid(dut, TRAFFIC_CYCLES)
+    ones_when_busy = busy.count(1)
+
+    dut._log.info(
+        f"C4 MEASURED: valid high on {ones_when_quiet} of {IDLE_CYCLES} QUIET "
+        f"cycles, and on {ones_when_busy} of {TRAFFIC_CYCLES} cycles with a TS1 "
+        f"ordered set requested"
+    )
+    assert ones_when_quiet == 0, (
+        f"pipe_data_valid_o was high on {ones_when_quiet} of {IDLE_CYCLES} cycles "
+        f"with NOTHING to transmit -- a Symbol-accurate valid is 0 throughout. "
+        f"If this fails, lane_management.sv:571 is hardwired again."
+    )
+    assert ones_when_busy > 0, (
+        f"pipe_data_valid_o never rose across {TRAFFIC_CYCLES} cycles WITH a TS1 "
+        f"ordered set requested -- the port is dead, not Symbol-accurate. This is "
+        f"the arm that a tie to '0 fails and a one-sided 'is it 0 when idle' "
+        f"assertion would have missed."
     )
     dut._log.info(
-        f"C4 OK: pipe_data_valid_o == 1 on all {IDLE_CYCLES} cycles with NOTHING "
-        f"to transmit (no OS requested, no DLLP, link down). lane_management.sv:571 "
-        f"reaches the port through scrambler.sv:76. This constant is what hides "
-        f"gen1_scramble.sv:97 -- the two halves of §54 #4 cancel."
+        "C4 OK: valid FALLS when there is nothing to send and RISES when there "
+        "is -- bounded on both sides, so neither constant passes this row"
     )
 
 
@@ -149,7 +188,7 @@ async def test_stall_control_pipe_valid_is_constant_one_when_idle(dut):
 #  The divergence.  One assertion (§22.66).
 # ==========================================================================
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_stall_pipe_valid_must_track_symbol_transmission(dut):
     """pipe_data_valid_o must mark the clocks on which a Symbol is actually
     being handed to the PHY.
