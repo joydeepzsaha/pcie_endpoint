@@ -15,6 +15,10 @@ filesets:
     files:
       - test_phy_transmit_tx_x4.py : {file_type : user, copyto : .}
 
+  cocotb_stall:
+    files:
+      - test_phy_transmit_stall.py : {file_type : user, copyto : .}
+
 targets:
   # Gen1 x1 golden-baseline TX bench. phy_transmit as toplevel, MAX_NUM_LANES=1.
   # Drives ordered-set input into os_generator and observes per-lane PIPE output.
@@ -50,4 +54,26 @@ targets:
         - -GMAX_NUM_LANES=4
         - waiver.vlt
     filesets : [rtl, cocotb_tx_x4]
+    toplevel : [phy_transmit]
+
+  # Fix-arc 2 -- the PIPE-stalling bench, half B of tracker sec 54 #4.
+  # lane_management.sv:571 hardwires `assign data_valid_o = '1;`, which reaches
+  # pipe_data_valid_o through scrambler.sv:76, so the port is a registered
+  # constant carrying no information.  Rung 9's mutant M11 survived all 8
+  # targets for exactly this reason.  1 ordinary-PASS control arm observing the
+  # constant directly (the cancellation OBSERVED, not inferred -- the same
+  # pattern fix-arc 1 used for error_o before it was driven) and 1 expect_fail
+  # row.  x1, since the defect is per-lane-identical and lane 0 shows it.
+  verilate_phy_transmit_stall:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_phy_transmit_stall
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - -GMAX_NUM_LANES=1
+        - waiver.vlt
+    filesets : [rtl, cocotb_stall]
     toplevel : [phy_transmit]

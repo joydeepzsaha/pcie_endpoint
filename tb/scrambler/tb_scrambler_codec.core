@@ -37,6 +37,10 @@ filesets:
     files:
       - test_encode_8b10b.py : {file_type : user, copyto : .}
 
+  cocotb_stall:
+    files:
+      - test_scrambler_stall.py : {file_type : user, copyto : .}
+
 targets:
   # T6 -- decode_8b10b, exhaustively.  Purely combinational: no clock, no reset,
   # no state (CENSUS_8B10B.md sec 2), so running disparity enters as dispin and
@@ -55,6 +59,35 @@ targets:
         - waiver.vlt
     filesets : [rtl, golden, cocotb_decode]
     toplevel : [decode_8b10b]
+
+  # Fix-arc 2 -- the PIPE-stalling bench, half A of tracker sec 54 #4.
+  # DUT is `scrambler`, the wrapper phy_transmit.sv:153 and phy_receive.sv:143
+  # both instantiate, because data_valid_i is a REAL INPUT PORT here.  At the
+  # phy_transmit boundary it is a compile-time constant (lane_management.sv:571
+  # hardwires it), so no stimulus there can inject a stall -- that is the
+  # cancellation, and it is why sec 54 #4's two halves need two DUTs.  The
+  # companion row is verilate_phy_transmit_stall.
+  #
+  # Method is a differential black box: the same symbols are driven twice from
+  # the same reset, once with a data_valid gap, and the two capture lists are
+  # compared.  Nothing is probed inside the DUT and no expected value is
+  # captured from it.  3 ordinary-PASS control arms (the scrambler really
+  # scrambles; two no-stall runs are byte-identical, which is what makes the
+  # difference attributable; the pipeline really freezes) plus 2 expect_fail
+  # rows carrying ONE divergence each (sec 22.66): the stream changes across a
+  # gap, and it never resynchronises afterwards.
+  verilate_scrambler_stall:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_scrambler_stall
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, cocotb_stall]
+    toplevel : [scrambler]
 
   # T7 -- encode_8b10b, exhaustively.  9 data bits + 1 disparity bit = 1024
   # combinations, all driven.  Unlike the decoder, only 536 of them have a
