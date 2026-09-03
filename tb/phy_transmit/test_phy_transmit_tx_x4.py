@@ -258,3 +258,72 @@ async def x4_mixed_pad_echo(dut):
     # Explicit anti-stamp assertion: lane 2 must be PAD, never its index.
     os2 = find_ordered_set(lanes[2])
     assert os2[2][0] == PAD, "lane 2 re-stamped to index instead of PAD"
+
+
+# ------------------------------------------------------ fix-arc 4, tracker §54 #5
+
+@cocotb.test(expect_fail=True)
+async def x4_per_lane_k_flags_on_symbols_1_and_2(dut):
+    """The K-mask must be PER LANE at Symbols 1 and 2, observed at the PIPE pins.
+
+    Base 2.1 Table 4-2 p.201 gives Symbol 1 as the Link Number and Symbol 2 as
+    the Lane Number, each "D0.0 - D31.0, K23.7" -- so each is a control code iff
+    THAT Lane's byte is PAD.  §4.2.6.3.2.2 p.231 makes the PAD mandatory on the
+    unassigned Lanes of an Upstream Port ("Remaining Lanes must transmit TS1
+    Ordered Sets with Link and Lane numbers set to PAD"), which is the normal
+    state throughout Configuration.
+
+    ⚠️ WHY THIS ROW EXISTS AT ALL.  os_generator's own x4 bench already scores
+    both Symbols, but it observes m_axis_tuser at the UNIT boundary.  Nothing in
+    the repository observed per-lane K at the INTEGRATED boundary, so
+    lane_management.sv:413 -- the broadcast source index, the fourth of §54 #5's
+    coordinated edits -- had no witness at all, and a mutant reverting it alone
+    would have survived every one of the 97 gate targets.  Predicted as T6/MB4 in
+    pcie_docs/evidence/fix-arc-4/PREDICTIONS_2.md before this row was written.
+
+    That is also why the observation point is pipe_data_k_o rather than any
+    internal signal: it is downstream of BOTH the os_generator packing and the
+    lane_management broadcast, so it is the only place where the two halves of
+    the defect are visible together.
+
+    PREDICTED DIVERGENCE.  Today os_generator emits one USER_WIDTH-wide mask into
+    tuser's lane-0 slice (os_generator.sv:237 assigns a USER_WIDTH-wide value to
+    a USER_WIDTH*MAX_NUM_LANES bus, so lanes 1-3 zero-extend) and
+    lane_management.sv:413 sources every lane from that one slice.  Symbol 1's
+    bit is the OR of PAD-ness across all lanes (os_generator.sv:180) and Symbol
+    2's is lane 0's alone (:213).  Neither is per-lane.
+    """
+    await start_clocks(dut)
+    await reset(dut)
+
+    link = 0x05
+    # Lane 2 unassigned: PAD in BOTH Symbol 1 and Symbol 2, the others real.
+    # Lane-distinct by construction, so a broadcast mask cannot pass by symmetry.
+    link_per_lane = [link, link, PAD, link]
+    lane_per_lane = [0x00, 0x01, PAD, 0x03]
+    dut.ordered_set_i.value = pack_os_array(
+        [pack_tsos(link_num=link_per_lane[l], lane_num=lane_per_lane[l], ts_disc=TS1)
+         for l in range(NUM_LANES)])
+    dut.curr_data_rate_i.value = GEN1
+    dut.gen_os_ctrl_i.value = G_VALID | G_GEN_TS1 | G_SET_LANE
+    dut.send_ordered_set_i.value = 0
+
+    lanes = await capture_lanes(dut, 80)
+    bad = []
+    for lane in range(NUM_LANES):
+        os = find_ordered_set(lanes[lane])
+        assert os is not None, "lane %d: no COM-framed ordered set" % lane
+        dut._log.info("lane %d OS: %s" % (lane, _fmt(os)))
+        for sym, driven in ((1, link_per_lane[lane]), (2, lane_per_lane[lane])):
+            got_byte, got_k = os[sym]
+            assert got_byte == driven, (
+                "lane %d Symbol %d byte is 0x%02x, expected the driven 0x%02x"
+                % (lane, sym, got_byte, driven))
+            want_k = 1 if driven == PAD else 0
+            if got_k != want_k:
+                bad.append("lane %d Symbol %d = 0x%02x marked K=%d, Table 4-2 "
+                           "p.201 requires K=%d" % (lane, sym, got_byte, got_k, want_k))
+    for line in bad:
+        dut._log.error("  %s" % line)
+    assert not bad, ("%d per-lane K-flag violations at the PIPE boundary "
+                     "(Base 2.1 Table 4-2 p.201 / §4.2.6.3.2.2 p.231)" % len(bad))

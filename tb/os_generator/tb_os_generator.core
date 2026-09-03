@@ -15,6 +15,10 @@ filesets:
     files:
       - test_os_generator_x4.py : {file_type : user, copyto : .}
 
+  cocotb_x2:
+    files:
+      - test_os_generator_x2.py : {file_type : user, copyto : .}
+
 targets:
   # os_generator as toplevel, x1.  Until Rung 8 this module had no bench of its
   # own -- every LTSSM target's toplevel is pcie_ltssm_downstream, and
@@ -49,4 +53,31 @@ targets:
         - -GMAX_NUM_LANES=4
         - waiver.vlt
     filesets : [rtl, cocotb_x4]
+    toplevel : [os_generator]
+
+  # Fix-arc 4: the SECOND GEOMETRY.  The K-mask and its stride are
+  # width-parameterised, and neither existing geometry can catch a stride
+  # expression tuned to the default:
+  #   x1 (verilate_os_gen_kmask) -- every per-lane site degenerates to the
+  #      identity at MAX_NUM_LANES=1, so it cannot distinguish per-lane from
+  #      lane-0 at all.
+  #   x4 (verilate_os_gen_x4)    -- does not override USER_WIDTH, so it runs at
+  #      the module default 4, where USER_WIDTH == DATA_WIDTH/8 and the
+  #      special_k stride is ACCIDENTALLY correct.
+  # phy_transmit instantiates os_generator with USER_WIDTH=5 (phy_transmit.sv:12),
+  # so the shipping parameterisation is the one no unit row exercised.  This
+  # target runs MAX_NUM_LANES=2 with USER_WIDTH=5: a lane count that is neither
+  # the default nor the identity, at the width that actually ships.
+  verilate_os_gen_x2:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_os_generator_x2
+      timescale: 1ns/1ns
+      verilator_options:
+        - -Iincludes/
+        - -GMAX_NUM_LANES=2
+        - -GUSER_WIDTH=5
+        - waiver.vlt
+    filesets : [rtl, cocotb_x2]
     toplevel : [os_generator]
