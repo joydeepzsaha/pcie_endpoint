@@ -568,9 +568,19 @@ module lane_management
   assign s_dllp_axis_tready   = ready_out & is_dllp_r;
   assign fifo_phy_axis_tready = ready_out & is_phy_r;
 
-  assign data_valid_o         = '1;
+  // data_valid_o was hardwired '1 here.  That made data_valid a COMPILE-TIME
+  // CONSTANT at the phy_transmit boundary -- measured 0 zeros in 200 idle
+  // cycles with nothing to transmit -- so every downstream scrambler was told
+  // that idle clocks carried Symbols, and no stimulus at that boundary could
+  // inject a stall at all.  Together with the unconditional LFSR advance in
+  // gen1_scramble the two defects CANCELLED, which is why 76 gate targets could
+  // not tell a real valid from a tied-off one (Rung 9's surviving mutant M11).
+  //
+  // data_valid_r is the register that already gates data_out_o and d_k_out_o on
+  // the two lines below, so this restores the author's own intent -- the line
+  // left commented directly beneath.
+  assign data_valid_o         = data_valid_r;
   assign data_out_o           = data_valid_r ? data_out_r : '0;
-  // // assign data_valid_o       = data_valid_r;
   assign d_k_out_o            = data_valid_r ? d_k_out_r : '0;
   // assign data_out_o           = temp_data_out;
   assign pipe_width_o         = pipe_width_r;

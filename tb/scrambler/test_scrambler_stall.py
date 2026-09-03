@@ -240,7 +240,7 @@ async def test_stall_control_pipeline_freezes_during_the_gap(dut):
 #  fix-arc 3's pre-committed matrix.
 # ==========================================================================
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_stall_lfsr_must_not_advance_while_data_is_invalid(dut):
     """O-STALL, Base 2.1 §4.2.3 pp.198-199: the LFSR advances once per SYMBOL.
 
@@ -275,7 +275,7 @@ async def test_stall_lfsr_must_not_advance_while_data_is_invalid(dut):
     )
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_stall_stream_never_resynchronises_after_the_gap(dut):
     """A distinct claim from the row above: not "was the stream damaged" but
     "is the damage bounded".

@@ -94,12 +94,29 @@ module gen1_scramble
     D                 = Q;
     D.scramble_reset  = '0;
     D.stop_scrambling = '0;
-    D.lfsr_in         = lfsr_out[(pipe_width_i>>3)];
     D.skp_os          = '0;
     D.data_valid[0]   = data_valid_i;
 
 
     if (data_valid_i) begin
+      // Base 2.1 sec 4.2.3 p.199: "The LFSR value is advanced eight serial
+      // shifts for each SYMBOL except the SKP."  Per Symbol, not per clock -- a
+      // clock with data_valid_i low carries no Symbol, so it must not advance
+      // the LFSR.  This assignment used to sit above the `if`, which made the
+      // advance unconditional: across a data_valid gap the data froze (the
+      // whole pipeline below is gated) while the LFSR ran on, and the stream
+      // desynchronised from its descrambler PERMANENTLY -- the LFSR's only
+      // re-initialiser is COM.  Measured before the fix: 24 of 32 samples
+      // diverged from a no-gap reference, first divergence exactly at the gap,
+      // still diverging 24 samples later.
+      //
+      // `D = Q` above already holds lfsr_in, so gating is achieved by position
+      // alone.  The SKP overrides further down still take precedence, exactly
+      // as they did when this line was above the `if`.
+      //
+      // gen3_scramble.sv:145-150 gates the same advance the same way; this
+      // module was the odd one out in its own family.
+      D.lfsr_in = lfsr_out[(pipe_width_i>>3)];
 
       // if(Q.skp_os != '0) begin
       //   D.lfsr = Q.lfsr;
