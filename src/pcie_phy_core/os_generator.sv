@@ -73,7 +73,30 @@ module os_generator
     os_gen_state_e                  state;
     logic [7:0]                     axis_pkt_cnt;
     logic [7:0]                     os_pkt_cnt;
-    logic [(USER_WIDTH*8)-1:0]      special_k;
+    // E5 of tracker sec 54 #5's bundle -- the shape change the other four need.
+    //
+    // WAS: logic [(USER_WIDTH*8)-1:0] special_k -- ONE mask for the whole Link,
+    // strided by USER_WIDTH.  Two things were wrong with that.
+    //
+    // (a) One mask cannot be per-lane.  Base 2.1 Table 4-2 p.201 gives Symbols 1
+    //     and 2 as the Link and Lane Numbers, each "D0.0 - D31.0, K23.7" -- so
+    //     each is a control code iff THAT Lane's byte is PAD, and sec 4.2.6.3.2.2
+    //     p.231 makes PAD on the remaining Lanes of an Upstream Port mandatory.
+    //     Lanes legitimately disagree here, so the mask must too.
+    //
+    // (b) The stride was USER_WIDTH where a beat carries DATA_WIDTH/8 Symbols.
+    //     phy_transmit instantiates this module with USER_WIDTH = 5 and
+    //     DATA_WIDTH = 32 (phy_transmit.sv:12), so the mask strode by 5 across
+    //     4-Symbol beats and bit 4 of every slice was a phantom fifth Symbol.
+    //     Inert only because bits 0-2 of beat 0 are the only ones ever set --
+    //     the layout's USER_WIDTH == symbols-per-beat invariant was already
+    //     false in the only instantiation that exists.
+    //
+    // Now: one mask PER LANE, each strided by KEEP_WIDTH = symbols per beat.
+    // This is what makes lane_management.sv:413's source index expressible at
+    // all: the tuser lane stride is USER_WIDTH, and without (b) there is no
+    // coherent bit position for lane l's mask to live at.
+    logic [MAX_NUM_LANES-1:0][(KEEP_WIDTH*8)-1:0] special_k;
     pcie_tsos_t [MAX_NUM_LANES-1:0] ordered_set;
     pcie_tsos_t                     temp_ordered_set;
     logic                           os_sent;
@@ -173,12 +196,45 @@ module os_generator
       ST_BUILD: begin
         D.os_pkt_cnt   = 32'd3;
         D.special_k    = '0;
-        D.special_k[0] = '1;
+        // Symbol 0 is COM on every Lane -- Base 2.1 sec 4.2.2 p.194, "a full
+        // Ordered Set appears simultaneously on all Lanes of a multi-Lane Link".
+        // Per-lane now that the mask is per-lane (E5).
+        for (int i = 0; i < MAX_NUM_LANES; i++) begin
+          D.special_k[i][0] = '1;
+        end
         D.axis_pkt_cnt = '0;
         if ((gen_os_ctrl_i.gen_ts1 || gen_os_ctrl_i.gen_ts2)) begin
           for (int i = 0; i < MAX_NUM_LANES; i++) begin
+            // E1 -- Symbol 1, the Link Number.  WAS D.special_k[1], one bit for
+            // the whole Link, so this loop OR-ed the PAD-ness of every Lane
+            // together.  A single PAD anywhere then marked EVERY Lane's real
+            // Link Number as a control code -- and PAD-on-some-Lanes is the
+            // NORMAL state throughout Configuration, so this was the worse of
+            // the two reductions: it corrupted the MAJORITY (measured 3 of 4
+            // Lanes), where the Symbol-2 lane-0 read corrupts the minority.
+            // A receiver decoding Lane 0 saw a K where a D Link Number belongs,
+            // so the Link Number it must match in Configuration.Linkwidth.Accept
+            // never arrived.
             if (Q.ordered_set[i].link_num == PAD_) begin
-              D.special_k[1] = '1;
+              D.special_k[i][1] = '1;
+            end
+
+            // E2 -- Symbol 2, the Lane Number.  WAS a separate check further
+            // down reading Q.ordered_set[0].lane_num ONLY, so Lane 2's genuine
+            // PAD was transmitted as a D symbol and a receiver could not tell an
+            // unassigned Lane from one claiming Lane Number 23 (measured 1 of 4
+            // Lanes).  Folded into this loop because it is the same rule at a
+            // different Symbol: K iff THAT Lane's byte is PAD.  Base 2.1
+            // Table 4-2 p.201; Base 3.0's TS1 table agrees and spells it out
+            // ("0-31, PAD.  PAD is encoded as K23.7").
+            //
+            // Rung 8 chose the lane-0 read DELIBERATELY, because ORing -- the
+            // shape Symbol 1 used -- would have been worse, and left a TODO(x4)
+            // saying a genuinely per-lane mask needs the tuser packing and the
+            // lane_management broadcast changed together.  This bundle is that
+            // change; both reductions are gone.
+            if (Q.ordered_set[i].lane_num == PAD_) begin
+              D.special_k[i][2] = '1;
             end
 
             // if (Q.ordered_set[i].ts_s6.ts1.ec != '0) begin
@@ -187,32 +243,10 @@ module os_generator
             // end
           end
 
-          // Symbol 2 (Lane Number) is a K code iff its VALUE is PAD_, exactly as
-          // Symbol 1 is handled at :180.  Base 2.1 Table 4-2 p.201 gives Symbol 2
-          // as "D0.0 - D31.0, K23.7"; Base 3.0's TS1 table agrees and spells it
-          // out ("0-31, PAD.  PAD is encoded as K23.7").  K-ness is a property of
-          // the byte, not of any LTSSM control signal.
-          //
-          // This replaces a check on gen_os_ctrl_i.set_lane, which is only
-          // *correlated* with PAD-ness.  The two disagreed in 2 of the 4 control
-          // states (tb/os_generator/test_os_generator_k_mask.py): a real Lane
-          // Number marked K while set_lane was low -- the state the LTSSM holds
-          // for all of Configuration.Lanenum.Wait -- and a PAD left unmarked
-          // while set_lane was high.
-          //
-          // LANE 0 ONLY, deliberately.  The K-mask is not per-lane: os_generator
-          // emits one mask in tuser's lane-0 slice and lane_management.sv:409-412
-          // broadcasts it to every lane, on the stated assumption that it "is
-          // identical on every lane (COM is byte 0 on all)".  That holds for every
-          // symbol except this one -- Lane Numbers legitimately differ per lane at
-          // x4, so their PAD-ness can too.  ORing across lanes here would let one
-          // lane's PAD mark another lane's real Lane Number as K.  Sourcing from
-          // lane 0 matches what the broadcast actually carries and is exact at x1.
-          // TODO(x4): a genuinely per-lane K-mask needs the tuser packing and the
-          // lane_management broadcast changed together; see FINDINGS_RUNG8.
-          if (Q.ordered_set[0].lane_num == PAD_) begin
-            D.special_k[2] = '1;
-          end
+          // The Symbol-2 check that used to sit here read Q.ordered_set[0]
+          // ONLY.  It moved INTO the per-lane loop above (E2) -- see the comment
+          // there for why Rung 8 chose lane 0 and why this bundle supersedes it.
+          // Rung 8's own TODO(x4) named exactly this change as the condition.
         end
 
         if (gen_os_ctrl_i.gen_idle) begin
@@ -234,7 +268,22 @@ module os_generator
           for (int i = 0; i < MAX_NUM_LANES; i++) begin
             ltssm_axis_tdata[32*i+:32] = Q.ordered_set[i][32*Q.axis_pkt_cnt+:32];
           end
-          ltssm_axis_tuser  = Q.special_k[USER_WIDTH*Q.axis_pkt_cnt+:USER_WIDTH];
+          // E3 -- emit a mask slice PER LANE.  WAS one USER_WIDTH-wide value
+          // assigned to a (USER_WIDTH*MAX_NUM_LANES)-wide bus, which
+          // zero-extended: Lanes 1..N-1's slices were never written at all, so
+          // there was no per-lane mask for lane_management to read even in
+          // principle.  tuser is packed lane-major exactly as tdata is on the
+          // line above -- lane l at [USER_WIDTH*l +: USER_WIDTH].
+          //
+          // Only KEEP_WIDTH bits are written per Lane because a beat carries
+          // KEEP_WIDTH = DATA_WIDTH/8 Symbols; the assignment to '0 first leaves
+          // the remaining bits of each slice EXPLICITLY zero rather than leaving
+          // a phantom Symbol position to inference (E5(b)).
+          ltssm_axis_tuser = '0;
+          for (int i = 0; i < MAX_NUM_LANES; i++) begin
+            ltssm_axis_tuser[USER_WIDTH*i+:KEEP_WIDTH] =
+                Q.special_k[i][KEEP_WIDTH*Q.axis_pkt_cnt+:KEEP_WIDTH];
+          end
           ltssm_axis_tkeep  = '1;
           ltssm_axis_tvalid = '1;
           ltssm_axis_tlast  = '0;

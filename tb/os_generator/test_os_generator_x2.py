@@ -132,7 +132,7 @@ def _fmt_lane(data, lane, k):
         for s in range(SYMS_PER_BEAT)))
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def x2_per_lane_k_flags_at_user_width_5(dut):
     """Symbols 1 and 2 are K iff THAT lane's byte is PAD, at x2 / USER_WIDTH=5.
 
@@ -204,7 +204,7 @@ async def x2_control_com_is_k_on_lane0(dut):
                     "assertion here reads the wrong bit")
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def x2_com_is_k_on_every_lane(dut):
     """Base 2.1 §4.2.2 p.194: "a full Ordered Set appears simultaneously on all
     Lanes of a multi-Lane Link".  Symbol 0 is COM on every Lane, so every Lane's

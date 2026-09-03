@@ -262,7 +262,7 @@ async def x4_mixed_pad_echo(dut):
 
 # ------------------------------------------------------ fix-arc 4, tracker §54 #5
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def x4_per_lane_k_flags_on_symbols_1_and_2(dut):
     """The K-mask must be PER LANE at Symbols 1 and 2, observed at the PIPE pins.
 

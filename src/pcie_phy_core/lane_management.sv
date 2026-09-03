@@ -402,15 +402,39 @@ module lane_management
                 if (byte_ < (pipe_width_r >> 3)) begin
                   data_out_c[(lane*32)+(byte_*8)+:8]   =
                   fifo_phy_axis_tdata[(lane*32)+((byte_+byte_count_r)*8)+:8];
-                  // Per-lane K-mask destination (was d_k_out_c[byte_], lane-0
-                  // only -- lanes 1..N-1 stayed K=0, so the scrambler scrambled
-                  // their COM instead of bypassing -> dead wire at x4). Mirror
-                  // the DLLP path's dest index (line ~374). SOURCE stays lane 0:
-                  // os_generator emits the ordered-set K-mask only in tuser's
-                  // lane-0 slice (os_generator.sv:214), and it is identical on
-                  // every lane (COM is byte 0 on all), so broadcast it. At x1
-                  // (lane=0) this is the same expression -- provably inert.
-                  d_k_out_c[(lane*4)+(byte_*1)+:1] = fifo_phy_axis_tuser[byte_ + byte_count_r];
+                  // Per-lane K-mask, destination AND source.
+                  //
+                  // The destination index landed in Rung 8 (was d_k_out_c[byte_],
+                  // lane-0 only, so Lanes 1..N-1 stayed K=0 and the scrambler
+                  // scrambled their COM instead of bypassing it).  d_k_out_o is
+                  // [(4*MAX_NUM_LANES)-1:0] -- 4 = DATA_WIDTH/8 Symbols per Lane
+                  // per beat -- so `lane*4` is that port's own stride.
+                  //
+                  // E4 of tracker sec 54 #5: the SOURCE index gains its lane
+                  // term.  It used to read Lane 0's slice for every Lane, on the
+                  // stated assumption that the mask "is identical on every lane
+                  // (COM is byte 0 on all)".  That is false at Symbols 1 and 2 --
+                  // the Link and Lane Numbers legitimately differ per Lane, so
+                  // their PAD-ness does too (Base 2.1 Table 4-2 p.201,
+                  // sec 4.2.6.3.2.2 p.231) -- and os_generator now emits a real
+                  // per-Lane mask for this to read.
+                  //
+                  // ⚠️ The lane stride here is USER_WIDTH, NOT 4.  fifo_phy_axis_tuser
+                  // is [(USER_WIDTH*MAX_NUM_LANES)-1:0] and phy_transmit ships
+                  // USER_WIDTH = 5, so `lane*4` -- which is what the destination
+                  // uses and what a mirror of it would use -- would index into
+                  // the WRONG Lane's slice.  The two indices differ on purpose.
+                  //
+                  // ⚠️ ORDERED PAIR: this edit ALONE, without the os_generator
+                  // half, is strictly worse than not fixing anything.  Rung 9's
+                  // mutant M5 measured it: verilate_tx_x4 went 4/4 to 1/4,
+                  // because Lanes 1..N-1 then read the zero-extended part of
+                  // tuser and their COM stopped being K-marked entirely.
+                  //
+                  // At x1 (lane=0) every form here is the same expression, which
+                  // is why x1 rows cannot see any of this.
+                  d_k_out_c[(lane*4)+(byte_*1)+:1] =
+                      fifo_phy_axis_tuser[(lane*USER_WIDTH) + byte_ + byte_count_r];
                 end
               end
             end

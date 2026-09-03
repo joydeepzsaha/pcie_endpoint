@@ -179,7 +179,7 @@ def _fmt_lane(data, lane, k):
 
 # --------------------------------------------------------------- O-3, Symbol 1
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def symbol1_k_flag_is_per_lane(dut):
     """O-3: Symbol 1's K-flag must be per lane -- K iff THAT lane's byte is PAD.
 
@@ -231,7 +231,7 @@ async def symbol1_k_flag_is_per_lane(dut):
 
 # --------------------------------------------------------------- O-4, Symbol 2
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def symbol2_k_flag_is_per_lane(dut):
     """O-4: Symbol 2's K-flag must be per lane -- K iff THAT lane's byte is PAD.
 
