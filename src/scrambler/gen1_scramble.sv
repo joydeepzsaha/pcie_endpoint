@@ -92,13 +92,50 @@ module gen1_scramble
     // scramble_reset     = '0;
     // disable_scrambling = disable_scrambling_r;
     D                 = Q;
-    D.scramble_reset  = '0;
-    D.stop_scrambling = '0;
-    D.skp_os          = '0;
+    // ⚠️ D.data_valid[0] STAYS OUT HERE, and the three clears below do not.
+    // Stage 0's valid is the record of WHETHER THIS CLOCK CARRIED A SYMBOL, so
+    // it is the one field that must be written on a clock that carries none --
+    // "no Symbol here" is the fact it exists to record.  Moving it inside the
+    // guard would make it hold high through idle, which is exactly the
+    // duplicate-and-drop behaviour measured on gen1_valid and registered as
+    // tracker sec 54 4b with a standing "do not wire it up".
     D.data_valid[0]   = data_valid_i;
 
 
     if (data_valid_i) begin
+      // Base 2.1 sec 4.2.3 pp.198-199: the scrambler's state events are located
+      // in the SYMBOL STREAM, never on a clock -- "The COM Symbol initializes
+      // the LFSR"; "Immediately after a COM exits the Transmit LFSR, the LFSR on
+      // the Transmit side is initialized.  Every time a COM enters the Receive
+      // LFSR on any Lane of that Link, the LFSR on the Receive side is
+      // initialized"; and the LFSR "is advanced eight serial shifts for each
+      // Symbol except the SKP."
+      //
+      // These three fields are pulses raised by a K code at :248 / :175 / :198 /
+      // :257 / :265 -- all INSIDE this guard -- and consumed one clock later,
+      // also inside it (:119 latches the LFSR reset; :143 / :165 / :283 / :73
+      // read the other two).  They used to be cleared ABOVE the `if`, i.e. on
+      // EVERY clock, so a pulse whose lifetime is one clock but whose use needs
+      // a valid clock was LOST whenever the next clock was idle.  Measured
+      // before the fix (tb/scrambler/test_scrambler_kgap.py, six rows):
+      //
+      //   COM arm  a gap at exactly one offset -- the clock between the pulse
+      //            and its use -- changed the published stream at both gap
+      //            lengths, and it NEVER resynchronised (18 of 18 later Symbols
+      //            wrong).  Every other offset in a six-wide sweep was
+      //            transparent, so the window is one clock, not "near a COM".
+      //   SKP arm  worse: losing skp_os leaves disable_scrambling latched, so
+      //            nothing ever re-enables the XOR and the lane transmits
+      //            PLAINTEXT from there on -- the captured stream was the raw
+      //            D-Symbols, byte for byte.
+      //
+      // Gating by position is the same repair half A of sec 54 #4 applied to
+      // D.lfsr_in below, for the same reason; disable_scrambling and byte_cnt
+      // were already held correctly, so this makes all five fields agree.
+      D.scramble_reset  = '0;
+      D.stop_scrambling = '0;
+      D.skp_os          = '0;
+
       // Base 2.1 sec 4.2.3 p.199: "The LFSR value is advanced eight serial
       // shifts for each SYMBOL except the SKP."  Per Symbol, not per clock -- a
       // clock with data_valid_i low carries no Symbol, so it must not advance

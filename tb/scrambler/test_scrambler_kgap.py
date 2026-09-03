@@ -36,11 +36,19 @@ ROW SET
                                transparent — true BEFORE and AFTER the fix, so
                                it creates no rewrite debt (FA-2's debt (a),
                                avoided by construction)
-  K1  expect_fail              O-KGAP over the full swept window, COM arm
-  K2  expect_fail              O-KGAP over the full swept window, SKP arm
+  K1  ordinary PASS            O-KGAP over the full swept window, COM arm
+  K2  ordinary PASS            O-KGAP over the full swept window, SKP arm
 
 K1 and K2 carry ONE divergent assertion each and are never mixed with a
 conforming one (§22.66).
+
+⚠️ K1 and K2 WERE expect_fail, and both flipped in the commit that moved
+gen1_scramble.sv:95-97 inside the guard.  Their pre-fix verdicts are recorded in
+pcie_docs/evidence/fix-arc-4/logs/p1_before_kgap.log as
+`passed: failed as expected (result was AssertionError)`, and the mutants that
+re-redden them are in MUTANTS_FA4.md.  A gate record cannot witness either flip
+(§22.77), so those two artifacts are the proof of repair and this note is the
+pointer to them.
 """
 import cocotb
 from cocotb.clock import Clock
@@ -148,6 +156,12 @@ async def gaps_outside_the_consumption_window_are_transparent(dut):
 
     Together with K1 this localises the defect precisely: K1 says the window is
     not transparent, L says everything either side of it is.
+
+    ⚠️ j+3 is the vulnerable clock FOR THIS STIMULUS, whose ordered set is one
+    presented word.  The general rule is "the clock immediately after any clock
+    on which a K code sits at pipeline stage 1", so a longer ordered set moves
+    it -- K2's two-word SKP set diverges at j+4.  Do not read VULNERABLE=3 as a
+    property of the module.
     """
     await start(dut)
     _, _, results = await sweep(dut, "com", "L/outside-window")
@@ -161,7 +175,7 @@ async def gaps_outside_the_consumption_window_are_transparent(dut):
 
 # ------------------------------------------------------------------ K1
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def com_lfsr_reset_survives_a_data_valid_gap(dut):
     """K1 — O-KGAP, COM arm.  THE MEASUREMENT.
 
@@ -173,10 +187,17 @@ async def com_lfsr_reset_survives_a_data_valid_gap(dut):
     part of that stream, so no pattern of valid-low clocks may change the
     published Symbols.
 
-    PREDICTED DIVERGENCE (PREDICTIONS_1.md P1): gen1_scramble.sv raises
-    scramble_reset at :248 INSIDE `if (data_valid_i)`, clears it at :95 OUTSIDE,
-    and consumes it at :119 INSIDE.  A one-clock pulse that needs a valid clock
-    to be used is lost whenever the clock after it is idle.
+    PREDICTED DIVERGENCE (PREDICTIONS_1.md P1), MEASURED, then FIXED in the
+    commit that flipped this marker.  gen1_scramble.sv raised scramble_reset at
+    :248 INSIDE `if (data_valid_i)`, cleared it ABOVE the guard, and consumed it
+    at :119 INSIDE -- a one-clock pulse that needs a valid clock to be used is
+    lost whenever the clock after it is idle.
+
+    Measured before the fix: a gap at exactly ONE offset in a six-wide sweep --
+    j+3, the clock between the pulse and its use -- diverged, at BOTH gap
+    lengths, first at E[17], and never resynchronised (18 of 18 later Symbols
+    wrong).  Every other offset was transparent, which is what row L asserts and
+    is why the window is one clock rather than "near a COM".
 
     ONE divergent assertion (§22.66): the published Symbol sequence must not
     depend on the clock schedule.
@@ -198,7 +219,7 @@ async def com_lfsr_reset_survives_a_data_valid_gap(dut):
 
 # ------------------------------------------------------------------ K2
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def skp_state_survives_a_data_valid_gap(dut):
     """K2 — O-KGAP, SKP arm.
 
@@ -211,6 +232,24 @@ async def skp_state_survives_a_data_valid_gap(dut):
     deliberately makes no claim about whether the module's SKP semantics are
     otherwise correct.  Those belong to §54 #9 (SKP interval and starvation) and
     are out of this rung's scope fence (D-FA4.3).
+
+    ⚠️ MEASURED AT j+4, NOT j+3 — PREDICTIONS_1.md P6 is a LOSS, and the reason
+    is worth carrying.  A SKP Ordered Set is COM SKP SKP SKP, which at
+    pipe_width 16 is TWO presented words, so its LAST detection happens one
+    clock later than the COM arm's and the vulnerable clock moves with it.  The
+    general rule is not "j+3": it is THE CLOCK IMMEDIATELY AFTER ANY CLOCK ON
+    WHICH A K CODE SITS AT PIPELINE STAGE 1.  For a one-word ordered set that is
+    j+3; here it is j+4.  The word-j pulse loss at j+3 is real but unobservable,
+    because SKP Symbols are K codes and :290 never XORs those anyway.
+
+    ⚠️ AND THE CONSEQUENCE IS WORSE THAN THE COM ARM'S.  Losing skp_os leaves
+    disable_scrambling latched with nothing left to clear it (:144 needs
+    stop_scrambling; :174/:197 need skp_os or byte_cnt > 16, and the SKP path
+    never sets byte_cnt), so the XOR at :289 is bypassed FOREVER and the Lane
+    transmits PLAINTEXT.  Measured, not inferred: the captured stream after the
+    gap was the raw D-Symbols byte for byte (logs/p1_before_kgap.log, K2 arm,
+    got[11..] == the bench's own _d(7).._d(14)).  The COM arm desynchronises the
+    LFSR; this one switches scrambling off.
 
     ONE divergent assertion (§22.66).
     """
