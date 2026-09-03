@@ -41,6 +41,20 @@ filesets:
     files:
       - test_scrambler_stall.py : {file_type : user, copyto : .}
 
+  # Fix-arc 3 -- the O-ALIGN benches.  align_common.py carries the trace
+  # machinery and the four clause detectors; both align targets depend on it.
+  align_common:
+    files:
+      - align_common.py : {file_type : user, copyto : .}
+
+  cocotb_align_scrambler:
+    files:
+      - test_scrambler_align.py : {file_type : user, copyto : .}
+
+  cocotb_align_gen1:
+    files:
+      - test_gen1_align.py : {file_type : user, copyto : .}
+
 targets:
   # T6 -- decode_8b10b, exhaustively.  Purely combinational: no clock, no reset,
   # no state (CENSUS_8B10B.md sec 2), so running disparity enters as dispin and
@@ -88,6 +102,62 @@ targets:
         - waiver.vlt
     filesets : [rtl, cocotb_stall]
     toplevel : [scrambler]
+
+  # Fix-arc 3 -- the O-ALIGN pair, settling P2.g (FA-2 left it NOT MEASURED and
+  # named the oracle as FA-3's first task; tracker sec 59.7 (3)).
+  #
+  # The question: which valid correctly frames the scrambled data at the
+  # wrapper's producer boundary -- gen1_scramble.sv:282's depth-matched
+  # publication, or scrambler.sv:76's 1-stage copy?  F-5 and P2.g both read the
+  # 1-stage copy as a THREE-CYCLE SKEW, which would make the sec 54 #4 fix three
+  # edits instead of two.
+  #
+  # TWO toplevels, because each candidate is then observed BLACK BOX at its own
+  # module boundary with no internal probe.  data_out_o is the same signal in
+  # both (scrambler.sv:85 assigns it straight from gen1_data), so the targets
+  # differ in the valid alone -- the variable under test.
+  #
+  # The measurement is deliberately VALUE-FREE: it counts published beats,
+  # republished words and pipeline advances published with valid low, and never
+  # compares a data value against a model.  Half A of sec 54 #4 is unfixed when
+  # these rows first run, so the scrambled VALUES are corrupted after a gap; a
+  # value-comparing bench would fail on that and never reach the alignment
+  # question.  The same rows therefore run unchanged before and after the fix.
+  #
+  # Both gap lengths 5 and 9 are driven everywhere, because "this defect does
+  # not depend on gap length" is a measurement only if two lengths were driven.
+  verilate_scrambler_align:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_scrambler_align
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, align_common, cocotb_align_scrambler]
+    toplevel : [scrambler]
+
+  # Candidate A, at gen1_scramble's own boundary.  scrambler.sv:61 wires this
+  # output to `gen1_valid` and gen1_valid is NEVER READ -- its only other
+  # occurrence is a commented-out line at :91 inside the disabled Gen3 mux.
+  # That commented line is an invitation to wire it up, and these two
+  # expect_fail rows are the reason not to: the chain holds through a gap
+  # (republishing one stale Symbol per gap clock) and swallows exactly one real
+  # Symbol on resume.
+  verilate_gen1_align:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_gen1_align
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, align_common, cocotb_align_gen1]
+    toplevel : [gen1_scramble]
 
   # T7 -- encode_8b10b, exhaustively.  9 data bits + 1 disparity bit = 1024
   # combinations, all driven.  Unlike the decoder, only 536 of them have a
