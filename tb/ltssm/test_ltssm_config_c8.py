@@ -16,11 +16,18 @@ unlike Polling.Active (1024) or Configuration.Complete (16 after receiving
 one), where the spec states such a count explicitly.
 
 The RTL implements the two-consecutive part correctly --
-link_lanes_formed[lane] <= (ts1_cnt >= 8'h2) at :1559 -- and then adds a
-second, unsourced gate at :829-830:
+link_lanes_formed[lane] <= (ts1_cnt >= 8'h2) -- and then added a second,
+unsourced gate:
 
           if ((|link_lanes_formed) &&
           ordered_set_sent_cnt_r >= 8'h08)
+
+STATUS: FIXED (fix-arc 6b). The unsourced conjunct was removed and the exit is
+now the forming condition alone; the expect_fail marker came off in the same
+commit (rule 22.75 -- a marker left on reports `failed` for a passing row, and
+rule 22.77's corollary: until it comes off, the gate cannot witness the revert
+mutant either). Prediction and pre-edit census:
+evidence/fix-arc-6/PREDICTIONS_C8.md. Mutant MC8 restores the conjunct.
 
 WHAT THIS TEST MEASURES
 Walk to Configuration.Linkwidth.Accept as the Root Complex, echo the matching
@@ -29,10 +36,10 @@ transmissions until the FSM advances to Configuration.Lanenum.Wait.
 
   Spec-conformant DUT: advances on the two consecutive TS1, so at most a pulse
                        or two of slack.
-  This DUT:            waits for a further eight transmissions.
+  Pre-fix-arc-6b DUT:  waited for a further eight transmissions.
 
-The assertion states the spec value, so this is an expect_fail row recording
-the divergence (oracle C8, evidence/rung10/ORACLES_LTSSM.md). No src/ edit.
+The assertion states the spec value (oracle C8, evidence/rung10/ORACLES_LTSSM.md).
+It was an expect_fail row recording the divergence until fix-arc 6b closed it.
 
 SEVERITY, pre-committed in evidence/rung10/PREDICTIONS_R10B_D7_P3_C8.md: this
 is a CONSERVATIVE divergence -- it delays, it never skips -- so unless the
@@ -86,7 +93,7 @@ def sname(s):
     return f"{STATE_NAMES.get(s, hex(s))} ({s:#07x})"
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_config_c8(dut):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
 
@@ -161,5 +168,5 @@ async def run_test_config_c8(dut):
         f"Configuration.Complete (16 after receiving one). The forming "
         f"condition was met on entry, so a conformant DUT advances within "
         f"{SPEC_BUDGET} transmissions; this DUT took {pulses}, matching the "
-        f"unsourced `ordered_set_sent_cnt_r >= 8'h08` gate at "
-        f"pcie_ltssm_downstream.sv:830.")
+        f"unsourced `ordered_set_sent_cnt_r >= 8'h08` gate that fix-arc 6b "
+        f"removed from ST_CONFIGURATION_LINKWIDTH_ACCEPT's exit.")

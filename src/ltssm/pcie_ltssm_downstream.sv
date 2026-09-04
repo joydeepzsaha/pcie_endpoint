@@ -860,9 +860,30 @@ module pcie_ltssm_downstream
           //TODO(contiguity): no check that the formed lanes are contiguous from
           //lane 0 / constitute a single link; needed for fragmentation and
           //crosslink rejection, unimplemented.
-          if ((|link_lanes_formed) &&
-          ordered_set_sent_cnt_r >= 8'h08)
-          begin
+          //
+          // C8 (Base 2.1 4.2.6.3.2.1 p.230; tracker SS54 #11; row
+          // verilate_config_c8).  The exit condition is the FORMING CONDITION
+          // ALONE -- "If a configured Link can be formed with at least one group
+          // of Lanes that received two consecutive TS1 Ordered Sets with the same
+          // received Link number ... The next state is
+          // Configuration.Lanenum.Wait."  This substate states NO
+          // transmitted-Ordered-Set count.  That silence is meaningful rather
+          // than merely absent: Polling.Active (1024) and Configuration.Complete
+          // (16 after receiving one) both state theirs explicitly.
+          // link_lanes_formed[lane] <= (ts1_cnt >= 8'h2) already implements the
+          // whole condition on its own.
+          //
+          // The `ordered_set_sent_cnt_r >= 8'h08` gate removed here was
+          // unsourced and delayed the exit by eight transmissions (measured at
+          // 8-9 pulses against a spec budget of 2).  It was CONSERVATIVE -- it
+          // delayed, it never skipped -- which is why it sat open behind rows
+          // that all looked green.
+          //
+          // Lanenum.Accept's two `>= 8'h8` gates below (:898, :908) are
+          // DELIBERATELY LEFT ALONE: they belong to oracles C14 and C15, whose
+          // recorded verdicts are "conforms" and "conforms (loosely)", and no
+          // confirmed divergence names them.
+          if ((|link_lanes_formed)) begin
             ordered_set_sent_cnt_c = '0;
             gen_os_ctrl_c.gen_ts1  = '1;
             gen_os_ctrl_c.gen_ts2  = '0;
