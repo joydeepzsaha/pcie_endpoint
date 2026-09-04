@@ -156,9 +156,104 @@ async def inverted_ts2_sets_polarity(dut):
     assert seen["ts2"] == 1, "sec 4.2.4.4: it is still a TS2, just inverted"
 
 
+# ------------------------------- C1, the CAPTURE the identifier check reads
+
+def _os_symbol(dut, n):
+    """Symbol n of ordered_set_o, the module's capture register
+    (ordered_set_handler.sv:101 binds it straight to ordered_set_out_r)."""
+    return (int(dut.ordered_set_o.value) >> (8 * n)) & 0xFF
+
+
+def _os_symbols(dut):
+    return [_os_symbol(dut, n) for n in range(16)]
+
+
+@cocotb.test()
+async def control_the_capture_register_holds_the_early_identifier(dut):
+    """B1 -- control, and the reason B2's failure is attributable.
+
+    After a well-formed TS1, ordered_set_o must carry the Identifier in Symbols
+    6-9 -- the four the check at :380 actually reads.  This row exists so that a
+    failure of B2 cannot be blamed on the observation point: it proves the port
+    is readable, the Symbol indexing is right, and the register really does hold
+    the Ordered Set just received.
+
+    Independent observation point (SS22.80): the SAME register, at Symbols the
+    defect does not reach.  B1 and B2 differ in the Symbol INDEX alone, which is
+    the variable under test.
+    """
+    await setup(dut)
+    syms = ts_ordered_set(TS1_ID, link=0x05, lane=0x00)
+    await drive_and_observe(dut, syms)
+    got = _os_symbols(dut)
+    dut._log.info("B1 capture register: %s" % " ".join("%02x" % b for b in got))
+    bad = [n for n in range(6, 10) if got[n] != TS1_ID]
+    assert not bad, (
+        "ordered_set_o does not even hold the Symbols the check reads: %s "
+        "carry %s, expected %02x" % (bad, [("%02x" % got[n]) for n in bad], TS1_ID))
+
+
+@cocotb.test()
+async def capture_register_holds_all_ten_identifier_symbols(dut):
+    """B2 -- tracker SS54 #6b, the CAPTURE defect.  THE MEASUREMENT.
+
+    Table 4-2 p.203 gives Symbols 6-15 as the TS1 Identifier, and SS54 #6 widens
+    the check at :380 to read all ten.  That widening is only meaningful if the
+    register it reads CONTAINS all ten.  It does not.
+
+    PREDICTED DIVERGENCE.  ordered_set_handler.sv, state ST_RX_GEN1, blocking
+    assignments in one always_comb so statement order is semantic:
+
+        :265   if (pkt_full) begin
+        :266     ordered_set_out_c = ordered_set_c;        <- SNAPSHOT
+        ...
+        :278     ordered_set_c[(axis_pkt_cnt_r+i)*8+:8] = data_in_i[8*i+:8];  <- WRITTEN AFTER
+
+    The snapshot is taken BEFORE the final beat's Symbols are written into
+    ordered_set_c, so the last beat's Symbols are one Ordered Set stale -- the
+    PREVIOUS set's, or reset zeros on the first.  With pipe_width_i = 8 the final
+    beat carries Symbol 15 alone; at the integrated width of 16
+    (lane_management.sv:45) it carries Symbols 14 AND 15, which is why the
+    closure bench sees two stale Symbols where this unit bench sees one.
+
+    ⚠️ WHY THIS ROW HAD TO EXIST BEFORE SS54 #6 COULD BE FIXED.  Widening the
+    check alone makes the receiver reject EVERY Training Sequence, well-formed
+    ones included, because Symbols 14-15 never match.  The link would never
+    train.  A first attempt did exactly that and was caught only because Rung 3's
+    positive rows (ts1_wellformed_is_recognised and friends) existed -- the
+    negative row corrupt_ts1_must_not_reach_the_ltssm went GREEN under it, for
+    the entirely wrong reason that everything was being rejected.  Nothing in the
+    suite observed Symbols 14-15, which is how an unregistered defect survived a
+    spec-golden pass and both census arcs.
+
+    ONE divergent assertion (SS22.66): the capture register holds every Symbol of
+    the Ordered Set it just received.
+    
+    ⚠️ FLIPPED by the §54 #6 + #6b bundle.  Before it, the capture register
+    held `bc 05 00 ff 02 00 4a 4a 4a 4a 4a 4a 4a 4a 4a 00` for a well-formed TS1
+    -- Symbol 15 stale (reset zeros).  The pre-fix verdict is recorded in
+    pcie_docs/evidence/fix-arc-5/logs/, and a gate record cannot witness a marker
+    flip (§22.77), so that artifact plus mutant MA in MUTANTS_FA5.md are the
+    proof of repair.
+    """
+    await setup(dut)
+    syms = ts_ordered_set(TS1_ID, link=0x05, lane=0x00)
+    await drive_and_observe(dut, syms)
+    got = _os_symbols(dut)
+    dut._log.info("B2 capture register: %s" % " ".join("%02x" % b for b in got))
+    bad = [n for n in range(6, 16) if got[n] != TS1_ID]
+    dut._log.info("B2 identifier Symbols not held: %s" % bad)
+    assert not bad, (
+        "the capture register is missing Symbol(s) %s of the Ordered Set it just "
+        "received (they carry %s, expected %02x).  Table 4-2 p.203 requires "
+        "Symbols 6-15 to be D10.2, and SS54 #6's widened check reads this "
+        "register -- so it cannot be widened until this holds."
+        % (bad, [("%02x" % got[n]) for n in bad], TS1_ID))
+
+
 # ------------------------------------------------------- C1 / C2, negative
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def ts1_corrupt_in_symbols_10_to_15_is_rejected(dut):
     """C1, the requirement's real content: Table 4-2 p.203 gives Symbols
     "6 - 15   D10.2" as the TS1 Identifier.  All TEN must be D10.2.  An Ordered
@@ -175,6 +270,10 @@ async def ts1_corrupt_in_symbols_10_to_15_is_rejected(dut):
     no weight.  Any 16-Symbol set whose 6-9 happen to be 4Ah is accepted as a
     TS1 -- which is how a corrupted training sequence reaches the LTSSM as a good
     one.
+    
+    ⚠️ FLIPPED by the §54 #6 + #6b bundle.  The check now compares all ten
+    Identifier Symbols, and #6b made the register actually hold them.  Mutant MB
+    (check narrowed back to 4-of-N) re-reddens this row; see MUTANTS_FA5.md.
     """
     await setup(dut)
     tail = [TS1_ID] * 4 + [0x00] * 6           # Symbols 6-9 good, 10-15 wrong
@@ -185,11 +284,13 @@ async def ts1_corrupt_in_symbols_10_to_15_is_rejected(dut):
         "Table 4-2 p.203 requires Symbols 6-15 to be D10.2; only 6-9 were checked"
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def ts2_corrupt_in_symbols_10_to_15_is_rejected(dut):
     """C2: same requirement for TS2, Table 4-3 p.205, "6 - 15   D5.2".
 
     PREDICTED DIVERGENCE: ordered_set_handler.sv:389, same four-Symbol shape.
+    
+    ⚠️ FLIPPED by the §54 #6 + #6b bundle.  Mutant MB re-reddens it.
     """
     await setup(dut)
     tail = [TS2_ID] * 4 + [0xFF] * 6
@@ -200,7 +301,7 @@ async def ts2_corrupt_in_symbols_10_to_15_is_rejected(dut):
         "Table 4-3 p.205 requires Symbols 6-15 to be D5.2; only 6-9 were checked"
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def partial_inversion_does_not_set_polarity(dut):
     """C3: sec 4.2.4.4 p.208 -- "the Receiver looks at Symbols 6-15 of the TS1
     and TS2 Ordered Sets as the indicator of Lane polarity inversion".  A set
@@ -209,6 +310,9 @@ async def partial_inversion_does_not_set_polarity(dut):
     corrupt a working Lane.
 
     PREDICTED DIVERGENCE: ordered_set_handler.sv:382 tests Symbols 6-9 only.
+    
+    ⚠️ FLIPPED by the §54 #6 + #6b bundle.  §4.2.4.4 p.208's span is now the
+    one the RTL uses.  Mutant MB re-reddens it.
     """
     await setup(dut)
     tail = [TS1_ID_INV] * 4 + [TS1_ID] * 6     # inverted 6-9, upright 10-15
