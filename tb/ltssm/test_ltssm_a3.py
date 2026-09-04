@@ -187,13 +187,32 @@ async def test_a3_4_control_reaches_rcvrlock(dut):
         "A3-4 CONTROL OK: Configuration.Idle 2 ms timeout -> RECOVERY_RCVR_LOCK")
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_a3_4_rcvrlock_control_word_describes_ts1(dut):
     """A3-4: on entering RcvrLock from Configuration.Idle, control must say TS1.
+    CLOSED -- tracker sec 54 #7.
 
     Base 2.1 p.239 (oracle R1): Recovery.RcvrLock transmits TS1 Ordered Sets.
-    This DUT arrives with Configuration.Idle's Idle control still in place,
-    because :976-:991 writes neither gen_os_ctrl_c nor ordered_set_c.
+
+    WAS a predicted divergence (Rung 10c, A3-4) and carried expect_fail until
+    FA-5b.  The DUT arrived with Configuration.Idle's Idle control still in
+    place, because the 2 ms timeout arm wrote neither gen_os_ctrl_c nor
+    ordered_set_c and both are sticky -- measured gen_idle=1, gen_ts1=0.  The
+    fix builds the TS1 control word and template in that arm, copying the shape
+    of ST_L0's own entry into the same state.
+
+    ⚠️ 10c cited the arm as ":976-:991"; that numbering is STALE -- FA-1's own
+    ab776cf inserted an eight-line comment above it.  At the time of the fix the
+    state is :962-:1009 and the timeout arm :984-:1008.
+
+    ⚠️ The contrast that explains why this survived so long: the SUCCESS path one
+    branch up clears all four control bits before leaving.  Only the timeout path
+    forgot, so the defect is invisible on a link that trains normally and appears
+    only after a 2 ms Configuration.Idle timeout.
+
+    Paired with test_a3_4_control_reaches_rcvrlock, which proves the timeout
+    really reaches this state -- so this row cannot pass for a setup reason
+    (tracker sec 22.81).
     """
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     check_geometry(dut)
