@@ -44,6 +44,13 @@ module os_generator
     ST_SKP
   } os_gen_state_e;
 
+  // The SKP scheduling threshold, in counts of pipe_rx_usr_clk_i.  Solved in
+  // §54 #9(C) from the MEASURED relation interval = 2N + 2 -- see the derivation
+  // at the ST_IDLE test below.  It is a localparam because TWO decision sites
+  // now consult it (ST_IDLE, and the ST_SEND boundary added by §54 #9(A)), and
+  // two bare literals governing one schedule is a drift hazard.
+  localparam logic [31:0] SkpIntervalCounts = 32'h2A6;
+
 
   // os_gen_state_e                                  curr_state;
   // os_gen_state_e                                  D.state;
@@ -178,7 +185,33 @@ module os_generator
           D.gen_os_ctrl      = gen_os_ctrl_i;
           D.state            = ST_BUILD;
         end
-        if (Q.skp_cnt >= 32'hB0) begin
+        // SKP scheduling interval.  Base 2.1 sec 4.2.7.1 p.261: "The SKP Ordered
+        // Set shall be scheduled for insertion at an interval between 1180 and
+        // 1538 Symbol Times."  0xB0 = 176 counts scheduled one every 354, which
+        // is 3.3x too often -- every SKP costs four Symbol Times of Link
+        // bandwidth, and sec 4.2.7.2 p.261 only obliges a Receiver to tolerate
+        // an AVERAGE inside that window.
+        //
+        // The constant is solved from a MEASURED relation, not a derived one.
+        // The bench printed eight consecutive intervals of 354 Symbol Times at
+        // 0xB0, so:
+        //
+        //     interval = 2N + 2      N counts of pipe_rx_usr_clk_i
+        //                            2  Symbol Times per clock (PipeWidthGen1
+        //                               = 16 bits, lane_management.sv:45)
+        //                            +2 for ST_SKP's own cycle before the FSM
+        //                               returns here
+        //
+        //     require  2N + 2 in [1180, 1538]  ->  N in [589, 768] = [0x24D, 0x300]
+        //     centre   (1180+1538)/2 = 1359    ->  N = 678 = 0x2A6 -> 1358
+        //
+        // ⚠️ 0x2A6 is the window CENTRE on purpose, not an endpoint: the 2N+2
+        // relation rests on one measurement, so 178 Symbol Times of margin below
+        // and 180 above is worth more than a rounder constant.  A first pass
+        // derived 2N (352) and doubted the register's 354; the register was
+        // right and the derivation was two short -- which is exactly why the
+        // constant is solved from the artifact.
+        if (Q.skp_cnt >= SkpIntervalCounts) begin
           D.skp_cnt = '0;
           D.state   = ST_SKP;
         end
@@ -288,9 +321,42 @@ module os_generator
           ltssm_axis_tvalid = '1;
           ltssm_axis_tlast  = '0;
           if (Q.axis_pkt_cnt >= Q.os_pkt_cnt) begin
+            // §54 #9(A) -- A PENDING SKP WINS THIS BOUNDARY.
+            //
+            // Base 2.1 §4.2.7.1 p.261: "Scheduled SKP Ordered Sets shall be
+            // transmitted if a packet or Ordered Set is not already in progress,
+            // otherwise they are accumulated and then inserted consecutively at
+            // the next packet or Ordered Set boundary."  The second clause had
+            // no implementation.  skp_cnt is tested only in ST_IDLE, and the
+            // streaming lock below keeps the FSM out of ST_IDLE for as long as
+            // the LTSSM holds a steady command -- so during continuous training
+            // the state that could schedule a SKP was never visited.  Measured:
+            // 206 Ordered Sets and ZERO SKPs over 3332 Symbol Times, against a
+            // spec window that closes at 1538.  Total starvation, not a slow
+            // timer: with no Ordered Set requested the same DUT emits on a
+            // perfect 1358-Symbol-Time cadence.
+            //
+            // ⚠️ THIS TEST IS AT THE BOUNDARY ON PURPOSE.  It sits inside
+            // `Q.axis_pkt_cnt >= Q.os_pkt_cnt`, where tlast has been asserted and
+            // os_sent raised, so THE ORDERED SET IN FLIGHT ALWAYS COMPLETES and
+            // only the next one is delayed.  Emitting from inside ST_SEND
+            // without this guard is the "obvious" one-line version and it is
+            // forbidden by the same spec sentence -- four foreign Symbols inside
+            // a TS make it unrecognisable to the receiver's 16-Symbol matcher.
+            // skp_does_not_interrupt_an_ordered_set is the row that says so, and
+            // mutant ME (divert without the boundary test) reddens it.
+            //
+            // The GTP/GTX streaming lock is PRESERVED, not removed: it still
+            // governs every boundary at which no SKP is due, which is all but
+            // one in 678.  What changes is that it no longer wins unconditionally
+            // against a spec-mandated insertion point.
+            if (Q.skp_cnt >= SkpIntervalCounts) begin
+              D.skp_cnt = '0;
+              D.state   = ST_SKP;
+            end
             //this hack allows for streamin uninterrupted ordered sets
             //required by the GTP/GTX transievers
-            if (Q.gen_os_ctrl == gen_os_ctrl_i && !send_ltssm_os_i
+            else if (Q.gen_os_ctrl == gen_os_ctrl_i && !send_ltssm_os_i
             && (ordered_set_i[0] == Q.temp_ordered_set)) begin
 
             end else begin

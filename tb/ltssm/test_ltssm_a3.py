@@ -187,13 +187,32 @@ async def test_a3_4_control_reaches_rcvrlock(dut):
         "A3-4 CONTROL OK: Configuration.Idle 2 ms timeout -> RECOVERY_RCVR_LOCK")
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def test_a3_4_rcvrlock_control_word_describes_ts1(dut):
     """A3-4: on entering RcvrLock from Configuration.Idle, control must say TS1.
+    CLOSED -- tracker sec 54 #7.
 
     Base 2.1 p.239 (oracle R1): Recovery.RcvrLock transmits TS1 Ordered Sets.
-    This DUT arrives with Configuration.Idle's Idle control still in place,
-    because :976-:991 writes neither gen_os_ctrl_c nor ordered_set_c.
+
+    WAS a predicted divergence (Rung 10c, A3-4) and carried expect_fail until
+    FA-5b.  The DUT arrived with Configuration.Idle's Idle control still in
+    place, because the 2 ms timeout arm wrote neither gen_os_ctrl_c nor
+    ordered_set_c and both are sticky -- measured gen_idle=1, gen_ts1=0.  The
+    fix builds the TS1 control word and template in that arm, copying the shape
+    of ST_L0's own entry into the same state.
+
+    ⚠️ 10c cited the arm as ":976-:991"; that numbering is STALE -- FA-1's own
+    ab776cf inserted an eight-line comment above it.  At the time of the fix the
+    state is :962-:1009 and the timeout arm :984-:1008.
+
+    ⚠️ The contrast that explains why this survived so long: the SUCCESS path one
+    branch up clears all four control bits before leaving.  Only the timeout path
+    forgot, so the defect is invisible on a link that trains normally and appears
+    only after a 2 ms Configuration.Idle timeout.
+
+    Paired with test_a3_4_control_reaches_rcvrlock, which proves the timeout
+    really reaches this state -- so this row cannot pass for a setup reason
+    (tracker sec 22.81).
     """
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     check_geometry(dut)
@@ -210,6 +229,61 @@ async def test_a3_4_rcvrlock_control_word_describes_ts1(dut):
         f"A3-4 violated: entered Recovery.RcvrLock with control word {fmt(f)}; "
         f"Base 2.1 p.239 requires TS1 Ordered Sets, but Configuration.Idle's "
         f"timeout exit (:976-:991) left the Idle control in place")
+
+
+@cocotb.test()
+async def test_a3_4_rcvrlock_ordered_set_template_is_ts1(dut):
+    """A3-4, the TEMPLATE half: the ordered set itself must be a TS1, not Idle.
+
+    ⚠️ WHY THIS ROW EXISTS.  It was added in FA-5b to answer a SURVIVING mutant,
+    not to re-test a covered claim (tracker sec 22.34).  M7b drops ONLY the
+    `ordered_set_c = gen_ts_os(...)` line from the fix, keeping the control
+    flags, and test_a3_4_rcvrlock_control_word_describes_ts1 stayed GREEN --
+    measured, 4/4.  So that row reads the gen_os_ctrl_o FLAGS and nothing else,
+    and the template half of the fix had no oracle at all.
+
+    The two halves are genuinely different behaviours, which is why an
+    equivalence argument was not available:
+
+      * the flags tell os_generator to BUILD a TS1
+      * ordered_set_o carries WHAT to build -- Link Number, Lane Number, rate,
+        and Symbols 6-15's identifier
+
+    Without the template write, Recovery.RcvrLock is entered with
+    Configuration.Idle's gen_zeros() Idle template still in place (this file's
+    own header records it), so the DUT would announce TS1 and emit an all-zero
+    ordered set.
+
+    ORACLE: Base 2.1 Table 4-2 pp.201-202 -- Symbols "6 - 15  D10.2" are the TS1
+    Identifier, D10.2 = 4Ah.  Ten Symbols, all of them.
+
+    Paired with test_a3_4_control_reaches_rcvrlock, which proves the 2 ms
+    timeout really reaches this state (tracker sec 22.81).
+    """
+    cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
+    check_geometry(dut)
+    await bring_up_link_to_cfg_idle(dut)
+
+    await wait_state(dut, ST_RECOVERY_RCVR_LOCK, TWO_MS_CYCLES + TIMEOUT_SLACK,
+                     "RECOVERY_RCVR_LOCK (via CFG_IDLE 2 ms timeout)")
+    await ClockCycles(dut.clk_i, 2)
+    await Timer(1, units="ps")
+
+    # Lane 0's template is the low 128 bits of ordered_set_o (16 Symbols x 8b).
+    os_all = int(dut.ordered_set_o.value)
+    lane0 = os_all & ((1 << 128) - 1)
+    syms = [(lane0 >> (8 * s)) & 0xFF for s in range(16)]
+    ident = syms[6:16]
+    dut._log.info("A3-4 template on entry to RcvrLock -> Symbols 0-5 %s  6-15 %s"
+                  % (" ".join("%02x" % s for s in syms[:6]),
+                     " ".join("%02x" % s for s in ident)))
+
+    assert ident == [TS1] * 10, (
+        "A3-4 template violated: entered Recovery.RcvrLock with Symbols 6-15 = "
+        "%s; Base 2.1 Table 4-2 pp.201-202 requires all ten to be the TS1 "
+        "Identifier D10.2 = %02xh.  Configuration.Idle's timeout exit must "
+        "write ordered_set_c, not only the control flags."
+        % (" ".join("%02x" % s for s in ident), TS1))
 
 
 # ==========================================================================

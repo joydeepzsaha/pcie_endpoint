@@ -209,7 +209,7 @@ async def eios_reaches_the_top(dut):
     assert seen["idle"] == 1, "a spec-legal EIOS did not reach idle_valid_o"
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def corrupt_ts1_must_not_reach_the_ltssm(dut):
     """C1 at integration level -- the consequence of the unit defect.
 
@@ -222,6 +222,20 @@ async def corrupt_ts1_must_not_reach_the_ltssm(dut):
     conformance defect, and this is the latter.
 
     PREDICTED DIVERGENCE (PREDICTIONS_PHY_RX.md sec 2, T3).
+    
+    ⚠️ FLIPPED by the §54 #6 + #6b bundle -- AND THE REASON MATTERS.
+
+    A first attempt at §54 #6 widened the check ALONE.  This row went green then
+    too, and it was a FALSE POSITIVE: with the capture register still missing
+    Symbols 14-15 the DUT rejected EVERY Training Sequence, so "the corrupt one
+    is rejected" passed for a reason that had nothing to do with corruption.  A
+    negative assertion cannot distinguish "rejects the bad one" from "rejects
+    everything".
+
+    What discriminates is the company it keeps: this row is green in the SAME
+    RUN as ts1_reaches_the_top, ts2_reaches_the_top and
+    inverted_ts1_reaches_the_top.  Under the failed attempt all three of those
+    FAILED.  Do not read this row's verdict without them.
     """
     await setup(dut)
     tail = [TS1_ID] * 4 + [0x00] * 6

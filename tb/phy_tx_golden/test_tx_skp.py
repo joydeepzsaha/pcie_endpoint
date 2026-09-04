@@ -132,7 +132,26 @@ async def skp_ordered_set_composition(dut):
     dut.gen_os_ctrl_i.value = 0          # park os_generator in ST_IDLE
     dut.link_up_i.value = 1              # arm os_generator.sv:139-141
 
-    stream = await collect(dut, 600)
+    # ⚠️ Window WIDENED in FA-5b -- a TEST change forced by a DESIGN fix, not a
+    # fix to make a row pass.  SS54 #9(C) moved the SKP interval from 354 to a
+    # spec-legal 1358 Symbol Times, so the old 600-clock (1200 Symbol Time)
+    # window no longer reaches the first SKP.  PREDICTIONS_34B.md C3
+    # pre-registered this row going red for want of window.
+    #
+    # ⚠️ AND the first widening -- one interval plus margin -- was STILL too
+    # short, which is the more useful half of the lesson.  The first SKP does not
+    # arrive one interval after link_up_i; it arrives about THREE.  That was
+    # already visible in the pre-fix numbers had anyone looked: at 354 the first
+    # landed at Symbol Time 1080 ~= 3 x 354, and the old 1200-Symbol-Time window
+    # caught it only just.  At 1358 the first lands at 4092 ~= 3 x 1358 -- the
+    # same structure, scaled.
+    #
+    # So the budget is taken from the SIBLING row that is proven to reach two
+    # SKPs (the O-8 interval row uses four spec-maximum intervals), rather than
+    # invented here.  Derived from the spec bound, so it stays correct for any
+    # conforming constant.
+    cycles = 4 * SKP_MAX_SYMBOL_TIMES // 2 + 64     # 3140 clocks = 6280 Symbol Times
+    stream = await collect(dut, cycles)
     hits = skp_starts(stream)
     assert hits, "no COM,SKP,SKP,SKP group in %d Symbol Times after link_up_i " \
                  "(os_generator.sv:158 fires at 176 counts): %s" \
@@ -148,7 +167,7 @@ async def skp_ordered_set_composition(dut):
 
 # ------------------------------------------------------------------ O-8
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def skp_scheduling_interval_is_1180_to_1538_symbol_times(dut):
     """O-8: Base 2.1 sec 4.2.7.1 p.261 -- "The SKP Ordered Set shall be scheduled
     for insertion at an interval between 1180 and 1538 Symbol Times."
@@ -161,16 +180,21 @@ async def skp_scheduling_interval_is_1180_to_1538_symbol_times(dut):
     Symbol Times through the DUT's own pipe_width_o -- and then compared to the
     window.  Nothing is hardcoded except the two spec numbers.
 
-    PREDICTED DIVERGENCE (PREDICTIONS_R9.md sec 3, O-8).  os_generator.sv:158
+    WAS a predicted divergence (Rung 9, PREDICTIONS_R9.md sec 3, O-8) and carried
+    expect_fail until FA-5b.  os_generator fired at 0xB0 = 176 counts of
+    pipe_rx_usr_clk_i, scheduling one SKP every 354 Symbol Times -- roughly 3.3x
+    more often than the 1180 floor.  Over-frequent SKPs are not a silent
+    inefficiency: every one costs four Symbol Times of link bandwidth, and
+    sec 4.2.7.2 p.261 only obliges a Receiver to tolerate an AVERAGE interval
+    "between 1180 to 1538 Symbol Times".
 
-        if (Q.skp_cnt >= 32'hB0) begin
+    SS54 #9(C) moved the constant to 0x2A6 = 678, solved from the MEASURED
+    relation interval = 2N + 2 (two Symbol Times per Gen1 PIPE-16 clock, plus one
+    clock for ST_SKP itself).  Measured after the fix: a single interval of
+    exactly 1358 Symbol Times, the window centre, predicted before the run.
 
-    fires at 176 counts of pipe_rx_usr_clk_i.  At Gen1 the PIPE is 16 bits wide,
-    so one clock is two Symbol Times and the scheduled interval is about 356 --
-    roughly 3.3x more often than the 1180 floor.  Over-frequent SKPs are not a
-    silent inefficiency: every one of them costs four Symbol Times of link
-    bandwidth, and sec 4.2.7.2 p.261 only obliges a Receiver to tolerate an
-    AVERAGE interval "between 1180 to 1538 Symbol Times".
+    ⚠️ Rung 9's docstring said "about 356"; the artifact says 354, eight times
+    identically.  The register's 354 was right.
     """
     await start_clocks(dut)
     await reset(dut)
@@ -216,16 +240,30 @@ async def skp_does_not_interrupt_an_ordered_set(dut):
     raised AND a TS1 stream running, no COM,SKP,SKP,SKP group may appear between
     a TS COM and its Symbol 15.
 
-    This passes because os_generator tests skp_cnt only in ST_IDLE
-    (os_generator.sv:158) and so structurally cannot pre-empt ST_SEND.
+    SS WHY THIS PASSES CHANGED IN FA-5c, AND THE OLD REASON WAS STRONGER.
+    It used to pass because os_generator tested skp_cnt only in ST_IDLE and so
+    STRUCTURALLY could not pre-empt ST_SEND -- the row could not fail.  SS54 #9(A)
+    gave the second half of the spec sentence an implementation: a pending SKP
+    now wins the ST_SEND set-complete boundary.  So this row now passes because
+    the diversion is placed AT a boundary, where tlast is already asserted and
+    the set in flight completes -- a real property that a wrong placement would
+    break.  Mutant ME (divert without the boundary test) reddens it, which is
+    what makes it load-bearing rather than decorative.
 
-    The test also LOGS whether any SKP was emitted during the stream at all.
-    That number is evidence for a separate observation recorded in
-    FINDINGS_PHY_TX.md: the ST_SEND streaming hack (os_generator.sv:244-249)
-    keeps the FSM out of ST_IDLE while the LTSSM holds a steady command, so the
-    "accumulated and then inserted at the next Ordered Set boundary" half of the
-    rule has no implementation.  It is logged, not asserted -- the assertion
-    here is the half the spec sentence puts first.
+    SS THE WINDOW WAS WIDENED, AND A MUTANT IS WHY.  It used to collect 700
+    clocks = 1400 Symbol Times, and under continuous training the first SKP
+    arrives at Symbol Time 1422 -- 22 Symbol Times late.  So this row saw ZERO
+    SKPs and its "no SKP landed inside a set" verdict was VACUOUSLY true: there
+    was nothing to land.  That was invisible while SS54 #9(A) was open, because
+    nothing was emitted under load at all and the emptiness looked like the
+    defect rather than like a blind window.
+
+    It was caught by mutant ME -- divert to ST_SKP WITHOUT the set-complete
+    boundary test, i.e. the rejected one-line version of #9(A) that truncates a
+    TS mid-set.  ME SURVIVED the original window: 4 of 4 rows green, because the
+    only row that could see the violation never reached a SKP.  The budget is now
+    taken from the same spec bound O-7c uses, so the window provably contains
+    SKPs and the assertion has something to be true ABOUT.
     """
     await start_clocks(dut)
     await reset(dut)
@@ -233,7 +271,7 @@ async def skp_does_not_interrupt_an_ordered_set(dut):
     dut.ordered_set_i.value = pack_tsos(link_num=0x05, lane_num=0x00)
     dut.gen_os_ctrl_i.value = G_VALID | G_GEN_TS1 | G_SET_LANE
 
-    stream = await collect(dut, 700)
+    stream = await collect(dut, 2 * SKP_MAX_SYMBOL_TIMES // 2 + 128)
     skps = skp_starts(stream)
 
     # Every TS Ordered Set is a K-coded COM followed by 15 symbols that are not
@@ -249,13 +287,75 @@ async def skp_does_not_interrupt_an_ordered_set(dut):
     dut._log.info("TS Ordered Sets seen: %d   SKP Ordered Sets seen: %d"
                   % (len(ts_starts), len(skps)))
     dut._log.info("SKP groups landing inside a TS Ordered Set: %d" % len(violations))
-    if not skps:
-        dut._log.info("NOTE: no SKP was emitted during %d Symbol Times of continuous "
-                      "TS1.  sec 4.2.7.1 p.261 also requires scheduled SKPs to be "
-                      "'accumulated and then inserted consecutively at the next "
-                      "packet or Ordered Set boundary'; recorded in FINDINGS_PHY_TX.md, "
-                      "not asserted here." % len(stream))
+    assert skps, (
+        "no SKP Ordered Set appeared in %d Symbol Times, so this row's 'none "
+        "landed inside a set' verdict would be VACUOUS.  That is the state "
+        "mutant ME survived in; the window is sized from sec 4.2.7.1 p.261's "
+        "bound precisely so it cannot recur." % len(stream))
     assert ts_starts, "no TS Ordered Set on the wire -- stimulus did not take"
     assert not violations, \
         "sec 4.2.7.1 p.261: a SKP Ordered Set was inserted inside an Ordered Set " \
         "already in progress at Symbol Times %s" % violations[:4]
+
+
+# ----------------------------------------------------------------- O-7c
+
+@cocotb.test()
+async def skp_is_emitted_between_ordered_sets_during_training(dut):
+    """O-7c: the OTHER half of sec 4.2.7.1 p.261's sentence.
+
+    "Scheduled SKP Ordered Sets shall be transmitted if a packet or Ordered Set
+    is not already in progress, otherwise they are accumulated and then inserted
+    consecutively at the next packet or Ordered Set boundary."
+
+    O-7b asserts the first clause -- a SKP must not land INSIDE a set.  This row
+    asserts the second: once one is due, it must actually be INSERTED at the next
+    boundary.  A design that never emits one satisfies O-7b vacuously, which is
+    exactly the state this row was written to end.
+
+    PREDICTED DIVERGENCE (tracker SS54 #9(A)).  os_generator tests skp_cnt only in
+    ST_IDLE, and ST_SEND's streaming lock keeps the FSM out of ST_IDLE while the
+    LTSSM holds a steady command -- so during continuous training the state that
+    could schedule a SKP is never visited.  Measured on the FA-5 baseline: 85
+    Ordered Sets and ZERO SKPs over 1400 Symbol Times, more than the 1180 floor,
+    so at least one was due.  The starvation is not a tendency, it is total.
+
+    The contrast that makes it a defect rather than a slow timer: with NO ordered
+    set requested, the same DUT emits SKPs on a perfect 1358-Symbol-Time cadence
+    (row O-8).  The timer and ST_SKP work; they are unreachable under load.
+
+    ⚠️ The budget is DERIVED from the spec bound, not invented -- the same
+    discipline O-7's second widening had to learn.  Two spec-maximum intervals of
+    Symbol Times leaves room for at least two SKPs, so the row does not sit one
+    clock from its own edge.
+
+    ONE divergent assertion (SS22.66): a SKP Ordered Set is emitted during
+    continuous training.  Whether it lands legally is O-7b's claim, not this one.
+
+    SS FLIPPED by SS54 #9(A): a pending SKP now wins the ST_SEND set-complete
+    boundary.  Measured after the fix -- 205 Ordered Sets and 2 SKP Ordered Sets
+    at Symbol Times 1422 and 2786, an interval of 1364, inside sec 4.2.7.1
+    p.261's 1180..1538 window.  Mutant MD (revert the diversion) re-reddens it.
+    """
+    await start_clocks(dut)
+    await reset(dut)
+    dut.link_up_i.value = 1
+    dut.ordered_set_i.value = pack_tsos(link_num=0x05, lane_num=0x00)
+    dut.gen_os_ctrl_i.value = G_VALID | G_GEN_TS1 | G_SET_LANE
+
+    cycles = 2 * SKP_MAX_SYMBOL_TIMES // 2 + 128
+    stream = await collect(dut, cycles)
+    skps = skp_starts(stream)
+    ts_starts = [t for i, (s, k, t) in enumerate(stream[:len(stream) - 16])
+                 if s == COM and k == 1 and stream[i + 1][0] != SKP]
+
+    dut._log.info("O-7c over %d Symbol Times: TS Ordered Sets=%d  SKP Ordered Sets=%d"
+                  % (len(stream), len(ts_starts), len(skps)))
+    dut._log.info("O-7c SKP Ordered Sets at Symbol Times: %s" % skps[:8])
+    assert ts_starts, "no TS Ordered Set on the wire -- stimulus did not take"
+    assert skps, (
+        "no SKP Ordered Set was emitted in %d Symbol Times of continuous TS1, "
+        "though sec 4.2.7.1 p.261's window closes at %d.  Scheduled SKPs must be "
+        "'accumulated and then inserted consecutively at the next packet or "
+        "Ordered Set boundary'; %d Ordered Set boundaries went by."
+        % (len(stream), SKP_MAX_SYMBOL_TIMES, len(ts_starts)))

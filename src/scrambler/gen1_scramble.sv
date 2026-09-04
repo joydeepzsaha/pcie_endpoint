@@ -70,6 +70,22 @@ module gen1_scramble
     (Q.scramble_reset >> (pipe_width_i >> 3) ) != '0);
 
     assign temp_lfsr_in[i] = reset_byte_scrambler ? '1 : lfsr_out[i];
+
+    // ⚠️ THE `|| Q.skp_os[i] ? '1` IS CORRECT.  DO NOT "FIX" IT INTO A HOLD.
+    // It reads like one -- Base 2.1 sec 4.2.3 p.199 exempts the SKP from the
+    // advance, so a SKP looks like it should HOLD, and two recon passes
+    // registered this as tracker sec 54 #9(B) on that reading.  Both were wrong.
+    // The same page is unconditional about the COM that OPENS the Ordered Set:
+    // "EVERY TIME a COM enters the Receive LFSR ... the LFSR ... is
+    // initialized", seed FFFFh, with no exemption for a SKP Ordered Set's COM.
+    // So FFFFh is exactly what must reach the data after the Ordered Set -- and
+    // THIS LINE IS WHAT DELIVERS IT, because :284 takes `if (!is_skp_os)` and a
+    // SKP Ordered Set's COM therefore never raises scramble_reset.  The effect
+    // is ACROSS words: :296 / :304 read lfsr_out[byte_idx] as the next word's
+    // seed.  Measured both ways -- as written, the post-Ordered-Set data is bit
+    // exact against a spec model (20 of 20 words); rewritten as a hold it is
+    // corrupted permanently.  Guard row: tb/scrambler/test_scrambler_skpseed.py.
+    // Evidence: pcie_docs/evidence/fix-arc-5/FINDINGS_9B_OBSERVABILITY.md.
     assign lfsr_out[i+1] = reset_byte_scrambler || Q.skp_os[i]? '1 : temp_lfsr_out[i];
     byte_scramble byte_scramble_inst (
         .disable_scrambling('0),

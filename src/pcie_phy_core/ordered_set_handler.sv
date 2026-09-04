@@ -67,6 +67,11 @@ module ordered_set_handler
   pcie_ordered_set_t                  ordered_set_out_c;
   pcie_ordered_set_t                  ordered_set_out_r;
 
+  // §54 #6b -- the completed Ordered Set INCLUDING the beat being consumed this
+  // clock.  Combinational only; it exists so the snapshot at :264 can capture
+  // the final beat's Symbols without reordering the statements around it.
+  pcie_ordered_set_t                  ordered_set_final_c;
+
   logic                               check_ordered_set_c;
   logic                               check_ordered_set_r;
   logic                               idle_valid_c;
@@ -175,6 +180,7 @@ module ordered_set_handler
     packets_per_words   = MaxWordsPerOrderedSet - ((byte_shift) << 2);
     data_store_c        = data_store_r;
     ordered_set_out_c   = ordered_set_out_r;
+    ordered_set_final_c = ordered_set_c;
     // for (int i = 0; i < MaxBytesPerPacket; i++) begin
     //   if ((pipe_width_i >> 3) == (1 << i)) begin
     //     packets_per_words = MaxBytesPerPacket >> i;
@@ -261,9 +267,43 @@ module ordered_set_handler
       ST_RX_GEN1: begin
         if (data_valid_i) begin
           axis_pkt_cnt_c = axis_pkt_cnt_r + byte_shift;
+
+          // Tracker §54 #6b -- THE CAPTURE.  ordered_set_out_c used to be
+          // snapshotted from ordered_set_c right here, and the `for` loop below
+          // writes THIS beat's Symbols into ordered_set_c AFTERWARDS.  These are
+          // blocking assignments in one always_comb, so statement order is
+          // semantic and the snapshot was one beat stale: the final beat's
+          // Symbols were the PREVIOUS Ordered Set's, or reset zeros on the
+          // first.  At pipe_width_i = 8 that is Symbol 15; at the integrated
+          // width of 16 (lane_management.sv:45) it is Symbols 14 AND 15.
+          //
+          // So the register the TS Identifier check reads was structurally
+          // incapable of holding the last Symbols of the Ordered Set it was
+          // checking -- which is why #6 could not be closed alone.  Widening the
+          // check to Symbols 6-15 without this makes the receiver reject EVERY
+          // Training Sequence, well-formed ones included, and the link never
+          // trains.  Measured: the three positive rows (ts1_reaches_the_top and
+          // friends) all failed, while the negative row went green for the wrong
+          // reason -- everything was being rejected.
+          //
+          // The repair builds the completed set into its OWN local and
+          // snapshots that.  It deliberately does NOT move the existing
+          // snapshot below the loop: the loop also drives axis_pkt_cnt_c,
+          // next_state and check_ordered_set_c from its IDL (:279) and
+          // COM-restart (:285) branches, and a COM landing in the final beat
+          // rewrites ordered_set_c for the NEXT set.  Snapshotting after the
+          // loop would capture that restarted set.  Building separately changes
+          // WHAT is captured and nothing about precedence, counters or state.
+          ordered_set_final_c = ordered_set_c;
+          for (int i = 0; i < 4; i++) begin
+            if (i < byte_shift) begin
+              ordered_set_final_c[(axis_pkt_cnt_r+i)*8+:8] = data_in_i[8*i+:8];
+            end
+          end
+
           if (pkt_full) begin
             check_ordered_set_c = '1;
-            ordered_set_out_c   = ordered_set_c;
+            ordered_set_out_c   = ordered_set_final_c;
             axis_pkt_cnt_c      = '0;
             if (data_k_in_i > 1) begin
               axis_pkt_cnt_c = 1'b1;
@@ -377,22 +417,51 @@ module ordered_set_handler
       // idle_valid_c = '1;
       //data rate based checks
       if (curr_data_rate_i < gen3) begin
-        if (ordered_set_out_r[8*6+:8] == TS1 && ordered_set_out_r[8*7+:8] == TS1 && ordered_set_out_r[8*8+:8] == TS1 && ordered_set_out_r[8*9+:8] == TS1) begin
-          ts1_valid = '1;
-        end else if (ordered_set_out_r[8*6+:8] == TS1_INV && ordered_set_out_r[8*7+:8] == TS1_INV && ordered_set_out_r[8*8+:8] == TS1_INV && ordered_set_out_r[8*9+:8] == TS1_INV) begin
-          ts1_valid           = '1;
-          polarity_inverted_c = '1;
-        end else begin
-          ts1_valid = '0;
-        end
+        // Tracker §54 #6 -- THE IDENTIFIER IS TEN SYMBOLS, NOT FOUR.
+        //
+        // Base 2.1 Table 4-2 p.203 gives the TS1 Identifier as "6 - 15  D10.2"
+        // and Table 4-3 p.205 gives TS2 as "6 - 15  D5.2".  §4.2.4.4 p.208 uses
+        // the same span for polarity: "the Receiver looks at Symbols 6-15 of the
+        // TS1 and TS2 Ordered Sets as the indicator of Lane polarity inversion".
+        //
+        // This used to compare Symbols 6, 7, 8 and 9 only, so six of the ten
+        // Identifier Symbols carried no weight and any 16-Symbol set whose 6-9
+        // happened to match was accepted -- which is how a corrupted Training
+        // Sequence reaches the LTSSM as a good one.  Widening it is only sound
+        // together with #6b above: the register read here did not hold the last
+        // Symbols of the Ordered Set until that landed, so this check alone
+        // would reject EVERY Training Sequence and the link would never train.
+        // The two are one commit for that reason.
+        begin
+          logic all_ts1, all_ts1_inv, all_ts2, all_ts2_inv;
+          all_ts1     = '1;
+          all_ts1_inv = '1;
+          all_ts2     = '1;
+          all_ts2_inv = '1;
+          for (int i = 6; i < 16; i++) begin
+            if (ordered_set_out_r[8*i+:8] != TS1) all_ts1 = '0;
+            if (ordered_set_out_r[8*i+:8] != TS1_INV) all_ts1_inv = '0;
+            if (ordered_set_out_r[8*i+:8] != TS2) all_ts2 = '0;
+            if (ordered_set_out_r[8*i+:8] != TS2_INV) all_ts2_inv = '0;
+          end
 
-        if (ordered_set_out_r[8*6+:8] == TS2 && ordered_set_out_r[8*7+:8] == TS2 && ordered_set_out_r[8*8+:8] == TS2 && ordered_set_out_r[8*9+:8] == TS2) begin
-          ts2_valid = '1;
-        end else if (ordered_set_out_r[8*6+:8] == TS2_INV && ordered_set_out_r[8*7+:8] == TS2_INV && ordered_set_out_r[8*8+:8] == TS2_INV && ordered_set_out_r[8*9+:8] == TS2_INV) begin
-          ts2_valid           = '1;
-          polarity_inverted_c = '1;
-        end else begin
-          ts2_valid = '0;
+          if (all_ts1) begin
+            ts1_valid = '1;
+          end else if (all_ts1_inv) begin
+            ts1_valid           = '1;
+            polarity_inverted_c = '1;
+          end else begin
+            ts1_valid = '0;
+          end
+
+          if (all_ts2) begin
+            ts2_valid = '1;
+          end else if (all_ts2_inv) begin
+            ts2_valid           = '1;
+            polarity_inverted_c = '1;
+          end else begin
+            ts2_valid = '0;
+          end
         end
         // //check for TS1 or TS2
         // for (int i = 7; i < 9; i++) begin

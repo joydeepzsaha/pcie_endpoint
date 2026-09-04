@@ -177,31 +177,48 @@ async def tlp_is_framed_by_stp_and_end(dut):
 
 # ------------------------------------------------- O-11/O-12, the tlast half
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def the_beat_carrying_end_asserts_tlast(dut):
-    """The framing symbols are right; the frame BOUNDARY is not.
+    """The frame boundary reaches the AXI-Stream port.  CLOSED -- tracker sec 54 #10.
 
     frame_symbols' output is an AXI4-Stream, and tlast is how the end of the
     frame is carried to everything downstream: dllp_axis_async_fifo_inst is
-    instantiated LAST_ENABLE=1 (phy_transmit.sv:367), and lane_management leaves
+    instantiated LAST_ENABLE=1 (phy_transmit.sv:382), and lane_management leaves
     ST_LANE_MNGT_TX_DATA only on `if (s_dllp_axis_tlast)` (lane_management.sv:382).
     A frame whose final beat never asserts tlast is a frame that never ends.
 
-    PREDICTED DIVERGENCE (PREDICTIONS_R9.md sec 3).  frame_symbols.sv:175-194
-    handles the tail by looking at s_axis_tkeep:
+    WAS a PREDICTED DIVERGENCE (Rung 9, PREDICTIONS_R9.md sec 3) and carried
+    expect_fail until FA-5.  frame_symbols.sv:175-194 handles the tail by
+    looking at s_axis_tkeep:
 
-        4'b0001 -> ENDP placed, phy_axis_tlast = '1     (line 183)
-        4'b0011 -> ENDP placed, phy_axis_tlast = '1     (line 188)
-        default -> next_state = ST_FRAME_LAST           (line 192)
+        4'b0001 -> ENDP placed, phy_axis_tlast = '1     (:183)
+        4'b0011 -> ENDP placed, phy_axis_tlast = '1     (:188)
+        default -> next_state = ST_FRAME_LAST           (:192)
 
-    and ST_FRAME_LAST (frame_symbols.sv:262-281) emits the final beat with the
-    END Symbol but NEVER assigns phy_axis_tlast.  Line 177 shows the assignment
-    commented out.  Compare ST_FRAME_LAST_DLLP_ALLIGN:304, which does set it.
+    and ST_FRAME_LAST emitted the final beat with the END Symbol while never
+    assigning phy_axis_tlast.  FA-5 added the assignment there.
+
+    ⚠️ Rung 9's docstring said frame_symbols "never asserts tlast"; that was
+    wrong and the correction is why the fix is one line.  It asserts at :183,
+    :188, :205 and :304 -- only ST_FRAME_LAST omitted it.  ⚠️ And :177's
+    commented-out `// phy_axis_tlast = '1;` is NOT the repair it looks like:
+    asserting there marks the SHIFTED beat last while ST_FRAME_LAST still owes
+    one more, truncating the frame and stranding END.
 
     The `default` arm is not a corner: it is taken whenever the last input beat
     has tkeep 4'b0111 or 4'b1111, i.e. for EVERY word-aligned packet -- the
     ordinary case.  This test drives an 8-byte DLLP, tkeep=4'b1111 on the final
     beat, and asserts that the beat carrying END sets tlast.
+
+    Measured across the fix, same stimulus, same 10 Symbols out
+    (5cK 11 22 33 44 55 66 77 88 fdK):
+        before  per-beat (tlast, symbols) = [(0, 4), (0, 4), (0, 2)]
+        after   per-beat (tlast, symbols) = [(0, 4), (0, 4), (1, 2)]
+    Only the boundary marker moved; the data path is byte-identical.
+
+    ⚠️ This row does NOT prove the lane_management hang is gone -- nothing in
+    this closure drives a DLLP through lane_management.  It proves the frame
+    now ends.
     """
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     await reset(dut)

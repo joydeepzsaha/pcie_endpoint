@@ -996,7 +996,32 @@ module pcie_ltssm_downstream
               idle_to_rlock_transitioned_c = 8'hFF;
             end else begin
               idle_to_rlock_transitioned_c = idle_to_rlock_transitioned_r + 1;
-            end 
+            end
+            // Build the ordered set this exit is about to transmit.
+            //
+            // This arm wrote NEITHER gen_os_ctrl_c NOR ordered_set_c, and both
+            // are sticky (defaulted to their registered value at the top of the
+            // block).  So the FSM arrived in Recovery.RcvrLock still carrying
+            // Configuration.Idle's own control word -- gen_idle=1, gen_ts1=0,
+            // measured -- and transmitted IDLE where Base 2.1 p.239 requires
+            // Recovery.RcvrLock to transmit TS1 Ordered Sets.  Rung 10c A3-4.
+            //
+            // Note the contrast one branch up: the SUCCESS path at :975-:978
+            // clears all four control bits before leaving.  Only the timeout
+            // path forgot, which is why the defect is invisible on a link that
+            // trains normally and appears only after a 2 ms Configuration.Idle
+            // timeout.
+            //
+            // Shape copied from ST_L0's own entry into the SAME state
+            // (:1020-:1024 pre-edit) rather than invented -- that is the
+            // in-tree precedent for "enter RcvrLock correctly".
+            gen_os_ctrl_c.gen_ts1  = '1;
+            gen_os_ctrl_c.gen_ts2  = '0;
+            gen_os_ctrl_c.gen_idle = '0;
+            gen_os_ctrl_c.valid    = '1;
+            transmit_ordered_set   = '1;
+            ordered_set_c = gen_ts_os(curr_data_rate_r.rate, TS1,
+                    train_seq_e'(link_number_selected), train_seq_e'(0), last_data_rate_c);
             next_state = ST_RECOVERY_RCVR_LOCK;
           end else begin
             idle_to_rlock_transitioned_c = '1;

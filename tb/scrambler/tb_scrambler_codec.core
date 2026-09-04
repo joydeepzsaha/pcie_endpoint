@@ -66,6 +66,18 @@ filesets:
     files:
       - test_scrambler_kgap.py : {file_type : user, copyto : .}
 
+  # Fix-arc 5c -- the spec-golden model behind O-SKPSEED.  Carries Base 2.1
+  # sec 4.2.3's scrambling rules and byte_scramble.sv's (Rung-3-proven) advance
+  # table; every expected value in the skpseed rows is computed from it and none
+  # is captured from the DUT.
+  skpseed_common:
+    files:
+      - skpseed_common.py : {file_type : user, copyto : .}
+
+  cocotb_skpseed:
+    files:
+      - test_scrambler_skpseed.py : {file_type : user, copyto : .}
+
 targets:
   # T6 -- decode_8b10b, exhaustively.  Purely combinational: no clock, no reset,
   # no state (CENSUS_8B10B.md sec 2), so running disparity enters as dispin and
@@ -206,6 +218,52 @@ targets:
         - -Iincludes/
         - waiver.vlt
     filesets : [rtl, kgap_common, cocotb_kgap]
+    toplevel : [scrambler]
+
+  # Fix-arc 5c -- O-SKPSEED, tracker sec 54 #9(B).  WHAT LFSR VALUE FOLLOWS A
+  # SKP ORDERED SET.
+  #
+  # Base 2.1 sec 4.2.3 p.199 initializes the LFSR on EVERY COM ("every time a
+  # COM enters the Receive LFSR ... the LFSR ... is initialized", seed FFFFh) and
+  # exempts only the SKP from the eight-shift advance.  A SKP Ordered Set is
+  # COM + 3x SKP and the spec makes no exemption for its COM, so the first data
+  # Symbol after the Ordered Set is XORed with FFFFh itself.
+  #
+  # WHY THIS TARGET EXISTS.  gen1_scramble.sv:73 is what delivers that FFFFh --
+  # :284 takes `if (!is_skp_os)`, so a SKP Ordered Set's COM never raises
+  # scramble_reset and skp_os carries the initialise alone.  The line READS like
+  # a defect and was registered as sec 54 #9(B) on that reading across two recon
+  # passes.  Fix-arc 5c measured both directions: as written the post-Ordered-Set
+  # data matches the spec model at phase 0, all 20 words bit exact; rewritten as
+  # the "obvious" three-way hold it matches only at phase +17, corrupting every
+  # later data Symbol permanently.
+  #
+  # NO EXISTING ROW CAUGHT THAT.  The 4c rows are SCHEDULE differentials -- a
+  # gapped run against a gap-free reference from the SAME build -- so under the
+  # rewrite both move together and both stay green, and the regression would
+  # have landed behind a fully green gate.  These are the missing oracle.
+  #
+  # Method: the published stream is compared against skpseed_common.py, which
+  # carries the spec tables; nothing is probed inside the DUT and no expected
+  # value is captured from it.  The publication skew is DERIVED from each run
+  # (the Ordered Set's K beats locate it) rather than hardcoded.  3 ordinary-PASS
+  # rows: 1 measurement carrying ONE divergence (sec 22.66) plus 2 controls --
+  # that the phase is uniquely determined, and that the model does not fit the
+  # data preceding the Ordered Set.
+  #
+  # These are ordinary PASS, not expect_fail: they pass because the RTL is
+  # CORRECT, and they guard against a future "repair".
+  verilate_scrambler_skpseed:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_scrambler_skpseed
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, kgap_common, skpseed_common, cocotb_skpseed]
     toplevel : [scrambler]
 
   # T7 -- encode_8b10b, exhaustively.  9 data bits + 1 disparity bit = 1024
