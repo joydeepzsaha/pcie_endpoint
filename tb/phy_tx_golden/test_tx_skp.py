@@ -132,7 +132,26 @@ async def skp_ordered_set_composition(dut):
     dut.gen_os_ctrl_i.value = 0          # park os_generator in ST_IDLE
     dut.link_up_i.value = 1              # arm os_generator.sv:139-141
 
-    stream = await collect(dut, 600)
+    # ⚠️ Window WIDENED in FA-5b -- a TEST change forced by a DESIGN fix, not a
+    # fix to make a row pass.  SS54 #9(C) moved the SKP interval from 354 to a
+    # spec-legal 1358 Symbol Times, so the old 600-clock (1200 Symbol Time)
+    # window no longer reaches the first SKP.  PREDICTIONS_34B.md C3
+    # pre-registered this row going red for want of window.
+    #
+    # ⚠️ AND the first widening -- one interval plus margin -- was STILL too
+    # short, which is the more useful half of the lesson.  The first SKP does not
+    # arrive one interval after link_up_i; it arrives about THREE.  That was
+    # already visible in the pre-fix numbers had anyone looked: at 354 the first
+    # landed at Symbol Time 1080 ~= 3 x 354, and the old 1200-Symbol-Time window
+    # caught it only just.  At 1358 the first lands at 4092 ~= 3 x 1358 -- the
+    # same structure, scaled.
+    #
+    # So the budget is taken from the SIBLING row that is proven to reach two
+    # SKPs (the O-8 interval row uses four spec-maximum intervals), rather than
+    # invented here.  Derived from the spec bound, so it stays correct for any
+    # conforming constant.
+    cycles = 4 * SKP_MAX_SYMBOL_TIMES // 2 + 64     # 3140 clocks = 6280 Symbol Times
+    stream = await collect(dut, cycles)
     hits = skp_starts(stream)
     assert hits, "no COM,SKP,SKP,SKP group in %d Symbol Times after link_up_i " \
                  "(os_generator.sv:158 fires at 176 counts): %s" \
@@ -148,7 +167,7 @@ async def skp_ordered_set_composition(dut):
 
 # ------------------------------------------------------------------ O-8
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def skp_scheduling_interval_is_1180_to_1538_symbol_times(dut):
     """O-8: Base 2.1 sec 4.2.7.1 p.261 -- "The SKP Ordered Set shall be scheduled
     for insertion at an interval between 1180 and 1538 Symbol Times."
@@ -161,16 +180,21 @@ async def skp_scheduling_interval_is_1180_to_1538_symbol_times(dut):
     Symbol Times through the DUT's own pipe_width_o -- and then compared to the
     window.  Nothing is hardcoded except the two spec numbers.
 
-    PREDICTED DIVERGENCE (PREDICTIONS_R9.md sec 3, O-8).  os_generator.sv:158
+    WAS a predicted divergence (Rung 9, PREDICTIONS_R9.md sec 3, O-8) and carried
+    expect_fail until FA-5b.  os_generator fired at 0xB0 = 176 counts of
+    pipe_rx_usr_clk_i, scheduling one SKP every 354 Symbol Times -- roughly 3.3x
+    more often than the 1180 floor.  Over-frequent SKPs are not a silent
+    inefficiency: every one costs four Symbol Times of link bandwidth, and
+    sec 4.2.7.2 p.261 only obliges a Receiver to tolerate an AVERAGE interval
+    "between 1180 to 1538 Symbol Times".
 
-        if (Q.skp_cnt >= 32'hB0) begin
+    SS54 #9(C) moved the constant to 0x2A6 = 678, solved from the MEASURED
+    relation interval = 2N + 2 (two Symbol Times per Gen1 PIPE-16 clock, plus one
+    clock for ST_SKP itself).  Measured after the fix: a single interval of
+    exactly 1358 Symbol Times, the window centre, predicted before the run.
 
-    fires at 176 counts of pipe_rx_usr_clk_i.  At Gen1 the PIPE is 16 bits wide,
-    so one clock is two Symbol Times and the scheduled interval is about 356 --
-    roughly 3.3x more often than the 1180 floor.  Over-frequent SKPs are not a
-    silent inefficiency: every one of them costs four Symbol Times of link
-    bandwidth, and sec 4.2.7.2 p.261 only obliges a Receiver to tolerate an
-    AVERAGE interval "between 1180 to 1538 Symbol Times".
+    ⚠️ Rung 9's docstring said "about 356"; the artifact says 354, eight times
+    identically.  The register's 354 was right.
     """
     await start_clocks(dut)
     await reset(dut)

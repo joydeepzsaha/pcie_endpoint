@@ -178,7 +178,33 @@ module os_generator
           D.gen_os_ctrl      = gen_os_ctrl_i;
           D.state            = ST_BUILD;
         end
-        if (Q.skp_cnt >= 32'hB0) begin
+        // SKP scheduling interval.  Base 2.1 sec 4.2.7.1 p.261: "The SKP Ordered
+        // Set shall be scheduled for insertion at an interval between 1180 and
+        // 1538 Symbol Times."  0xB0 = 176 counts scheduled one every 354, which
+        // is 3.3x too often -- every SKP costs four Symbol Times of Link
+        // bandwidth, and sec 4.2.7.2 p.261 only obliges a Receiver to tolerate
+        // an AVERAGE inside that window.
+        //
+        // The constant is solved from a MEASURED relation, not a derived one.
+        // The bench printed eight consecutive intervals of 354 Symbol Times at
+        // 0xB0, so:
+        //
+        //     interval = 2N + 2      N counts of pipe_rx_usr_clk_i
+        //                            2  Symbol Times per clock (PipeWidthGen1
+        //                               = 16 bits, lane_management.sv:45)
+        //                            +2 for ST_SKP's own cycle before the FSM
+        //                               returns here
+        //
+        //     require  2N + 2 in [1180, 1538]  ->  N in [589, 768] = [0x24D, 0x300]
+        //     centre   (1180+1538)/2 = 1359    ->  N = 678 = 0x2A6 -> 1358
+        //
+        // ⚠️ 0x2A6 is the window CENTRE on purpose, not an endpoint: the 2N+2
+        // relation rests on one measurement, so 178 Symbol Times of margin below
+        // and 180 above is worth more than a rounder constant.  A first pass
+        // derived 2N (352) and doubted the register's 354; the register was
+        // right and the derivation was two short -- which is exactly why the
+        // constant is solved from the artifact.
+        if (Q.skp_cnt >= 32'h2A6) begin
           D.skp_cnt = '0;
           D.state   = ST_SKP;
         end
