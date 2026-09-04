@@ -597,9 +597,20 @@ module pcie_ltssm_downstream
               next_state       = ST_DETECT_RX;
             end 
           end else begin
-            next_state = ST_IDLE; // Should technically be ST_DETECT_QIUET
+            // Base 2.1 4.2.6.1.2 p.219: "Next state is Detect.Quiet if a
+            // Receiver is not detected on any Lanes."  This arm used to go to
+            // ST_IDLE -- the RTL's de facto reset hub, target of 19 arcs, whose
+            // ONLY exit is `if (en_i)` (:525) and which additionally clears
+            // gen_os_ctrl_c and idle_to_rlock_transitioned.  With en_i
+            // deasserted the LTSSM stopped there permanently, on a path the
+            // spec requires to retry.  tracker sec 54 #8 (oracle D7).
+            next_state = ST_DETECT_QUIET;
           end
         end else if (timer_r >= TwentyFourMsTimeOut) begin
+          // NOT changed with D7, deliberately: this is the 24 ms watchdog for a
+          // phystatus that never arrives -- a failsafe, not a spec limb -- and
+          // no oracle covers it.  D11 (verilate_ltssm_24ms) exercises this arm
+          // and expects today's behaviour.  See PREDICTIONS_D7.md sec 2.
           next_state =  ST_IDLE; // Should technically be ST_DETECT_QIUET
         end
       end
