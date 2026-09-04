@@ -55,6 +55,17 @@ filesets:
     files:
       - test_gen1_align.py : {file_type : user, copyto : .}
 
+  # Fix-arc 4 -- the O-KGAP bench, tracker sec 54 4c.  Its own helper on purpose:
+  # align_common.py backs two green targets and a shared-helper edit could move
+  # their rows for a reason unrelated to this rung.
+  kgap_common:
+    files:
+      - kgap_common.py : {file_type : user, copyto : .}
+
+  cocotb_kgap:
+    files:
+      - test_scrambler_kgap.py : {file_type : user, copyto : .}
+
 targets:
   # T6 -- decode_8b10b, exhaustively.  Purely combinational: no clock, no reset,
   # no state (CENSUS_8B10B.md sec 2), so running disparity enters as dispin and
@@ -158,6 +169,44 @@ targets:
         - waiver.vlt
     filesets : [rtl, align_common, cocotb_align_gen1]
     toplevel : [gen1_scramble]
+
+  # Fix-arc 4 -- O-KGAP, tracker sec 54 4c.  FA-3 registered 4c as a QUESTION,
+  # not a finding: gen1_scramble clears scramble_reset / stop_scrambling /
+  # skp_os on EVERY clock while the COM that raises them and the LFSR reset that
+  # consumes them both sit inside `if (data_valid_i)`.  Raised inside the guard,
+  # cleared outside it, consumed inside it.  No bench drove K codes across a gap,
+  # so it stayed unmeasured; this is that bench.
+  #
+  # DUT is `scrambler` (the wrapper both phy_transmit and phy_receive
+  # instantiate) because data_valid_i is a real input port there AND, since
+  # fix-arc 3 closed sec 54 #4, a real signal at the integrated boundary too --
+  # lane_management.sv:582 drives data_valid_r where it hardwired '1.  So these
+  # gaps are reachable in the shipping configuration, not hypothetical.
+  #
+  # Method: differential black box.  The same Symbols are driven twice from the
+  # same reset, once with a gap, and the two published sequences are compared.
+  # The gap OFFSET is SWEPT across a window around the COM rather than guessed,
+  # so the result localises the loss to an exact clock instead of saying "a gap
+  # near a COM changes things"; both gap lengths are driven at every offset.
+  # 3 ordinary-PASS controls, 1 ordinary-PASS localiser that is true before AND
+  # after the fix, and 2 expect_fail rows carrying ONE divergence each (sec
+  # 22.66) -- the COM arm and the SKP arm.
+  #
+  # Unlike the O-ALIGN rows this bench may compare VALUES, and that is a
+  # consequence of sec 54 #4 being closed: with it open, every gap corrupted
+  # every later value and a value-comparing bench would have saturated.
+  verilate_scrambler_kgap:
+    flow: sim
+    flow_options:
+      tool : verilator
+      cocotb_module : test_scrambler_kgap
+      timescale: 1ns/1ns
+      verilator_options:
+        - --trace-fst
+        - -Iincludes/
+        - waiver.vlt
+    filesets : [rtl, kgap_common, cocotb_kgap]
+    toplevel : [scrambler]
 
   # T7 -- encode_8b10b, exhaustively.  9 data bits + 1 disparity bit = 1024
   # combinations, all driven.  Unlike the decoder, only 536 of them have a

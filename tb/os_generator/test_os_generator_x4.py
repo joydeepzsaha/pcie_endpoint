@@ -106,13 +106,32 @@ def sym_of(data, lane, sym_in_beat):
     return (data >> (32 * lane + 8 * sym_in_beat)) & 0xFF
 
 
-def kmask_lane0(tuser):
-    """os_generator emits the K-mask in tuser's lane-0 slice only; the rest of
-    the bus is zero-extended (os_generator.sv:237, a USER_WIDTH-wide value
-    assigned to a USER_WIDTH*MAX_NUM_LANES signal).  lane_management.sv:413 then
-    broadcasts these four bits to every lane, so THIS is the mask every lane
-    gets."""
-    return tuser & ((1 << USER_WIDTH) - 1)
+def kmask(tuser, lane):
+    """Lane `lane`'s K-mask slice of m_axis_tuser.
+
+    m_axis_tuser is declared [(USER_WIDTH*MAX_NUM_LANES)-1:0], the same shape as
+    m_axis_tdata's [(DATA_WIDTH*MAX_NUM_LANES)-1:0], which os_generator.sv:235
+    packs LANE-MAJOR -- lane l at [32*l +: 32].  So lane l's mask is
+    [USER_WIDTH*l +: USER_WIDTH].  That layout is read off the port declarations
+    and the tdata packing beside them; it is not invented for this bench.
+
+    ⚠️ This REPLACES a reader that returned the LANE-0 slice for every lane and
+    documented the reason as "lane_management.sv:413 broadcasts these four bits
+    to every lane, so THIS is the mask every lane gets".  That reader hardcoded
+    tracker §54 #5 -- the defect -- as the contract, so after the per-lane fix it
+    would have kept reading lane 0 and the fix would have looked ineffective.
+
+    Changed BEFORE the fix (§22.75, test first): on unfixed RTL the two per-lane
+    rows STAY RED, so the tree still bisects green -- but their failure CAUSE
+    changes and the bad-lane counts move.  §60.5 says to say that out loud rather
+    than let a row sit red for a silently different reason:
+
+        symbol1_k_flag_is_per_lane  3 of 4 bad -> 2 of 4  (lane 0 by the OR,
+                                                           lane 2 by zero-extension)
+        symbol2_k_flag_is_per_lane  1 of 4 bad -> 1 of 4  (unchanged)
+
+    Predicted in PREDICTIONS_2.md T5 before the change was made."""
+    return (tuser >> (USER_WIDTH * lane)) & ((1 << USER_WIDTH) - 1)
 
 
 async def reset(dut):
@@ -160,7 +179,7 @@ def _fmt_lane(data, lane, k):
 
 # --------------------------------------------------------------- O-3, Symbol 1
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def symbol1_k_flag_is_per_lane(dut):
     """O-3: Symbol 1's K-flag must be per lane -- K iff THAT lane's byte is PAD.
 
@@ -189,10 +208,10 @@ async def symbol1_k_flag_is_per_lane(dut):
     link_per_lane = [0x05, 0x05, PAD, 0x05]          # Fig. 14-21 p.550
     sets = [tsos(link_num=ln, lane_num=i) for i, ln in enumerate(link_per_lane)]
     data, tuser = await first_beat(dut, sets)
-    k = kmask_lane0(tuser)
 
     bad = []
     for lane in range(NUM_LANES):
+        k = kmask(tuser, lane)
         dut._log.info("%s   (driven link_num=0x%02x)" % (_fmt_lane(data, lane, k),
                                                          link_per_lane[lane]))
         got_byte = sym_of(data, lane, 1)
@@ -212,7 +231,7 @@ async def symbol1_k_flag_is_per_lane(dut):
 
 # --------------------------------------------------------------- O-4, Symbol 2
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def symbol2_k_flag_is_per_lane(dut):
     """O-4: Symbol 2's K-flag must be per lane -- K iff THAT lane's byte is PAD.
 
@@ -239,10 +258,10 @@ async def symbol2_k_flag_is_per_lane(dut):
     lane_per_lane = [0x00, 0x01, PAD, 0x03]
     sets = [tsos(link_num=0x05, lane_num=ln) for ln in lane_per_lane]
     data, tuser = await first_beat(dut, sets, set_lane=1)
-    k = kmask_lane0(tuser)
 
     bad = []
     for lane in range(NUM_LANES):
+        k = kmask(tuser, lane)
         dut._log.info("%s   (driven lane_num=0x%02x)" % (_fmt_lane(data, lane, k),
                                                          lane_per_lane[lane]))
         got_byte = sym_of(data, lane, 2)
@@ -320,7 +339,7 @@ async def symbols_0_and_3_to_15_are_lane_invariant(dut):
                 bad.append("Symbol %d is 0x%02x, Table 4-2 p.201 wants 0x%02x"
                            % (sym_index, vals[0], want))
 
-    k0 = kmask_lane0(beats[0][1])
+    k0 = kmask(beats[0][1], 0)   # lane 0 only: same bits under either layout
     assert sym_of(beats[0][0], 0, 0) == COM, "Symbol 0 is not COM"
     assert k0 & 1, "Symbol 0 (COM) is not marked K -- the mask's bit order is not what " \
                    "this file assumes and every other assertion here reads the wrong bit"
