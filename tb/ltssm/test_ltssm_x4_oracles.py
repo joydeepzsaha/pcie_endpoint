@@ -159,9 +159,17 @@ async def run_test_d9_detect_rx_same_lanes(dut):
                   "advanced to Polling")
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_d10_detect_rx_changed_lanes(dut):
-    """D10, the divergent half -- expect_fail row."""
+    """D10 -- FIXED in fix-arc 6b; this is now the guard row.
+
+    Carried expect_fail from Rung 10b until Detect.Rx's changed-Lane-set exit was
+    retargeted to ST_DETECT_QUIET and its error_c removed (both halves, since
+    p.219 calls this an ordinary retry rather than a failure).  The fix was
+    blocked for one commit by a coupling: verilate_ltssm_obs provoked its error_o
+    oracle through this very site.  obs was re-anchored first.
+    evidence/fix-arc-6/FINDINGS_D10_COUPLING.md.
+    """
     clk(dut)
 
     await reset_to_detect_active(dut)

@@ -630,10 +630,25 @@ module pcie_ltssm_downstream
               lanes_detected_c = receiver_detected_i;
               next_state       = ST_POLLING;
             end else begin
-              error_c    = '1;
-              next_state = ST_IDLE;
+              // Base 2.1 4.2.6.1.2 p.219: when the second Receiver Detection
+              // finds a DIFFERENT set of Lanes, "the next state is Detect.Quiet"
+              // -- an ordinary retry, not a training failure.  This arm used to
+              // do two non-conformant things at once: detour through ST_IDLE
+              // (whose only exit is `if (en_i)` at :525, so a deasserted en_i
+              // stopped the LTSSM permanently on a retry path) and raise
+              // error_c, reporting a failure the spec does not consider one.
+              // Both are removed.  tracker sec 54 #8 (oracle D10).
+              //
+              // The error_c removal was BLOCKED until fix-arc 6b: verilate_ltssm_obs
+              // provoked its error_o oracle through THIS site, so deleting the
+              // raise would have broken the witness for sec 54 #2.  obs was
+              // re-anchored first, in its own commit, to :934's Lanenum.Wait
+              // timeout -- a site whose recorded verdict is *conforms* (oracle
+              // C13) and which is on no open-defect list.
+              // evidence/fix-arc-6/FINDINGS_D10_COUPLING.md.
+              next_state = ST_DETECT_QUIET;
             end
-          end 
+          end
         end else if (timer_r >= TwentyFourMsTimeOut) begin
           next_state = ST_IDLE;
         end
