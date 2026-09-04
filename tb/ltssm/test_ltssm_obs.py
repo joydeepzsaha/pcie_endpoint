@@ -35,30 +35,44 @@ WHAT THIS BENCH ASSERTS -- one divergent assertion per expect_fail row
   gate row: cocotb reports an expect_fail raise as STATUS=PASS, and each test
   samples at a point fixed by its drive sequence, not by the sampled value.
 
-THE PROVOCATION, and why this one
-  The cheapest reachable error_c site is :614, Detect.Rx:
+THE PROVOCATION, and why this one -- ** RE-ANCHORED IN FIX-ARC 6b **
+  Until fix-arc 6b this bench provoked error_c at :622 (was :614), the Detect.Rx
+  Lane-set mismatch. That was the cheapest reachable site, because reaching it
+  costs one TwelveMsTimeOut and that timer IS SIM_FAST_LINK scaled (:111, 1200
+  cycles) where almost every other raise site sits behind an unscaled 2/24/48 ms
+  timeout (200 000 / 2.4 M / 4.8 M cycles).
 
-      :604  ST_DETECT_RX: begin
-      :605    if (timer_r >= TwelveMsTimeOut) begin
-      :608      if (|phy_phystatus_r) begin
-      :609        if ((lanes_detected_r == receiver_detected_i)) begin ... success
-      :613        end else begin
-      :614          error_c    = '1;
-      :615          next_state = ST_IDLE;
+  ** But :622 is tracker sec 54 #8's oracle D10 -- an OPEN DEFECT scheduled for
+  removal. So this bench's oracle for sec 54 #2 was anchored to another register
+  row's bug: fixing D10 would have turned the control and B1 red, and two
+  register rows were in direct conflict. Documented in
+  evidence/fix-arc-6/FINDINGS_D10_COUPLING.md.
 
-  Reaching it costs one TwelveMsTimeOut, and TwelveMsTimeOut IS SIM_FAST_LINK
-  scaled (:111, 1200 cycles) -- unlike TwoMsTimeOut (200 000, :113) or the 24/48
-  ms timeouts (2.4 M / 4.8 M) that guard most of the other raise sites. So this
-  is a bounded ~1500-cycle provocation where the alternatives cost millions.
+  The replacement site is chosen to be SPEC-CONFORMANT BY RECORDED VERDICT
+  rather than merely reachable, so that no future fix can un-anchor it again:
 
-  It is exactly the case test_ltssm_partial_lanes.py:150-156 deliberately
-  AVOIDS: that bench re-presents the SAME lane mask so :609 succeeds. Here we
-  present a DIFFERENT one, so :609 fails and :614 fires.
+      :931  ST_CONFIGURATION_LANENUM_WAIT, the 2 ms timeout
+      :932    if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
+      :934      error_c    = '1;
+      :936      next_state = ST_IDLE;
 
-  x4 is required. At MAX_NUM_LANES=1, `|receiver_detected_i` and
-  `&receiver_detected_i` are the same expression, Detect.Active always takes
-  :582's all-lanes arm, and ST_DETECT_RX is unreachable -- an x1 target could
-  not run this at all.
+  Oracle C13 (evidence/rung10/ORACLES_LTSSM.md:99), Base 2.1 4.2.6.3.4 p.234
+  "Next state is Detect after 2 ms", verdict *conforms*. Lanenum.Wait appears on
+  neither sec 54 #8 nor #11. All 12 error_c sites were classified before the
+  choice: evidence/fix-arc-6/SITE_SELECTION_OBS.md.
+
+  ** COST, recorded rather than hidden. Every error_c site behind a scaled timer
+  lives inside ST_DETECT_RX -- the state being vacated -- so re-anchoring
+  necessarily buys an unscaled timeout. This bench goes from ~3 k cycles to
+  ~200 k. 2 ms is the cheapest conformant option; C5 (24 ms) and P12 (48 ms) are
+  the alternatives. That is the price of decoupling the register.
+
+  x4 is still required, and now for a different reason. The old provocation
+  needed it because ST_DETECT_RX is unreachable at x1. This one needs it because
+  the four gate assertions this bench exists to make sound
+  (test_ltssm_partial_lanes.py:207,:304 and
+  test_ltssm_recovery_partial_lanes.py:92,:136) are themselves x4 rows; keeping
+  the geometry identical keeps the repair and its beneficiaries on one config.
 
 WHY error_o AND success_o NEED DIFFERENT ASSERTION SHAPES
   They are not symmetric, despite the register listing them as one line each:
@@ -113,13 +127,12 @@ def _rxstatus_mask(active_lanes):
     return v
 
 
-# pcie_ltssm_downstream.sv:111 -- SIM_FAST_LINK ? (12*10**4)/(ClockPeriodNs*10)
-# = 1200 cycles at ClockPeriodNs=10.
-TWELVE_MS_CYCLES = 1200
+# pcie_ltssm_downstream.sv:113 -- TwoMsTimeOut = (2*10**6)/ClockPeriodNs, and it
+# is NOT SIM_FAST_LINK scaled (contrast :111/:114, which are). 200 000 cycles at
+# ClockPeriodNs=10. This is the dominant cost of this bench and the price of
+# anchoring the oracle to a conformant site; see drive_to_lanenum_wait_timeout.
+TWO_MS_CYCLES = 200_000
 SETTLE = 150
-
-FIRST_MASK  = _mask([0, 1])   # partial, so Detect.Active takes the DETECT_RX hop
-SECOND_MASK = _mask([0])      # DIFFERENT -> :609 mismatch -> :614 error
 
 
 def state(dut):
@@ -138,12 +151,40 @@ def check_geometry(dut):
         f"bench would be vacuous")
 
 
-async def drive_to_detect_rx_mismatch(dut):
-    """Reset -> Detect.Quiet -> Detect.Active -> Detect.Rx, then re-present a
-    DIFFERENT receiver mask at the 12 ms timeout so :609 fails and :614 fires.
+async def drive_to_lanenum_wait_timeout(dut):
+    """Reset -> ... -> Configuration.Lanenum.Wait, then HOLD until its 2 ms
+    timeout raises error_c at :934 and the FSM leaves for ST_IDLE.
 
-    Returns (cycles_waited, landed_state) measured from the moment the second
-    phystatus pulse is applied.
+    Returns (cycles_waited, landed_state) measured from arrival in Lanenum.Wait.
+
+    ** WHY THIS SITE, and not the Detect.Rx one this bench used until fix-arc 6b.
+
+    The original provocation drove a Detect.Rx Lane-set mismatch so :622 (was
+    :614) raised error_c.  That site is tracker sec 54 #8's oracle D10 -- an OPEN
+    DEFECT scheduled for removal -- so this bench's oracle for sec 54 #2 was
+    anchored to another register row's bug, and fixing D10 would have turned two
+    of these three rows red.  Two register rows in direct conflict.  Documented in
+    evidence/fix-arc-6/FINDINGS_D10_COUPLING.md.
+
+    The replacement is chosen to be SPEC-CONFORMANT BY RECORDED VERDICT, not
+    merely reachable: oracle C13 (evidence/rung10/ORACLES_LTSSM.md:99), Base 2.1
+    4.2.6.3.4 p.234 "Next state is Detect after 2 ms", verdict *conforms*.  It is
+    on no open-defect list, so no future fix can un-anchor it.  Site selection
+    across all 12 error_c sites: evidence/fix-arc-6/SITE_SELECTION_OBS.md.
+
+    ** COST, recorded rather than hidden.  Every error_c site behind a
+    SIM_FAST_LINK-scaled timer lives inside ST_DETECT_RX -- the state being
+    vacated -- so re-anchoring necessarily buys an unscaled timeout.  TwoMsTimeOut
+    (:113) is 200 000 cycles where TwelveMsTimeOut was 1 200.  That is the price
+    of decoupling the register, and 2 ms is the cheapest conformant option; the
+    alternatives are 24 ms (C5) and 48 ms (P12).
+
+    ** WHY ARRIVAL IN ST_IDLE IDENTIFIES THE SITE.  Lanenum.Wait has exactly two
+    exits: :928 to CFG_LANENUM_ACCEPT (two consecutive TS1 carrying a CHANGED Lane
+    number) and :932's 2 ms timeout to ST_IDLE.  We hold the Lane number at its
+    entry value, so the first can never fire and reaching ST_IDLE from here is
+    unambiguous.  That is a STRONGER control than the old one, which had to argue
+    that a 24 ms alternative was too far away to be the cause.
     """
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
     check_geometry(dut)
@@ -164,42 +205,55 @@ async def drive_to_detect_rx_mismatch(dut):
     dut.phy_rxelecidle_i.value = 0
     await wait_state(dut, ST_DETECT_ACTIVE, 50, "DETECT_ACTIVE")
 
-    # ---- DETECT_ACTIVE -> DETECT_RX: a PARTIAL receiver mask takes :587-:589
-    # (lanes_detected_c <- FIRST_MASK) instead of :582's straight-to-Polling. ----
-    dut.receiver_detected_i.value = FIRST_MASK
-    dut.phy_rxstatus_i.value = _rxstatus_mask([0, 1])
-    dut.phy_phystatus_i.value = FIRST_MASK
+    # ---- ALL four Lanes detect -> :582's &receiver_detected_i -> POLLING.
+    # Deliberately NOT the partial mask the old provocation used: that took the
+    # Detect.Rx hop, which is the very state being vacated. ----
+    dut.receiver_detected_i.value = ALL
+    dut.phy_rxstatus_i.value = _rxstatus_mask([0, 1, 2, 3])
+    dut.phy_phystatus_i.value = ALL
     await ClockCycles(dut.clk_i, 3)
     dut.phy_phystatus_i.value = 0
-    await wait_state(dut, ST_DETECT_RX, 50, "DETECT_RX")
+    cocotb.start_soon(os_tx_pulser(dut))
+    await wait_state(dut, ST_POLLING_ACTIVE, 400, "POLLING_ACTIVE")
+
+    # ---- Polling.Active -> Polling.Configuration on eight TS1 PAD/PAD ----
+    dut.ordered_set_i.value = pack_tsos_all_lanes(link_num=None, lane_num=None)
+    dut.ts1_valid_i.value = ALL
+    await wait_state(dut, ST_POLLING_CONFIG, 6000, "POLLING_CONFIGURATION")
+
+    # ---- Polling.Configuration -> Configuration.Linkwidth.Start on TS2 ----
+    dut.ts1_valid_i.value = 0
+    dut.ts2_valid_i.value = ALL
+    await wait_state(dut, ST_CFG_LW_START, 6000, "CFG_LINKWIDTH_START")
+
+    # ---- Linkwidth.Start -> Linkwidth.Accept on TS1 with a non-PAD Link ----
+    dut.ts2_valid_i.value = 0
+    dut.ordered_set_i.value = pack_tsos_all_lanes(link_num=LINK_NUM, lane_num=None)
+    dut.ts1_valid_i.value = ALL
+    await wait_state(dut, ST_CFG_LW_ACCEPT, 12000, "CFG_LINKWIDTH_ACCEPT")
+
+    # ---- ... -> Lanenum.Wait, where the Lane number seen on entry is latched
+    # into lane_in_save (:1868). We keep presenting THAT SAME value, so C11's
+    # "Lane number different from entry" can never be satisfied and the only
+    # remaining exit is the 2 ms timeout. ----
+    await wait_state(dut, ST_CFG_LN_WAIT, 12000, "CFG_LANENUM_WAIT")
     dut._log.info(
-        f"OBS setup: in DETECT_RX with lanes_detected latched to "
-        f"{FIRST_MASK:#06b}")
+        "OBS setup: in Configuration.Lanenum.Wait, holding the entry Lane "
+        "number so the only reachable exit is :932's 2 ms timeout")
 
-    # ---- ST_DETECT_RX ignores phystatus until timer_r >= TwelveMsTimeOut. ----
-    await ClockCycles(dut.clk_i, TWELVE_MS_CYCLES + 100)
-
-    # ---- the provocation: a DIFFERENT mask at the second look ----
-    dut.receiver_detected_i.value = SECOND_MASK
-    dut.phy_rxstatus_i.value = _rxstatus_mask([0])
-    dut.phy_phystatus_i.value = SECOND_MASK
-    dut._log.info(
-        f"OBS provocation: re-presenting {SECOND_MASK:#06b} != "
-        f"{FIRST_MASK:#06b}, so :609 mismatches and :614 raises error_c")
-
+    # ---- the provocation: simply wait. TwoMsTimeOut (:113) is UNSCALED. ----
     waited = 0
     landed = state(dut)
-    for i in range(SETTLE):
+    for i in range(TWO_MS_CYCLES + SETTLE):
         await ClockCycles(dut.clk_i, 1)
         await Timer(1, units="ps")
         landed = state(dut)
-        if landed != ST_DETECT_RX:
+        if landed != ST_CFG_LN_WAIT:
             waited = i + 1
             break
-    dut.phy_phystatus_i.value = 0
     dut._log.info(
-        f"OBS provocation: left DETECT_RX after {waited} cycles -> "
-        f"{sname(landed)}")
+        f"OBS provocation: left CFG_LANENUM_WAIT after {waited} cycles -> "
+        f"{sname(landed)} (2 ms = {TWO_MS_CYCLES} cycles); :934 raised error_c")
     return waited, landed
 
 
@@ -209,25 +263,41 @@ async def drive_to_detect_rx_mismatch(dut):
 
 @cocotb.test()
 async def test_obs_control_provocation_reaches_error_site(dut):
-    """Control: the drive sequence really does execute :614.
+    """Control: the drive sequence really does execute :934.
 
-    :614 and :615 are the same statement pair, so witnessing the state change
-    at :615 witnesses the error_c raise at :614. The only other exit from
-    ST_DETECT_RX to ST_IDLE is :619 at TwentyFourMsTimeOut -- 2.4 M cycles,
-    which is not SIM_FAST_LINK scaled and so cannot be what fired inside the
-    150-cycle window measured here.
+    :934 and :936 are the same statement pair, so witnessing the state change at
+    :936 witnesses the error_c raise at :934.
+
+    ** This control is STRONGER than the Detect.Rx one it replaces.  Lanenum.Wait
+    has exactly TWO exits -- :928 to CFG_LANENUM_ACCEPT, which needs two
+    consecutive TS1 carrying a Lane number DIFFERENT from the one latched on
+    entry, and :932's 2 ms timeout to ST_IDLE.  The setup holds the entry Lane
+    number, so the first is unreachable by construction and arrival in ST_IDLE
+    identifies :934 uniquely.  The old control could only argue that its
+    alternative (a 24 ms timeout) was too far away to be the cause; this one
+    excludes the alternative outright.
+
+    ** Non-vacuity (tracker sec 22.82): the wait is bounded at TWO_MS_CYCLES +
+    SETTLE and the window is asserted to have been ENTERED (waited > 0) and to
+    have closed near the 2 ms mark, so a run that never reached Lanenum.Wait, or
+    that left it instantly by some other arc, fails here rather than passing
+    silently.
     """
-    waited, landed = await drive_to_detect_rx_mismatch(dut)
+    waited, landed = await drive_to_lanenum_wait_timeout(dut)
     assert landed == ST_IDLE, (
-        f"control failed: the mask mismatch should take :615 to ST_IDLE, got "
-        f"{sname(landed)} -- the provocation did not reach :614 and the two "
-        f"expect_fail rows in this file are void")
-    assert 0 < waited < SETTLE, (
-        f"control failed: left DETECT_RX after {waited} cycles, outside the "
-        f"bounded window that rules out the 24 ms timeout at :619")
+        f"control failed: the 2 ms timeout should take :936 to ST_IDLE, got "
+        f"{sname(landed)} -- the provocation did not reach :934 and the two "
+        f"rows below it are void")
+    # The exit must happen AT the timeout, not before it: anything materially
+    # earlier means some other arc fired and this is not C13's site.
+    assert TWO_MS_CYCLES * 0.9 < waited <= TWO_MS_CYCLES + SETTLE, (
+        f"control failed: left CFG_LANENUM_WAIT after {waited} cycles, outside "
+        f"the window around TwoMsTimeOut = {TWO_MS_CYCLES}; the exit taken was "
+        f"not :932's timeout")
     dut._log.info(
-        f"CONTROL OK: :614/:615 executed -- DETECT_RX -> ST_IDLE after "
-        f"{waited} cycles, far inside the 2.4 M-cycle 24 ms alternative")
+        f"CONTROL OK: :934/:936 executed -- CFG_LANENUM_WAIT -> ST_IDLE after "
+        f"{waited} cycles (TwoMsTimeOut = {TWO_MS_CYCLES}), the only other exit "
+        f"held unreachable by holding the entry Lane number")
 
 
 # ==========================================================================
@@ -236,14 +306,23 @@ async def test_obs_control_provocation_reaches_error_site(dut):
 
 @cocotb.test()
 async def test_obs_error_o_reports_training_failure(dut):
-    """B1: error_o must report the training failure the FSM detected at :614.
+    """B1: error_o must report the training failure the FSM detected at :934.
 
-    The control above proves :614 ran. error_r is sticky (:490 defaults
-    error_c to error_r and no site clears it), so by the time this samples,
-    error_r has been 1 since the provocation, and :320 puts it on the port.
-    Before fix-arc 1 this read 0 no matter what the FSM did.
+    The control above proves :934 ran. error_r is sticky (:490 defaults error_c
+    to error_r and no site clears it), so by the time this samples, error_r has
+    been 1 since the provocation, and :320 puts it on the port. Before fix-arc 1
+    this read 0 no matter what the FSM did.
+
+    ** The FAILURE PATH IS REAL, which is the property that had to survive the
+    fix-arc-6b re-anchor.  Configuration.Lanenum.Wait timing out after 2 ms is a
+    genuine training failure -- Base 2.1 4.2.6.3.4 p.234 sends it to Detect -- so
+    error_o is being asked to report something the FSM legitimately detected, not
+    a signal forced by the bench.  The previous anchor (a Detect.Rx Lane-set
+    mismatch, :622) was equally real, but sat on an OPEN DEFECT scheduled for
+    removal; this one sits on an arc whose recorded verdict is *conforms*
+    (oracle C13), so no future fix can pull it out from under this row.
     """
-    _waited, landed = await drive_to_detect_rx_mismatch(dut)
+    _waited, landed = await drive_to_lanenum_wait_timeout(dut)
     assert landed == ST_IDLE, (
         f"setup did not reach the error site (landed in {sname(landed)}); see "
         f"the control row")
@@ -251,11 +330,11 @@ async def test_obs_error_o_reports_training_failure(dut):
 
     got = int(dut.error_o.value)
     dut._log.info(
-        f"B1: after a Detect.Rx lane-set mismatch, error_o = {got} "
-        f"(the FSM raised error_c at :614; a driven port would read 1)")
+        f"B1: after a Configuration.Lanenum.Wait 2 ms timeout, error_o = {got} "
+        f"(the FSM raised error_c at :934; a driven port would read 1)")
     assert got == 1, (
         "B1 violated: error_o reads 0 after a training failure the FSM itself "
-        "detected at pcie_ltssm_downstream.sv:614. The port is declared at :42 "
+        "detected at pcie_ltssm_downstream.sv:934. The port is declared at :42 "
         "and never assigned -- error_c/error_r reach no port at all, so no "
         "integrator can observe a training failure, and the four assertions on "
         "gate rows 58/63 that read error_o are tautologies. Fix: "
