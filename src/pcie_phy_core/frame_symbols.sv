@@ -263,6 +263,28 @@ module frame_symbols
         if (phy_axis_tready) begin
           next_state = ST_IDLE;
           phy_axis_tvalid = '1;
+          // This state emits the frame's FINAL beat -- the leftover byte(s) plus
+          // the END Symbol -- and never marked it last.  tlast is how the frame
+          // boundary reaches everything downstream: the async FIFO is
+          // LAST_ENABLE=1 (phy_transmit.sv:382) and lane_management leaves
+          // ST_LANE_MNGT_TX_DATA only on `if (s_dllp_axis_tlast)`
+          // (lane_management.sv:382), so a frame whose last beat never asserts
+          // tlast is a frame that never ends.
+          //
+          // Hoisted ABOVE the case, not duplicated into the two arms, because
+          // `next_state = ST_IDLE` above is unconditional: EVERY beat leaving
+          // this state is the frame's last one, including the `default` arm's.
+          // Setting it per-arm would leave `default` emitting a valid non-last
+          // beat and then going idle -- the same defect, moved.
+          //
+          // ⚠️ NOT the repair :177 invites.  Uncommenting that line asserts
+          // tlast in ST_FRAME_STREAM on the SHIFTED beat, which on this path
+          // still owes one more beat -- truncating the frame early and
+          // stranding the END Symbol.  tracker sec 54 #10.
+          //
+          // Only the tkeep 4'b0111 / 4'b1111 tails reach here (:191-193); the
+          // 4'b0001 / 4'b0011 tails already assert tlast in place at :183/:188.
+          phy_axis_tlast  = '1;
           case (buffer_axis_tkeep)
             4'b0111: begin
               phy_axis_tuser      = 4'b0001;
