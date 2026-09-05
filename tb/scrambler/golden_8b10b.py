@@ -48,8 +48,12 @@ BIT ORDER
 DISPARITY ENCODING
     dispin/dispout are one bit, 0 = negative running disparity.  That is the
     design's own declaration -- encode_8b10b.sv:8 says
-    `input dispin;  // 0 = neg disp; 1 = pos disp` -- and tb/scrambler/test_8b10b.v:48
-    repeats it.  It is a port convention, not a spec claim; the spec names
+    `input dispin;  // 0 = neg disp; 1 = pos disp`.  The now-deleted
+    tb/scrambler/test_8b10b.v independently repeated it in its column map, and
+    the fact is carried here rather than cited so it survives that file:
+    its vector table encoded "10b symbol if starting disparity was negative"
+    as 0 and the positive-disparity column as 1 -- the same polarity.
+    It is a port convention, not a spec claim; the spec names
     columns "Current RD-" and "Current RD+" and says nothing about wires.
 """
 
