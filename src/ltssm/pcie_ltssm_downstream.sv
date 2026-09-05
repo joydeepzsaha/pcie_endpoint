@@ -1910,7 +1910,36 @@ module pcie_ltssm_downstream
             if (ts1_valid_i[lane]) begin
               single_ts1_received_c = '1;
 
-              if ((ordered_set_i[lane].link_num == PAD) && (ordered_set_i[lane].lane_num == PAD)) begin
+              // P3 (Base 2.1 4.2.6.2.1 p.220; tracker SS54 #11).  A TS1 qualifies
+              // toward the eight consecutive training sequences only under
+              //   (a) Lane and Link numbers PAD *and the Compliance Receive bit
+              //       (Symbol 5 bit 4) is 0b*, or
+              //   (b) Lane and Link numbers PAD *and the Loopback bit (bit 2)
+              //       is 1b*.
+              // The complementary case -- Compliance Receive 1b with Loopback 0b
+              // -- satisfies NEITHER and is p.221's Polling.Compliance trigger.
+              // It was being counted anyway, so the substate accepted a superset.
+              // (~CR | LB) below is exactly (a) OR (b) with the shared PAD/PAD
+              // conjunct factored out.
+              //
+              // ⚠️ Symbol 5 bit 4 is addressed POSITIONALLY, and that is forced:
+              // training_ctrl_t (pcie_phy_pkg.sv:209-215) is
+              //   {rsvd[7:4], scramble[3], loopback[2], dis_link[1], hot_rst[0]}
+              // and has NO member for Compliance Receive -- the bit falls inside
+              // rsvd, whose declared range makes rsvd[4] exactly that bit.  Naming
+              // it properly is a pcie_phy_pkg change every PHY consumer of
+              // training_ctrl_t sees; registered as owed rather than bundled in
+              // here.  The same gap is why :720's Polling.Compliance arm below
+              // stays an over-approximation (oracle P7).
+              //
+              // ⚠️ The ts2_valid_i arm below is DELIBERATELY untouched: p.220's
+              // limb (c) is "TS2 with Lane and Link numbers set to PAD" and
+              // carries no Symbol 5 condition.  A symmetric edit there would have
+              // injected a defect.
+              if ((ordered_set_i[lane].link_num == PAD) &&
+                  (ordered_set_i[lane].lane_num == PAD) &&
+                  ((ordered_set_i[lane].train_ctrl.rsvd[4] == 1'b0) ||
+                    ordered_set_i[lane].train_ctrl.loopback)) begin
                 ts1_cnt_c = (ts1_cnt >= 8'h8) ? 8'h8 : ts1_cnt + 1;
               end else begin
                 ts1_cnt_c = ts1_cnt >= 8'h8 ? 8'h8 : '0;

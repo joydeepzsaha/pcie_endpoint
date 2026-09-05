@@ -17,7 +17,8 @@ and p.221 routes the complementary case to Polling.Compliance:
    (K23.7), the Compliance Receive bit (bit 4 of Symbol 5) is 1b, and the
    Loopback bit (bit 2 of Symbol 5) is 0b."
 
-pcie_ltssm_downstream.sv:1696 (Polling.Active) and :1704 test only
+Before the fix, Polling.Active's and Polling.Configuration's receive arms
+tested only
 
     (ordered_set_i[lane].link_num == PAD) && (ordered_set_i[lane].lane_num == PAD)
 
@@ -43,8 +44,18 @@ Sit in Polling.Active and answer with TS1, Link = Lane = PAD, Symbol 5 = 0x10
                        toward Polling.Configuration.
   This DUT:            exits to Polling.Configuration.
 
-The assertion states the spec outcome, so this is an expect_fail row recording
-the divergence (oracle P3, evidence/rung10/ORACLES_LTSSM.md). No src/ edit.
+The assertion states the spec outcome (oracle P3,
+evidence/rung10/ORACLES_LTSSM.md). It was an expect_fail row recording the
+divergence until fix-arc 6b closed it.
+
+STATUS: FIXED (fix-arc 6b). ST_POLLING_ACTIVE's per-lane receive arm now also
+requires (Compliance Receive == 0b) OR (Loopback == 1b), which is p.220's (a)
+OR (b) with the shared PAD/PAD conjunct factored out; the marker came off in
+the same commit (rule 22.75). The bit is still addressed positionally as
+train_ctrl.rsvd[4] because training_ctrl_t STILL has no member for it -- that
+package change is registered as owed, not taken. Pre-edit census and
+predictions: evidence/fix-arc-6/PREDICTIONS_P3.md. Mutant MP3 drops the
+conjunct.
 
 Note the interaction with oracle P7: the state the spec wants here --
 Polling.Compliance -- is structurally unreachable in this design
@@ -75,7 +86,7 @@ def sname(s):
     return f"{STATE_NAMES.get(s, hex(s))} ({s:#07x})"
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_polling_p3(dut):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
 
