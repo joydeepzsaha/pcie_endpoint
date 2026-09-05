@@ -293,6 +293,43 @@ module pcie_ltssm_downstream
   logic              [     MAX_NUM_LANES-1:0] polling_ei_exit_seen_r;
   logic              [     MAX_NUM_LANES-1:0] polling_ei_exit_seen_c;
 
+  // P4 (Base 2.1 4.2.6.2.1; tracker SS54 #8).  THE SPEC STATES THE
+  // TRANSMIT-COUNT LIMB TWICE, WITH DIFFERENT QUALIFIERS, AND THEY NEED
+  // DIFFERENT COUNTERS:
+  //
+  //   p.220, the PRIMARY exit -- "after at least 1024 TS1 Ordered Sets were
+  //   transmitted, and all Lanes ... receive eight consecutive training
+  //   sequences ...".  Counted FROM ENTRY TO POLLING.ACTIVE, with no dependence
+  //   on what has been received.
+  //
+  //   p.221, inside the 24 ms branch -- "a minimum of 1024 TS1 Ordered Sets are
+  //   transmitted AFTER RECEIVING ONE TS1 Ordered Set."
+  //
+  // ordered_set_sent_cnt_r applies the TIMEOUT BRANCH's qualifier at its
+  // increment (the |single_ts1_received gate below), and BOTH consumers read it.
+  // That gate is not a defect -- it is p.221's qualifier, correctly applied to
+  // the branch that has it.  The defect was that the PRIMARY exit read the same
+  // counter, so it demanded a further MinTS1sPolling transmissions the spec does
+  // not ask for.  ordered_set_sent_cnt_r therefore stays exactly as it is and
+  // remains the 24 ms branch's counter; this is the primary exit's.
+  //
+  // ⚠️ Deleting the |single_ts1_received gate -- the obvious one-line "fix" --
+  // was REJECTED and the reason is measurable, not stylistic: it makes the 24 ms
+  // branch satisfiable on a link whose partner never responded, which then takes
+  // that branch's else arm and asserts error_c where today it is never reached.
+  // error_r is STICKY and error_o has been a gate-observed port since fix-arc 1,
+  // so that would redden one-sided `error_o == 0` rows in three other benches.
+  // Mutant MP4b applies that form deliberately to keep this a measurement.
+  // See evidence/fix-arc-6/PREDICTIONS_P4.md sections 1c and 2.
+  //
+  // ⚠️ WIDTH: [15:0], matching ordered_set_sent_cnt_r (:242-:243) and NOT the
+  // [7:0] of the per-lane ts1_cnt/ts2_cnt counters.  MinTS1sPolling is 1024 when
+  // SIM_FAST_LINK=0 and does not fit in eight bits; a saturating [7:0] counter
+  // could never reach it and the primary exit would deadlock on exactly the two
+  // realtimer_linkup rows.
+  logic              [                  15:0] polling_tx_cnt_r;
+  logic              [                  15:0] polling_tx_cnt_c;
+
   // Need to pipeline phy_phystatus_i
   logic              [     MAX_NUM_LANES-1:0] phy_phystatus_r;
 
@@ -445,6 +482,7 @@ module pcie_ltssm_downstream
       phy_rxelecidle_r               <= '0;
       phy_phystatus_r                <= '0;
       polling_ei_exit_seen_r         <= '0;
+      polling_tx_cnt_r               <= '0;
       // for(i = 0; i < MAX_NUM_LANES; i++) begin
       //   preset_coeff_r.rx_preset <=
       //   tx_preset <=
@@ -484,6 +522,7 @@ module pcie_ltssm_downstream
       gen_os_ctrl_r                  <= gen_os_ctrl_c;
       phy_phystatus_r                <= phy_phystatus_i;
       polling_ei_exit_seen_r         <= polling_ei_exit_seen_c;
+      polling_tx_cnt_r               <= polling_tx_cnt_c;
     end
     //non-resetable
   end
@@ -557,6 +596,12 @@ module pcie_ltssm_downstream
     // declaration for why the clear condition is the state and not rst_i.
     polling_ei_exit_seen_c         = (curr_state == ST_POLLING_ACTIVE)
                                    ? (polling_ei_exit_seen_r | phy_rxelecidle_exit_detected)
+                                   : '0;
+    // P4: every transmitted Ordered Set counted FROM ENTRY to Polling.Active,
+    // saturating.  Same state-scoped shape as the accumulator above.
+    polling_tx_cnt_c               = (curr_state == ST_POLLING_ACTIVE)
+                                   ? ((ordered_set_tranmitted_i && (polling_tx_cnt_r < 16'hFFFF))
+                                      ? polling_tx_cnt_r + 16'd1 : polling_tx_cnt_r)
                                    : '0;
     polarity_lockout_timer_c       = (polarity_lockout_timer_r > 0) ? polarity_lockout_timer_r - 1 : 0;
     phy_txmargin_o                 = '0;
@@ -730,7 +775,11 @@ module pcie_ltssm_downstream
             polarity_lockout_timer_c = 16'd1000; // ~10us lockout
           end
 
-          if ((ordered_set_sent_cnt_r >= MinTS1sPolling)) begin
+          // P4: the PRIMARY exit counts from ENTRY to Polling.Active (p.220);
+          // the 24 ms branch below keeps ordered_set_sent_cnt_r, which carries
+          // p.221's "after receiving one TS1" qualifier.  Two limbs, two
+          // counters.  See polling_tx_cnt_r's declaration.
+          if ((polling_tx_cnt_r >= MinTS1sPolling)) begin
               if (&lanes_ts1_satisfied || &lanes_ts2_satisfied) begin
                 ordered_set_sent_cnt_c = '0;
                 //build ts2 ordered set
