@@ -30,19 +30,29 @@ EVERY cycle so the transient is not missed.
   Spec-conformant DUT: DETECT_ACTIVE -> DETECT_QUIET
   This DUT:            DETECT_ACTIVE -> ST_IDLE -> DETECT_QUIET
 
-The assertion states the spec sequence, so this is an expect_fail row recording
-the divergence (oracle D7, evidence/rung10/ORACLES_LTSSM.md). No src/ edit.
+STATUS: FIXED (fix-arc 6b). This carried expect_fail from Rung 10b until the
+Detect.Active arm was retargeted to ST_DETECT_QUIET; it is now an ordinary PASS
+row and the guard against the detour coming back. tracker sec 54 #8, oracle D7.
 
 NOT COVERED HERE, and why (recorded rather than silently dropped):
   * D10 -- the same detour on Detect.Rx's "different Lanes detected" exit
-    (:614-615), which additionally asserts error_c where the spec calls the
-    path an ordinary retry. ST_DETECT_RX is only entered when SOME BUT NOT ALL
-    Lanes detect a Receiver (:582 uses &receiver_detected_i, :581 uses |), and
-    at MAX_NUM_LANES=1 those two reductions are identical -- so the state is
-    unreachable at x1 and D10 needs an x4 target.
-  * D10's error_c half is unobservable at ANY width: error_o is never driven
-    (evidence/rung10/CENSUS_LTSSM.md section 3), so no port-level test can see
-    it. Untestable-with-reason.
+    (now :622, was :614-615), which additionally asserts error_c where the spec
+    calls the path an ordinary retry. ST_DETECT_RX is only entered when SOME BUT
+    NOT ALL Lanes detect a Receiver (:582 uses &receiver_detected_i, :581 uses
+    |), and at MAX_NUM_LANES=1 those two reductions are identical -- so the
+    state is unreachable at x1 and D10 needs an x4 target.
+  * D10 is NOT fixed with D7, and the reason is a COUPLING rather than scope:
+    verilate_ltssm_obs provokes its error_o oracle THROUGH D10's site, and two
+    of its three rows assert the FSM lands in ST_IDLE there. Removing the
+    detour breaks the observability oracle for tracker sec 54 #2. See
+    evidence/fix-arc-6/FINDINGS_D10_COUPLING.md.
+  * The 24 ms watchdog arm below the fixed one (:603 region) is deliberately
+    unchanged -- a failsafe, not a spec limb, and D11 expects its behaviour.
+
+  ** The old note here said D10's error_c half is "unobservable at ANY width
+     because error_o is never driven". That was true when written and is STALE:
+     fix-arc 1 added `assign error_o = error_r;` (:320). It is observable now,
+     and that is precisely what creates the coupling above.
 
 Requires SIM_FAST_LINK=1, MAX_NUM_LANES=1 (verilate_detect_d7 target).
 """
@@ -64,7 +74,7 @@ def sname(s):
     return STATE_NAMES.get(s, hex(s))
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_detect_d7(dut):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
 

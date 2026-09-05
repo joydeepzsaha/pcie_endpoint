@@ -246,6 +246,20 @@ module pcie_ltssm_downstream
   logic              [     MAX_NUM_LANES-1:0] link_lane_reconfig;
 
   logic              [     MAX_NUM_LANES-1:0] ts1_lanenum_wait_satisfied;
+
+  // C9 / C16 (Base 2.1 4.2.6.3.2.1 p.230 and 4.2.6.3.3.1 p.233; tracker SS54 #11).
+  // Both substates name the same non-timeout route to Detect: "all Lanes receive
+  // two consecutive TS1 Ordered Sets with Link and Lane numbers set to PAD
+  // (K23.7)".  Neither was implemented; Linkwidth.Accept had only the 2 ms limb
+  // and Lanenum.Accept had neither spec exit.
+  //
+  // Gated by lane_active_r like link_idle_satisfied / ts1_cnt_satisfied /
+  // ts2_cnt_satisfied, so an inactive Lane on a reduced-width link contributes a
+  // trivial '1' to the &-reduction instead of blocking it forever.  ⚠️ That gating
+  // is exactly why the consumers below ALSO test (|lane_active_r): with no Lane
+  // active the &-reduction is trivially true and the exit would fire on entry.
+  logic              [     MAX_NUM_LANES-1:0] lanes_all_pad;
+
   logic              [                   7:0] idle_to_rlock_transitioned_c;
   logic              [                   7:0] idle_to_rlock_transitioned_r;
 
@@ -259,6 +273,62 @@ module pcie_ltssm_downstream
   // holds last "receiver elecidle" lines
   logic              [     MAX_NUM_LANES-1:0] phy_rxelecidle_r;
   logic              [     MAX_NUM_LANES-1:0] phy_rxelecidle_exit_detected;
+
+  // P6 (Base 2.1 4.2.6.2.1 p.221 limb (ii); tracker SS54 #8).  The 24 ms
+  // Polling.Active branch reaches Polling.Configuration only if, IN ADDITION to
+  // the training-sequence limb, "at least a predetermined number of Lanes that
+  // detected a Receiver during Detect have detected an exit from Electrical Idle
+  // at least once SINCE ENTERING POLLING.ACTIVE".
+  //
+  // phy_rxelecidle_exit_detected is a ONE-CYCLE pulse, and until this fix it was
+  // sampled at exactly one site (:569, inside Detect.Quiet) and nowhere in
+  // Polling at all -- so there was nothing to test the limb against.  This
+  // register is that memory.
+  //
+  // ⚠️ It is cleared whenever curr_state != ST_POLLING_ACTIVE, not merely on
+  // rst_i, and that is load-bearing: EVERY bench toggles phy_rxelecidle_i 1->0
+  // during Detect.Quiet to trigger :569's exit.  A reset-only clear would let
+  // that Detect-era edge satisfy the limb and the fix would be INERT.  The spec's
+  // own words are what settle it -- "since entering Polling.Active".
+  logic              [     MAX_NUM_LANES-1:0] polling_ei_exit_seen_r;
+  logic              [     MAX_NUM_LANES-1:0] polling_ei_exit_seen_c;
+
+  // P4 (Base 2.1 4.2.6.2.1; tracker SS54 #8).  THE SPEC STATES THE
+  // TRANSMIT-COUNT LIMB TWICE, WITH DIFFERENT QUALIFIERS, AND THEY NEED
+  // DIFFERENT COUNTERS:
+  //
+  //   p.220, the PRIMARY exit -- "after at least 1024 TS1 Ordered Sets were
+  //   transmitted, and all Lanes ... receive eight consecutive training
+  //   sequences ...".  Counted FROM ENTRY TO POLLING.ACTIVE, with no dependence
+  //   on what has been received.
+  //
+  //   p.221, inside the 24 ms branch -- "a minimum of 1024 TS1 Ordered Sets are
+  //   transmitted AFTER RECEIVING ONE TS1 Ordered Set."
+  //
+  // ordered_set_sent_cnt_r applies the TIMEOUT BRANCH's qualifier at its
+  // increment (the |single_ts1_received gate below), and BOTH consumers read it.
+  // That gate is not a defect -- it is p.221's qualifier, correctly applied to
+  // the branch that has it.  The defect was that the PRIMARY exit read the same
+  // counter, so it demanded a further MinTS1sPolling transmissions the spec does
+  // not ask for.  ordered_set_sent_cnt_r therefore stays exactly as it is and
+  // remains the 24 ms branch's counter; this is the primary exit's.
+  //
+  // ⚠️ Deleting the |single_ts1_received gate -- the obvious one-line "fix" --
+  // was REJECTED and the reason is measurable, not stylistic: it makes the 24 ms
+  // branch satisfiable on a link whose partner never responded, which then takes
+  // that branch's else arm and asserts error_c where today it is never reached.
+  // error_r is STICKY and error_o has been a gate-observed port since fix-arc 1,
+  // so that would redden one-sided `error_o == 0` rows in three other benches.
+  // Mutant MP4b applies that form deliberately to keep this a measurement.
+  // See evidence/fix-arc-6/PREDICTIONS_P4.md sections 1c and 2.
+  //
+  // ⚠️ WIDTH: [15:0], matching ordered_set_sent_cnt_r (:242-:243) and NOT the
+  // [7:0] of the per-lane ts1_cnt/ts2_cnt counters.  MinTS1sPolling is 1024 when
+  // SIM_FAST_LINK=0 and does not fit in eight bits; a saturating [7:0] counter
+  // could never reach it and the primary exit would deadlock on exactly the two
+  // realtimer_linkup rows.
+  logic              [                  15:0] polling_tx_cnt_r;
+  logic              [                  15:0] polling_tx_cnt_c;
 
   // Need to pipeline phy_phystatus_i
   logic              [     MAX_NUM_LANES-1:0] phy_phystatus_r;
@@ -411,6 +481,8 @@ module pcie_ltssm_downstream
       gen_os_ctrl_r                  <= '0;
       phy_rxelecidle_r               <= '0;
       phy_phystatus_r                <= '0;
+      polling_ei_exit_seen_r         <= '0;
+      polling_tx_cnt_r               <= '0;
       // for(i = 0; i < MAX_NUM_LANES; i++) begin
       //   preset_coeff_r.rx_preset <=
       //   tx_preset <=
@@ -449,6 +521,8 @@ module pcie_ltssm_downstream
       polarity_lockout_timer_r       <= polarity_lockout_timer_c;
       gen_os_ctrl_r                  <= gen_os_ctrl_c;
       phy_phystatus_r                <= phy_phystatus_i;
+      polling_ei_exit_seen_r         <= polling_ei_exit_seen_c;
+      polling_tx_cnt_r               <= polling_tx_cnt_c;
     end
     //non-resetable
   end
@@ -518,6 +592,17 @@ module pcie_ltssm_downstream
     phy_txdeemph_o                 = '1;
     phy_txcompliance_o             = '0;
     phy_rxpolarity_c               = phy_rxpolarity_r;
+    // P6: accumulate while IN Polling.Active, force 0 otherwise -- see the
+    // declaration for why the clear condition is the state and not rst_i.
+    polling_ei_exit_seen_c         = (curr_state == ST_POLLING_ACTIVE)
+                                   ? (polling_ei_exit_seen_r | phy_rxelecidle_exit_detected)
+                                   : '0;
+    // P4: every transmitted Ordered Set counted FROM ENTRY to Polling.Active,
+    // saturating.  Same state-scoped shape as the accumulator above.
+    polling_tx_cnt_c               = (curr_state == ST_POLLING_ACTIVE)
+                                   ? ((ordered_set_tranmitted_i && (polling_tx_cnt_r < 16'hFFFF))
+                                      ? polling_tx_cnt_r + 16'd1 : polling_tx_cnt_r)
+                                   : '0;
     polarity_lockout_timer_c       = (polarity_lockout_timer_r > 0) ? polarity_lockout_timer_r - 1 : 0;
     phy_txmargin_o                 = '0;
     // gen_os_ctrl_c                  = '0;
@@ -597,9 +682,20 @@ module pcie_ltssm_downstream
               next_state       = ST_DETECT_RX;
             end 
           end else begin
-            next_state = ST_IDLE; // Should technically be ST_DETECT_QIUET
+            // Base 2.1 4.2.6.1.2 p.219: "Next state is Detect.Quiet if a
+            // Receiver is not detected on any Lanes."  This arm used to go to
+            // ST_IDLE -- the RTL's de facto reset hub, target of 19 arcs, whose
+            // ONLY exit is `if (en_i)` (:525) and which additionally clears
+            // gen_os_ctrl_c and idle_to_rlock_transitioned.  With en_i
+            // deasserted the LTSSM stopped there permanently, on a path the
+            // spec requires to retry.  tracker sec 54 #8 (oracle D7).
+            next_state = ST_DETECT_QUIET;
           end
         end else if (timer_r >= TwentyFourMsTimeOut) begin
+          // NOT changed with D7, deliberately: this is the 24 ms watchdog for a
+          // phystatus that never arrives -- a failsafe, not a spec limb -- and
+          // no oracle covers it.  D11 (verilate_ltssm_24ms) exercises this arm
+          // and expects today's behaviour.  See PREDICTIONS_D7.md sec 2.
           next_state =  ST_IDLE; // Should technically be ST_DETECT_QIUET
         end
       end
@@ -619,10 +715,25 @@ module pcie_ltssm_downstream
               lanes_detected_c = receiver_detected_i;
               next_state       = ST_POLLING;
             end else begin
-              error_c    = '1;
-              next_state = ST_IDLE;
+              // Base 2.1 4.2.6.1.2 p.219: when the second Receiver Detection
+              // finds a DIFFERENT set of Lanes, "the next state is Detect.Quiet"
+              // -- an ordinary retry, not a training failure.  This arm used to
+              // do two non-conformant things at once: detour through ST_IDLE
+              // (whose only exit is `if (en_i)` at :525, so a deasserted en_i
+              // stopped the LTSSM permanently on a retry path) and raise
+              // error_c, reporting a failure the spec does not consider one.
+              // Both are removed.  tracker sec 54 #8 (oracle D10).
+              //
+              // The error_c removal was BLOCKED until fix-arc 6b: verilate_ltssm_obs
+              // provoked its error_o oracle through THIS site, so deleting the
+              // raise would have broken the witness for sec 54 #2.  obs was
+              // re-anchored first, in its own commit, to :934's Lanenum.Wait
+              // timeout -- a site whose recorded verdict is *conforms* (oracle
+              // C13) and which is on no open-defect list.
+              // evidence/fix-arc-6/FINDINGS_D10_COUPLING.md.
+              next_state = ST_DETECT_QUIET;
             end
-          end 
+          end
         end else if (timer_r >= TwentyFourMsTimeOut) begin
           next_state = ST_IDLE;
         end
@@ -664,7 +775,11 @@ module pcie_ltssm_downstream
             polarity_lockout_timer_c = 16'd1000; // ~10us lockout
           end
 
-          if ((ordered_set_sent_cnt_r >= MinTS1sPolling)) begin
+          // P4: the PRIMARY exit counts from ENTRY to Polling.Active (p.220);
+          // the 24 ms branch below keeps ordered_set_sent_cnt_r, which carries
+          // p.221's "after receiving one TS1" qualifier.  Two limbs, two
+          // counters.  See polling_tx_cnt_r's declaration.
+          if ((polling_tx_cnt_r >= MinTS1sPolling)) begin
               if (&lanes_ts1_satisfied || &lanes_ts2_satisfied) begin
                 ordered_set_sent_cnt_c = '0;
                 //build ts2 ordered set
@@ -681,8 +796,40 @@ module pcie_ltssm_downstream
             //reset counts
             // timer_c                = '0;
             ordered_set_sent_cnt_c = '0;
-            //check if ts1 reqs satisfied
-            if (|lanes_ts1_satisfied || |lanes_ts2_satisfied) begin
+            // P6 (Base 2.1 4.2.6.2.1 p.221; tracker SS54 #8).  This branch
+            // reaches Polling.Configuration only if BOTH limbs hold: the
+            // training-sequence limb below AND limb (ii), "at least a
+            // predetermined number of Lanes that detected a Receiver during
+            // Detect have detected an exit from Electrical Idle at least once
+            // since entering Polling.Active".  Limb (ii) was absent entirely.
+            //
+            // ⚠️ "a predetermined number" is implementation-defined; this design
+            // fixes it at ONE -- the weakest conforming choice, and the
+            // |-reduction this file already uses for every other "any Lane"
+            // condition.  Stated as a choice, not read out of the spec.
+            //
+            // ⚠️ receiver_detected_i is the mask, NOT lane_active_r: the spec
+            // says "Lanes that detected a Receiver during Detect", which is
+            // literally that port, and it is the same mask lanes_ts1_satisfied /
+            // lanes_ts2_satisfied are built from.
+            //
+            // ⚠️ :693's PRIMARY exit is deliberately NOT given this conjunct --
+            // p.220 states no Electrical Idle limb on it.  A symmetric edit would
+            // have been a new defect.
+            //
+            // ⚠️ PREDICTED CONSEQUENCE, registered before it was measured: adding
+            // this conjunct BREAKS THE SUBSUMPTION that made the else-if below
+            // dead code.  |lanes_ts1_satisfied used to imply this test, so
+            // ST_POLLING_COMPLIANCE was structurally unreachable (Rung 10a /
+            // CENSUS_LTSSM section 2.1).  It is now reachable exactly when the
+            // training limb holds and the Electrical Idle limb does not -- which
+            // is precisely the case p.221(a) routes to Polling.Compliance.  The
+            // dead arm was written for this and has been waiting for its guard.
+            // Oracle P7's "unreachable" verdict is superseded.  See
+            // evidence/fix-arc-6/PREDICTIONS_P6.md section 4.
+            //check if ts1 reqs satisfied AND the Electrical Idle limb
+            if ((|lanes_ts1_satisfied || |lanes_ts2_satisfied) &&
+                (|(polling_ei_exit_seen_r & receiver_detected_i))) begin
               //build ts2 ordered set
               gen_os_ctrl_c.gen_ts1 = '0;
               gen_os_ctrl_c.gen_ts2 = '1;
@@ -736,6 +883,27 @@ module pcie_ltssm_downstream
       //  Polling.Configuration
       //-----------------------------------------------------------
       ST_POLLING_CONFIGURATION: begin
+        // P9 (Base 2.1 4.2.6.2.3 p.224; tracker SS54 #11): "Receiver must invert
+        // polarity if necessary (see Section 4.2.4.4)" is a requirement OF THIS
+        // SUBSTATE.  The capability existed only in Polling.Active, so an
+        // inversion first needed here was never applied.
+        //
+        // ⚠️ This ADDS a writer; it does NOT move the Polling.Active one.  p.220
+        // places the same requirement there, and
+        // verilate_config_gaps::run_test_p9_polarity_in_polling_config asserts as
+        // its POSITIVE CONTROL that Polling.Active still inverts -- precisely so
+        // that "did not change" here cannot be a vacuous green.  A move turns that
+        // control red.
+        //
+        // ⚠️ Deliberately NOT gated on ordered_set_tranmitted_i, unlike its
+        // Polling.Active twin.  Polarity inversion is a RECEIVER action; gating a
+        // receive-side response on a transmit handshake is the shape of Bug 4 and
+        // Bug 5, both already fixed out of this file.
+        if (|polarity_inverted_i && (polarity_lockout_timer_r == 0)) begin
+          phy_rxpolarity_c = phy_rxpolarity_r ^ polarity_inverted_i;
+          polarity_lockout_timer_c = 16'd1000; // ~10us lockout
+        end
+
         //bounded timeout counter
         if (ordered_set_tranmitted_i && |single_ts2_received) begin
             ordered_set_sent_cnt_c = ordered_set_sent_cnt_r + 1'b1;
@@ -834,9 +1002,30 @@ module pcie_ltssm_downstream
           //TODO(contiguity): no check that the formed lanes are contiguous from
           //lane 0 / constitute a single link; needed for fragmentation and
           //crosslink rejection, unimplemented.
-          if ((|link_lanes_formed) &&
-          ordered_set_sent_cnt_r >= 8'h08)
-          begin
+          //
+          // C8 (Base 2.1 4.2.6.3.2.1 p.230; tracker SS54 #11; row
+          // verilate_config_c8).  The exit condition is the FORMING CONDITION
+          // ALONE -- "If a configured Link can be formed with at least one group
+          // of Lanes that received two consecutive TS1 Ordered Sets with the same
+          // received Link number ... The next state is
+          // Configuration.Lanenum.Wait."  This substate states NO
+          // transmitted-Ordered-Set count.  That silence is meaningful rather
+          // than merely absent: Polling.Active (1024) and Configuration.Complete
+          // (16 after receiving one) both state theirs explicitly.
+          // link_lanes_formed[lane] <= (ts1_cnt >= 8'h2) already implements the
+          // whole condition on its own.
+          //
+          // The `ordered_set_sent_cnt_r >= 8'h08` gate removed here was
+          // unsourced and delayed the exit by eight transmissions (measured at
+          // 8-9 pulses against a spec budget of 2).  It was CONSERVATIVE -- it
+          // delayed, it never skipped -- which is why it sat open behind rows
+          // that all looked green.
+          //
+          // Lanenum.Accept's two `>= 8'h8` gates below (:898, :908) are
+          // DELIBERATELY LEFT ALONE: they belong to oracles C14 and C15, whose
+          // recorded verdicts are "conforms" and "conforms (loosely)", and no
+          // confirmed divergence names them.
+          if ((|link_lanes_formed)) begin
             ordered_set_sent_cnt_c = '0;
             gen_os_ctrl_c.gen_ts1  = '1;
             gen_os_ctrl_c.gen_ts2  = '0;
@@ -855,6 +1044,26 @@ module pcie_ltssm_downstream
             next_state = ST_CONFIGURATION_LANENUM_WAIT;
           end
         end  // end of: if (ordered_set_tranmitted_i)
+
+        // C9 (Base 2.1 4.2.6.3.2.1 p.230): "The next state is Detect after a 2 ms
+        // timeout OR if no Link can be configured OR if all Lanes receive two
+        // consecutive TS1 Ordered Sets with Link and Lane numbers set to PAD
+        // (K23.7)."  Only the timeout limb existed; the all-PAD limb is added
+        // here.  Without it a partner that withdraws its Link number cannot tear
+        // the link down promptly -- it must wait out the full 2 ms.
+        //
+        // ⚠️ The "no Link can be configured" limb is NOT implemented.  It has no
+        // observable form at x1, no row measures it, and inventing one is a new
+        // feature rather than a fix.  Registered as owed, like C12/C19/C20.
+        //
+        // ⚠️ (|lane_active_r) is an ANTI-VACUITY guard, not a spec term -- see
+        // lanes_all_pad's declaration.  error_c is raised for consistency with
+        // every other Configuration->Detect arc here and with SS54 #2's premise
+        // that a training failure must be observable; p.230 does not require it.
+        if ((&lanes_all_pad) && (|lane_active_r) && (next_state == curr_state)) begin
+          error_c    = '1;
+          next_state = ST_IDLE;
+        end
 
         if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
           error_c    = '1;
@@ -885,6 +1094,34 @@ module pcie_ltssm_downstream
           end
         end  // end of: if (ordered_set_tranmitted_i)
 
+        // C16 (Base 2.1 4.2.6.3.3.1 p.233): "The next state is Detect if no Link
+        // can be configured or if all Lanes receive two consecutive TS1 Ordered
+        // Sets with Link and Lane numbers set to PAD (K23.7)."  Neither limb
+        // existed.  The all-PAD one is added here; "no Link can be configured" is
+        // owed, as in Linkwidth.Accept above.
+        if ((&lanes_all_pad) && (|lane_active_r) && (next_state == curr_state)) begin
+          error_c    = '1;
+          next_state = ST_IDLE;
+        end
+
+        // ⚠️ The 2 ms watchdog below is EXTRA-SPEC -- p.233 states no timeout for
+        // this substate -- and it is DELIBERATELY KEPT.  Two measured reasons,
+        // not a preference:
+        //
+        //  * verilate_config_timeout::run_test_config_lanenum_accept_timeout is an
+        //    ORDINARY PASS row (Bug 5 regression coverage, nothing to do with
+        //    SS54 #11).  It walks here, silences the TX handshake, and REQUIRES
+        //    this watchdog to reach ST_IDLE inside 250 000 cycles.  Deleting it
+        //    turns a green row red -- a fix breaking another row's witness, which
+        //    is the coupling SS54.W's setup-route axis exists to prevent.
+        //  * Rung 10a classified Detect.Active's structurally identical
+        //    extra-spec watchdog (oracle D11) as "conformant-but-added" -- an
+        //    ADDITION, not a violation -- and verilate_ltssm_24ms CHARACTERISES
+        //    it rather than holding it red.  Same class, same treatment.
+        //
+        // C16 therefore closes as HALF a fix: the missing exit is added, the added
+        // watchdog is closed documented-correct.  See
+        // evidence/fix-arc-6/PREDICTIONS_C9_C16_C18_P9.md section 0.
         if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
           //assert error
           error_c    = '1;
@@ -1564,6 +1801,17 @@ module pcie_ltssm_downstream
     (* mark_debug = "true" *) logic              [7:0] ts2_cnt;
     logic              [7:0] idle_cnt;
 
+    // C9/C16: consecutive all-PAD TS1 on this Lane.  Needs its own counter --
+    // neither existing one can express the condition.  ts1_cnt SATURATES rather
+    // than clearing on a mismatch in both Accept arms, which would turn "two
+    // consecutive" into "two ever"; ts2_cnt is unwritten in Linkwidth.Accept but
+    // is read by link_width_satisfied and link_lanes_nums_match, so repurposing
+    // it would leak into two other substates' exits.
+    // ⚠️ pad_cnt therefore RESETS to 0 on a mismatch -- deliberately unlike its
+    // neighbours in the very same arms.  That difference IS the word
+    // "consecutive".
+    logic              [1:0] pad_cnt;
+
     logic              [7:0] lane_in_save;
     logic                    first_ts1;
     ts_symbol6_union_t       temp_ts6;
@@ -1572,6 +1820,7 @@ module pcie_ltssm_downstream
 
     // Signals used for combinatorial logic block
     logic [7:0] ts1_cnt_c, ts2_cnt_c, idle_cnt_c;
+    logic [1:0] pad_cnt_c;
     logic first_ts1_c;
 
     logic single_idle_received_c;
@@ -1600,6 +1849,7 @@ module pcie_ltssm_downstream
         link_lanes_formed[lane]          <= '0;
         //determine if TS1 req satisfied
         ts1_lanenum_wait_satisfied[lane] <= '0;
+        lanes_all_pad[lane]              <= '0;
         link_lanes_nums_match[lane]      <= '0;
         link_lane_reconfig[lane]         <= '0;
         lane_num_formed[lane]            <= '0;
@@ -1620,6 +1870,10 @@ module pcie_ltssm_downstream
         link_lanes_formed[lane]          <= (ts1_cnt >= 8'h2);
         //determine if TS1 req satisfied
         ts1_lanenum_wait_satisfied[lane] <= (ts1_cnt >= 8'h2);
+        //C9/C16: two consecutive all-PAD TS1 on this Lane.  lane_active_r gate as
+        //per link_idle_satisfied below; see the declaration for why the consumers
+        //also require (|lane_active_r).
+        lanes_all_pad[lane]              <= lane_active_r[lane] ? (pad_cnt >= 2'd2) : '1;
         link_lanes_nums_match[lane]      <= (ts1_cnt >= 8'h2) | (ts2_cnt >= 8'h2);
         link_lane_reconfig[lane]         <= (ts1_cnt >= 8'h2);
         lane_num_formed[lane]            <= lane_active_r[lane] ? (ts2_cnt == 8'h8) : '1;
@@ -1656,6 +1910,7 @@ module pcie_ltssm_downstream
         ts1_cnt                                  <= '0;
         ts2_cnt                                  <= '0;
         idle_cnt                                 <= '0;
+        pad_cnt                                  <= '0;
         first_ts1                                 <= '0;
         link_number_selected_per_lane[lane*8+:8] <= '0;
         lane_in_save                             <= PAD_;
@@ -1671,6 +1926,7 @@ module pcie_ltssm_downstream
         ts1_cnt <= ts1_cnt_c;
         ts2_cnt <= ts2_cnt_c;
         idle_cnt <= idle_cnt_c;
+        pad_cnt <= pad_cnt_c;
         first_ts1 <= first_ts1_c;
 
         single_idle_received[lane] <= single_idle_received_c;
@@ -1700,6 +1956,7 @@ module pcie_ltssm_downstream
       ts1_cnt_c  = ts1_cnt;
       ts2_cnt_c  = ts2_cnt;
       idle_cnt_c = idle_cnt;
+      pad_cnt_c  = pad_cnt;
       first_ts1_c = first_ts1;
 
       single_idle_received_c = single_idle_received[lane];
@@ -1728,6 +1985,7 @@ module pcie_ltssm_downstream
         ts1_cnt_c  = '0;
         ts2_cnt_c  = '0;
         idle_cnt_c = '0;
+        pad_cnt_c  = '0;
         first_ts1_c = '0;
 
         single_idle_received_c = '0;
@@ -1759,7 +2017,36 @@ module pcie_ltssm_downstream
             if (ts1_valid_i[lane]) begin
               single_ts1_received_c = '1;
 
-              if ((ordered_set_i[lane].link_num == PAD) && (ordered_set_i[lane].lane_num == PAD)) begin
+              // P3 (Base 2.1 4.2.6.2.1 p.220; tracker SS54 #11).  A TS1 qualifies
+              // toward the eight consecutive training sequences only under
+              //   (a) Lane and Link numbers PAD *and the Compliance Receive bit
+              //       (Symbol 5 bit 4) is 0b*, or
+              //   (b) Lane and Link numbers PAD *and the Loopback bit (bit 2)
+              //       is 1b*.
+              // The complementary case -- Compliance Receive 1b with Loopback 0b
+              // -- satisfies NEITHER and is p.221's Polling.Compliance trigger.
+              // It was being counted anyway, so the substate accepted a superset.
+              // (~CR | LB) below is exactly (a) OR (b) with the shared PAD/PAD
+              // conjunct factored out.
+              //
+              // ⚠️ Symbol 5 bit 4 is addressed POSITIONALLY, and that is forced:
+              // training_ctrl_t (pcie_phy_pkg.sv:209-215) is
+              //   {rsvd[7:4], scramble[3], loopback[2], dis_link[1], hot_rst[0]}
+              // and has NO member for Compliance Receive -- the bit falls inside
+              // rsvd, whose declared range makes rsvd[4] exactly that bit.  Naming
+              // it properly is a pcie_phy_pkg change every PHY consumer of
+              // training_ctrl_t sees; registered as owed rather than bundled in
+              // here.  The same gap is why :720's Polling.Compliance arm below
+              // stays an over-approximation (oracle P7).
+              //
+              // ⚠️ The ts2_valid_i arm below is DELIBERATELY untouched: p.220's
+              // limb (c) is "TS2 with Lane and Link numbers set to PAD" and
+              // carries no Symbol 5 condition.  A symmetric edit there would have
+              // injected a defect.
+              if ((ordered_set_i[lane].link_num == PAD) &&
+                  (ordered_set_i[lane].lane_num == PAD) &&
+                  ((ordered_set_i[lane].train_ctrl.rsvd[4] == 1'b0) ||
+                    ordered_set_i[lane].train_ctrl.loopback)) begin
                 ts1_cnt_c = (ts1_cnt >= 8'h8) ? 8'h8 : ts1_cnt + 1;
               end else begin
                 ts1_cnt_c = ts1_cnt >= 8'h8 ? 8'h8 : '0;
@@ -1935,6 +2222,20 @@ module pcie_ltssm_downstream
               end else begin
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : '0;
               end
+
+              //C9 (p.230): the COMPLEMENTARY condition -- two consecutive TS1
+              //with BOTH Link and Lane numbers PAD.  Counted separately from
+              //ts1_cnt because that counter saturates on a mismatch just above,
+              //which cannot express "consecutive".
+              if ((ordered_set_i[lane].link_num == PAD) &&
+                  (ordered_set_i[lane].lane_num == PAD)) begin
+                pad_cnt_c = (pad_cnt >= 2'd2) ? 2'd2 : pad_cnt + 2'd1;
+              end else begin
+                pad_cnt_c = '0;
+              end
+            end else if (ts2_valid_i[lane]) begin
+              //a non-TS1 Ordered Set breaks the run of CONSECUTIVE TS1
+              pad_cnt_c = '0;
             end
           end
 
@@ -2001,6 +2302,21 @@ module pcie_ltssm_downstream
                 lane_num_echo_c = ordered_set_i[lane].lane_num;
               end
             end
+
+            //C16 (p.233): two consecutive all-PAD TS1 -- same counter and same
+            //reasoning as the Linkwidth.Accept arm above.  One counter serves
+            //both substates: the global transition reset zeroes it on every state
+            //change, so they cannot interfere.
+            if (ts1_valid_i[lane]) begin
+              if ((ordered_set_i[lane].link_num == PAD) &&
+                  (ordered_set_i[lane].lane_num == PAD)) begin
+                pad_cnt_c = (pad_cnt >= 2'd2) ? 2'd2 : pad_cnt + 2'd1;
+              end else begin
+                pad_cnt_c = '0;
+              end
+            end else if (ts2_valid_i[lane]) begin
+              pad_cnt_c = '0;
+            end
           end
 
           // =========================
@@ -2008,10 +2324,35 @@ module pcie_ltssm_downstream
             if (ts2_valid_i[lane]) begin
               single_ts2_received_c ='1;
 
+              // C18 (Base 2.1 4.2.6.3.5.1 p.235; tracker SS54 #11): the eight
+              // consecutive TS2 must carry matching non-PAD Link and Lane numbers
+              // AND "identical data rate identifiers (including identical Link
+              // Upconfigure Capability (Symbol 4 bit 6))".  Only Link and Lane
+              // were compared.
+              //
+              // ⚠️ This compares the WHOLE rate_id_t on purpose, and it is NOT
+              // SS54 #1's trap in reverse.  There the spec named one field
+              // (.rate) and the code compared the struct; here p.235 names the
+              // BYTE and its parenthetical explicitly pulls a second bit in.
+              //
+              // temp_rate_id holds the identifier of the TS2 that OPENED the
+              // current run.  (ts2_cnt == '0) is the run-opener: the global
+              // transition reset zeroes ts2_cnt on entry and a mismatch zeroes it
+              // again, so "count is 0" is exactly "no run in progress".  Preferred
+              // over first_ts1, which carries its own meaning in
+              // Linkwidth.Start and RcvrCfg -- this way there is no cross-state
+              // coupling at all.
+              //
+              // Mirrors ST_RECOVERY_RCVR_CFG's existing idiom rather than
+              // inventing one; see evidence/fix-arc-6/REDERIVE_SITES_FA6b.md
+              // section 4 on why oracle R11 read that site as absent.
               if ((ordered_set_i[lane].link_num == link_number_selected) &&
-                  (ordered_set_i[lane].lane_num == lane)) begin
+                  (ordered_set_i[lane].lane_num == lane) &&
+                  ((ts2_cnt == '0) ||
+                   (temp_rate_id == ordered_set_i[lane].rate_id))) begin
                 ts2_cnt_c = (ts2_cnt >= 8'h8) ? 8'h8 : ts2_cnt + 1;
                 ts1_cnt_c = '0;
+                temp_rate_id_c = ordered_set_i[lane].rate_id;
               end else begin
                 ts1_cnt_c = '0;
                 ts2_cnt_c = (ts2_cnt >= 8'h8) ? 8'h8 : '0;

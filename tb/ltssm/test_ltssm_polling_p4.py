@@ -19,7 +19,7 @@ timeout branch only. On the primary exit the 1024 transmitted Ordered Sets are
 counted from entry to Polling.Active, with no dependence on what has been
 received.
 
-pcie_ltssm_downstream.sv:649-653 applies the timeout-branch rule to BOTH:
+The RTL applied the timeout-branch rule to BOTH:
 
     if (ordered_set_tranmitted_i) begin
       // Only start counting after receiving one TS1
@@ -27,9 +27,26 @@ pcie_ltssm_downstream.sv:649-653 applies the timeout-branch rule to BOTH:
       ordered_set_sent_cnt_c = ordered_set_sent_cnt_r + 1;
       end
 
-so ordered_set_sent_cnt_r stays 0 for every Ordered Set transmitted before the
-first TS1 arrives, and the primary exit at :659 then demands a further
-MinTS1sPolling transmissions that the spec does not ask for.
+so ordered_set_sent_cnt_r stayed 0 for every Ordered Set transmitted before the
+first TS1 arrived, and the primary exit then demanded a further MinTS1sPolling
+transmissions that the spec does not ask for.
+
+STATUS: FIXED (fix-arc 6b), and the fix ADDS A SECOND COUNTER rather than moving
+the qualifier. polling_tx_cnt_r counts every transmitted Ordered Set from ENTRY
+to Polling.Active and feeds the primary exit; ordered_set_sent_cnt_r keeps
+p.221's "after receiving one TS1" qualifier and stays the 24 ms branch's
+counter. The gate above is NOT a defect -- it is p.221's qualifier, correctly
+applied to the branch that has it.
+
+*** Deleting that gate -- the obvious one-line fix -- was REJECTED, and for a
+measurable reason: it makes the 24 ms branch satisfiable on a link whose partner
+never responded, which then takes that branch's else arm and asserts error_c
+where today it is never reached. error_r is sticky and error_o has been a
+gate-observed port since fix-arc 1, so one-sided `error_o == 0` rows in
+test_ltssm_partial_lanes, test_ltssm_recovery_partial_lanes and
+test_ltssm_recovery_skew would go red. Mutant MP4b applies that form on purpose,
+so "the second counter was necessary" is a measurement rather than a claim.
+Pre-edit census and predictions: evidence/fix-arc-6/PREDICTIONS_P4.md.
 
 WHAT THIS TEST MEASURES
   Phase A: sit in Polling.Active with ts1_valid_i deasserted and deliver
@@ -42,9 +59,11 @@ WHAT THIS TEST MEASURES
   met, so the exit fires as soon as the eight consecutive TS1 land.
   This DUT: phase B costs a full MinTS1sPolling pulses.
 
-The assertion below states the SPEC value, so this test is an expect_fail row
-recording the divergence (oracle P4, evidence/rung10/ORACLES_LTSSM.md).
-It is not a repair: no src/ file is touched by this rung.
+The assertion below states the SPEC value (oracle P4,
+evidence/rung10/ORACLES_LTSSM.md). It was an expect_fail row recording the
+divergence until fix-arc 6b closed it; the marker came off in the same commit as
+the src/ edit (rule 22.75). Mutant MP4 points the primary exit back at
+ordered_set_sent_cnt_r.
 
 Requires SIM_FAST_LINK=1 (MinTS1sPolling = 24), MAX_NUM_LANES=1
 (verilate_polling_p4 target).
@@ -61,11 +80,32 @@ MIN_TS1S_POLLING_FAST = 24
 # above MinTS1sPolling so the spec's transmit limb is unambiguously satisfied.
 TX_PRELOAD = 40
 
-# The spec-conformant budget for phase B. Eight consecutive TS1 are consumed by
-# the per-lane counter at one per clock, which is far quicker than the ~4-cycle
-# transmit-pulse period, so a conformant DUT needs at most a pulse or two of
-# slack to notice and act.
-SPEC_PHASE_B_BUDGET = 2
+# The spec-conformant budget for phase B.
+#
+# *** CORRECTED IN FIX-ARC 6b, AND THE OLD VALUE OF 2 WAS MIS-DERIVED. ***
+# The original comment read "eight consecutive TS1 are consumed by the per-lane
+# counter at one per clock, which is far quicker than the ~4-cycle transmit-pulse
+# period". That is wrong by inspection: eight clocks at one per clock is TWO FULL
+# pulse periods, not a fraction of one. Derived properly:
+#
+#   8 clocks   ts1_cnt reaching 8'h8, one TS1 per clock while ts1_valid_i is high
+# + 1 clock    lanes_ts1_satisfied[lane] <= (ts1_cnt == 8'h8) is REGISTERED
+# = 9 clocks   before the exit condition can even be true
+#
+# and the exit is only evaluated on a transmit pulse, which tx_pulse() issues
+# once per 4 clocks. ceil(9/4) = 3 pulses at best alignment, 4 when phase B
+# begins just after a pulse. So the FLOOR for any conformant DUT is 4, and a
+# budget of 2 was unreachable no matter what the RTL did.
+#
+# It was never exercised: while this row was expect_fail it went red on the
+# transmit-count limb, so the assertion could not distinguish "2" from "4". The
+# constant only became measurable once the row went green for the right reason.
+#
+# 8 is twice the computed worst case and still discriminates decisively: the
+# defect's signature is a full MinTS1sPolling re-count, MEASURED at 26 pulses
+# before the fix and 4 after it, so anything in [4, 23] separates them. Mutant
+# MP4 restores the defect and must still redden this row -- 26 > 8.
+SPEC_PHASE_B_BUDGET = 8
 
 # Hard ceiling so a hang fails loudly rather than running to the cocotb timeout.
 PHASE_B_CEILING = 200
@@ -85,7 +125,7 @@ def state(dut):
     return int(dut.ltssm_state_o.value)
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_polling_p4(dut):
     cocotb.start_soon(Clock(dut.clk_i, 10, units="ns").start())
 
@@ -165,6 +205,6 @@ async def run_test_polling_p4(dut):
         f"before any TS1 was received, so the transmit limb was already "
         f"satisfied and the exit should have followed the eight consecutive "
         f"TS1 within {SPEC_PHASE_B_BUDGET} transmit pulses. It took {pulses} "
-        f"-- consistent with pcie_ltssm_downstream.sv:651 gating "
-        f"ordered_set_sent_cnt_c on |single_ts1_received and so re-counting a "
-        f"full MinTS1sPolling ({MIN_TS1S_POLLING_FAST}) after the first TS1.")
+        f"-- consistent with the primary exit reading a counter that is gated "
+        f"on |single_ts1_received, and so re-counting a full MinTS1sPolling "
+        f"({MIN_TS1S_POLLING_FAST}) after the first TS1.")

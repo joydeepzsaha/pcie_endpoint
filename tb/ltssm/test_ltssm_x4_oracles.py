@@ -27,7 +27,13 @@ ORACLES EXERCISED
   D10 4.2.6.1.2 p.219 -- "Otherwise, the next state is Detect.Quiet."
       :614-615 goes to ST_IDLE and additionally asserts error_c, where the spec
       treats this as an ordinary retry. PREDICTED DIVERGES.
-      NOTE: the error_c half is untestable at ANY width -- error_o is never
+      NOTE (CORRECTED fix-arc 6b): this used to read "the error_c half is
+      untestable at ANY width -- error_o is never driven". That was true when
+      written and is STALE: fix-arc 1 added `assign error_o = error_r;` (:320).
+      The error_c half IS observable now. It is still not asserted HERE -- this
+      row's single divergent assertion is the ST_IDLE detour -- but the reason
+      is one-assertion-per-row, not unobservability.
+      Superseded text follows: the error_c half is untestable at ANY width -- error_o is never
       driven (evidence/rung10/CENSUS_LTSSM.md section 3) -- so only the state
       divergence is asserted here. Recorded, not silently dropped.
 
@@ -153,9 +159,17 @@ async def run_test_d9_detect_rx_same_lanes(dut):
                   "advanced to Polling")
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_d10_detect_rx_changed_lanes(dut):
-    """D10, the divergent half -- expect_fail row."""
+    """D10 -- FIXED in fix-arc 6b; this is now the guard row.
+
+    Carried expect_fail from Rung 10b until Detect.Rx's changed-Lane-set exit was
+    retargeted to ST_DETECT_QUIET and its error_c removed (both halves, since
+    p.219 calls this an ordinary retry rather than a failure).  The fix was
+    blocked for one commit by a coupling: verilate_ltssm_obs provoked its error_o
+    oracle through this very site.  obs was re-anchored first.
+    evidence/fix-arc-6/FINDINGS_D10_COUPLING.md.
+    """
     clk(dut)
 
     await reset_to_detect_active(dut)
@@ -198,11 +212,11 @@ async def run_test_d10_detect_rx_changed_lanes(dut):
         f"D10 (Base 2.1 4.2.6.1.2, p.219): when the second Receiver Detection "
         f"finds a different Lane set, 'the next state is Detect.Quiet'. The "
         f"DUT went {' -> '.join(sname(s) for s in seq)}, detouring through "
-        f"ST_IDLE (pcie_ltssm_downstream.sv:615), whose only exit is "
-        f"`if (en_i)` at :525. The same line also asserts error_c where the "
-        f"spec calls this an ordinary retry -- that half is untestable at any "
-        f"width because error_o is never driven, and is recorded rather than "
-        f"asserted here.")
+        f"ST_IDLE (pcie_ltssm_downstream.sv:623, was :615), whose only exit is "
+        f"`if (en_i)` at :525. The same site also asserts error_c where the "
+        f"spec calls this an ordinary retry; that half is OBSERVABLE since "
+        f"fix-arc 1 drove error_o (:320) and is simply not asserted here, one "
+        f"divergent assertion per row.")
 
 
 # =====================================================================
