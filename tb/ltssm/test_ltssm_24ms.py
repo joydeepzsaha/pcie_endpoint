@@ -29,10 +29,30 @@ P6   4.2.6.2.1 p.221 -- the 24 ms Polling.Active branch reaches
      "less than the predetermined number of Lanes from (ii) above have detected
      an exit from Electrical Idle since entering Polling.Active".
 
-     Limb (ii) is ABSENT from the RTL. :677 tests only lanes_ts1_satisfied /
-     lanes_ts2_satisfied. The LTSSM samples phy_rxelecidle_exit_detected in
-     exactly one place -- :561, inside Detect.Quiet -- and never during Polling
-     at all.
+     Limb (ii) WAS ABSENT from the RTL: the 24 ms branch tested only
+     lanes_ts1_satisfied / lanes_ts2_satisfied, and the LTSSM sampled
+     phy_rxelecidle_exit_detected in exactly one place -- inside Detect.Quiet --
+     and never during Polling at all.
+
+     STATUS: FIXED (fix-arc 6b). A polling_ei_exit_seen_r register now
+     accumulates Electrical Idle exits WHILE IN Polling.Active (cleared on
+     leaving it, not merely on reset -- every bench toggles phy_rxelecidle_i
+     during Detect.Quiet, so a reset-only clear would make the fix inert), and
+     the 24 ms branch requires it. The expect_fail marker came off in the same
+     commit (rule 22.75).
+
+     *** The p6 row now lands in ST_IDLE via ST_POLLING_COMPLIANCE rather than
+     in Polling.Configuration, and that is a PREDICTED consequence, not a
+     surprise: adding the conjunct breaks the subsumption that made the
+     else-if arm below it dead code, so ST_POLLING_COMPLIANCE becomes reachable
+     for the first time in this design and lands exactly where p.221(a) says.
+     Oracle P7's "unreachable" verdict is superseded. Its body is still "not
+     implemented" (error_c, then ST_IDLE), and :720's guard is still an
+     over-approximation because training_ctrl_t has no Compliance Receive
+     member. Both are registered as owed. See
+     evidence/fix-arc-6/PREDICTIONS_P6.md section 4. Mutants MP6 (drop the
+     conjunct) and MP6b (clear the accumulator on reset only -- the inertness
+     probe).
 
 WHY P6 IS NOT VACUOUS, stated explicitly because it tests an ABSENCE:
   * It runs at x4 and drives eight consecutive TS1 on lanes 0b0011 only, so the
@@ -237,7 +257,7 @@ async def run_test_p6a_24ms_branch_loses_the_race(dut):
         "and the error_c at :702 -- cannot execute.")
 
 
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_p6_polling_elec_idle_limb(dut):
     clk(dut)
     # Hold the TX handshake continuously high so the 24 ms branch at :672 CAN
@@ -272,9 +292,10 @@ async def run_test_p6_polling_elec_idle_limb(dut):
         f"never left Polling.Active within {LATE_BOUND} cycles; expected the "
         f"24 ms branch at :672 to resolve one way or the other")
 
+    err = int(dut.error_o.value)
     dut._log.info(f"P6: left Polling.Active at ~{waited} cycles "
                   f"({100.0 * waited / TWENTY_FOUR_MS:.1f}% of 24 ms) into "
-                  f"{sname(landed)}")
+                  f"{sname(landed)}, error_o = {err}")
 
     assert landed != ST_POLLING_CONFIG, (
         f"P6 (Base 2.1 4.2.6.2.1, p.221): the 24 ms Polling.Active branch "
@@ -284,7 +305,36 @@ async def run_test_p6_polling_elec_idle_limb(dut):
         f"Electrical Idle at least once since entering Polling.Active'. Zero "
         f"lanes did so here, which per (a) on the same page routes to "
         f"Polling.Compliance -- yet the DUT advanced to Polling.Configuration "
-        f"at ~{waited} cycles. Limb (ii) is absent from the RTL: :677 tests "
-        f"only lanes_ts1_satisfied/lanes_ts2_satisfied, and "
-        f"phy_rxelecidle_exit_detected is sampled at exactly one site, :561 "
-        f"inside Detect.Quiet, never during Polling.")
+        f"at ~{waited} cycles. Limb (ii) is absent from the RTL: the 24 ms "
+        f"branch tests only lanes_ts1_satisfied/lanes_ts2_satisfied, and "
+        f"phy_rxelecidle_exit_detected is sampled at exactly one site, inside "
+        f"Detect.Quiet, never during Polling.")
+
+    # *** WHICH ARM CAUGHT IT -- added fix-arc 6b, and it is not a formality. ***
+    # `landed != ST_POLLING_CONFIG` alone is satisfied by TWO different
+    # mechanisms that this coarse (POLL=512) loop cannot tell apart, because
+    # both end in ST_IDLE and then bounce straight to Detect.Quiet:
+    #
+    #   (a) the spec route -- the Electrical Idle limb blocks the success arm,
+    #       the else-if below it sends us to ST_POLLING_COMPLIANCE, whose body
+    #       raises error_c and goes to ST_IDLE;
+    #   (b) the fallback -- the 24 ms branch does nothing at all and the
+    #       unconditional watchdog claims the transition to ST_IDLE.
+    #
+    # (b) is what run_test_p6a measures, and it lands in exactly the same state.
+    # So without this check the row would pass on a DUT where the fix did
+    # nothing. error_o discriminates: the watchdog does NOT raise error_c, and
+    # ST_POLLING_COMPLIANCE does. error_r is sticky and clears only on rst_i, so
+    # a 1 here means Polling.Compliance was entered.
+    #
+    # This also MEASURES the consequence predicted in
+    # evidence/fix-arc-6/PREDICTIONS_P6.md section 4: adding the limb breaks the
+    # subsumption that made the Polling.Compliance arm dead code, so oracle P7's
+    # "structurally unreachable" verdict is superseded. Without this assertion
+    # that claim would rest on reading the RTL rather than on a measurement.
+    assert err == 1, (
+        f"P6: the FSM left Polling.Active into {sname(landed)} without raising "
+        f"error_o. Both the Polling.Compliance route and the bare 24 ms "
+        f"watchdog land there, and only the former raises error_c -- so "
+        f"error_o == 0 means the Electrical Idle limb did NOT divert this to "
+        f"Polling.Compliance and the row is passing for the wrong reason.")

@@ -274,6 +274,25 @@ module pcie_ltssm_downstream
   logic              [     MAX_NUM_LANES-1:0] phy_rxelecidle_r;
   logic              [     MAX_NUM_LANES-1:0] phy_rxelecidle_exit_detected;
 
+  // P6 (Base 2.1 4.2.6.2.1 p.221 limb (ii); tracker SS54 #8).  The 24 ms
+  // Polling.Active branch reaches Polling.Configuration only if, IN ADDITION to
+  // the training-sequence limb, "at least a predetermined number of Lanes that
+  // detected a Receiver during Detect have detected an exit from Electrical Idle
+  // at least once SINCE ENTERING POLLING.ACTIVE".
+  //
+  // phy_rxelecidle_exit_detected is a ONE-CYCLE pulse, and until this fix it was
+  // sampled at exactly one site (:569, inside Detect.Quiet) and nowhere in
+  // Polling at all -- so there was nothing to test the limb against.  This
+  // register is that memory.
+  //
+  // ⚠️ It is cleared whenever curr_state != ST_POLLING_ACTIVE, not merely on
+  // rst_i, and that is load-bearing: EVERY bench toggles phy_rxelecidle_i 1->0
+  // during Detect.Quiet to trigger :569's exit.  A reset-only clear would let
+  // that Detect-era edge satisfy the limb and the fix would be INERT.  The spec's
+  // own words are what settle it -- "since entering Polling.Active".
+  logic              [     MAX_NUM_LANES-1:0] polling_ei_exit_seen_r;
+  logic              [     MAX_NUM_LANES-1:0] polling_ei_exit_seen_c;
+
   // Need to pipeline phy_phystatus_i
   logic              [     MAX_NUM_LANES-1:0] phy_phystatus_r;
 
@@ -425,6 +444,7 @@ module pcie_ltssm_downstream
       gen_os_ctrl_r                  <= '0;
       phy_rxelecidle_r               <= '0;
       phy_phystatus_r                <= '0;
+      polling_ei_exit_seen_r         <= '0;
       // for(i = 0; i < MAX_NUM_LANES; i++) begin
       //   preset_coeff_r.rx_preset <=
       //   tx_preset <=
@@ -463,6 +483,7 @@ module pcie_ltssm_downstream
       polarity_lockout_timer_r       <= polarity_lockout_timer_c;
       gen_os_ctrl_r                  <= gen_os_ctrl_c;
       phy_phystatus_r                <= phy_phystatus_i;
+      polling_ei_exit_seen_r         <= polling_ei_exit_seen_c;
     end
     //non-resetable
   end
@@ -532,6 +553,11 @@ module pcie_ltssm_downstream
     phy_txdeemph_o                 = '1;
     phy_txcompliance_o             = '0;
     phy_rxpolarity_c               = phy_rxpolarity_r;
+    // P6: accumulate while IN Polling.Active, force 0 otherwise -- see the
+    // declaration for why the clear condition is the state and not rst_i.
+    polling_ei_exit_seen_c         = (curr_state == ST_POLLING_ACTIVE)
+                                   ? (polling_ei_exit_seen_r | phy_rxelecidle_exit_detected)
+                                   : '0;
     polarity_lockout_timer_c       = (polarity_lockout_timer_r > 0) ? polarity_lockout_timer_r - 1 : 0;
     phy_txmargin_o                 = '0;
     // gen_os_ctrl_c                  = '0;
@@ -721,8 +747,40 @@ module pcie_ltssm_downstream
             //reset counts
             // timer_c                = '0;
             ordered_set_sent_cnt_c = '0;
-            //check if ts1 reqs satisfied
-            if (|lanes_ts1_satisfied || |lanes_ts2_satisfied) begin
+            // P6 (Base 2.1 4.2.6.2.1 p.221; tracker SS54 #8).  This branch
+            // reaches Polling.Configuration only if BOTH limbs hold: the
+            // training-sequence limb below AND limb (ii), "at least a
+            // predetermined number of Lanes that detected a Receiver during
+            // Detect have detected an exit from Electrical Idle at least once
+            // since entering Polling.Active".  Limb (ii) was absent entirely.
+            //
+            // ⚠️ "a predetermined number" is implementation-defined; this design
+            // fixes it at ONE -- the weakest conforming choice, and the
+            // |-reduction this file already uses for every other "any Lane"
+            // condition.  Stated as a choice, not read out of the spec.
+            //
+            // ⚠️ receiver_detected_i is the mask, NOT lane_active_r: the spec
+            // says "Lanes that detected a Receiver during Detect", which is
+            // literally that port, and it is the same mask lanes_ts1_satisfied /
+            // lanes_ts2_satisfied are built from.
+            //
+            // ⚠️ :693's PRIMARY exit is deliberately NOT given this conjunct --
+            // p.220 states no Electrical Idle limb on it.  A symmetric edit would
+            // have been a new defect.
+            //
+            // ⚠️ PREDICTED CONSEQUENCE, registered before it was measured: adding
+            // this conjunct BREAKS THE SUBSUMPTION that made the else-if below
+            // dead code.  |lanes_ts1_satisfied used to imply this test, so
+            // ST_POLLING_COMPLIANCE was structurally unreachable (Rung 10a /
+            // CENSUS_LTSSM section 2.1).  It is now reachable exactly when the
+            // training limb holds and the Electrical Idle limb does not -- which
+            // is precisely the case p.221(a) routes to Polling.Compliance.  The
+            // dead arm was written for this and has been waiting for its guard.
+            // Oracle P7's "unreachable" verdict is superseded.  See
+            // evidence/fix-arc-6/PREDICTIONS_P6.md section 4.
+            //check if ts1 reqs satisfied AND the Electrical Idle limb
+            if ((|lanes_ts1_satisfied || |lanes_ts2_satisfied) &&
+                (|(polling_ei_exit_seen_r & receiver_detected_i))) begin
               //build ts2 ordered set
               gen_os_ctrl_c.gen_ts1 = '0;
               gen_os_ctrl_c.gen_ts2 = '1;
