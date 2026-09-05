@@ -36,8 +36,27 @@ Polling.Active and requires the output TO change, which proves the test can
 observe an inversion and therefore that the Polling.Configuration result means
 "wrong state" rather than "not implemented anywhere".
 
-All four assertions state the SPEC behaviour, so all four are expect_fail rows.
-No src/ file is touched by this rung.
+All four assertions state the SPEC behaviour, so all four were expect_fail rows
+until fix-arc 6b closed them.
+
+STATUS: ALL FOUR FIXED (fix-arc 6b), markers removed in the same commit as the
+src/ edits (rule 22.75; and 22.77's corollary -- until a marker comes off, the
+gate cannot witness the revert mutant either).  Pre-edit census and predictions:
+evidence/fix-arc-6/PREDICTIONS_C9_C16_C18_P9.md.  Mutants MC9/MC16/MC18/MP9.
+
+  C18  the rate-identifier conjunct now sits beside the Link/Lane compare in
+       ST_CONFIGURATION_COMPLETE's per-lane receive arm, mirroring
+       ST_RECOVERY_RCVR_CFG's existing temp_rate_id idiom.
+  C9   the all-PAD limb was added to Configuration.Linkwidth.Accept.
+  C16  the all-PAD limb was added to Configuration.Lanenum.Accept.  ⚠️ Its
+       extra-spec 2 ms watchdog was KEPT, deliberately: an ordinary PASS row --
+       verilate_config_timeout::run_test_config_lanenum_accept_timeout --
+       requires it to reach ST_IDLE, and Rung 10a already classified the
+       structurally identical Detect.Active watchdog (D11) as
+       "conformant-but-added" rather than a violation.  So C16 is HALF a fix,
+       and that is recorded rather than glossed.
+  P9   polarity inversion was ADDED to ST_POLLING_CONFIGURATION -- not moved,
+       because the positive control below requires Polling.Active to keep it.
 
 Requires SIM_FAST_LINK=1, MAX_NUM_LANES=1, IS_ROOT_PORT=1, LINK_NUM=1
 (verilate_config_gaps target).
@@ -140,7 +159,7 @@ async def stayed_put(dut, st, cycles, what):
 # =====================================================================
 # C18 -- Configuration.Complete ignores the data rate identifier
 # =====================================================================
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_c18_complete_rate_id(dut):
     clk(dut)
     await walk(dut, ST_CFG_COMPLETE)
@@ -176,7 +195,7 @@ async def run_test_c18_complete_rate_id(dut):
 # =====================================================================
 # C9 -- Linkwidth.Accept's all-PAD exit to Detect
 # =====================================================================
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_c9_linkwidth_accept_all_pad(dut):
     clk(dut)
     await walk(dut, ST_CFG_LW_ACCEPT)
@@ -201,7 +220,7 @@ async def run_test_c9_linkwidth_accept_all_pad(dut):
 # =====================================================================
 # C16 -- Lanenum.Accept's all-PAD exit to Detect
 # =====================================================================
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_c16_lanenum_accept_all_pad(dut):
     clk(dut)
     await walk(dut, ST_CFG_LN_ACCEPT)
@@ -224,7 +243,7 @@ async def run_test_c16_lanenum_accept_all_pad(dut):
 # =====================================================================
 # P9 -- polarity inversion is implemented in the wrong state
 # =====================================================================
-@cocotb.test(expect_fail=True)
+@cocotb.test()
 async def run_test_p9_polarity_in_polling_config(dut):
     clk(dut)
 

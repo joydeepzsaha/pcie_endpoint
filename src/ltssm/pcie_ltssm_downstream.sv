@@ -246,6 +246,20 @@ module pcie_ltssm_downstream
   logic              [     MAX_NUM_LANES-1:0] link_lane_reconfig;
 
   logic              [     MAX_NUM_LANES-1:0] ts1_lanenum_wait_satisfied;
+
+  // C9 / C16 (Base 2.1 4.2.6.3.2.1 p.230 and 4.2.6.3.3.1 p.233; tracker SS54 #11).
+  // Both substates name the same non-timeout route to Detect: "all Lanes receive
+  // two consecutive TS1 Ordered Sets with Link and Lane numbers set to PAD
+  // (K23.7)".  Neither was implemented; Linkwidth.Accept had only the 2 ms limb
+  // and Lanenum.Accept had neither spec exit.
+  //
+  // Gated by lane_active_r like link_idle_satisfied / ts1_cnt_satisfied /
+  // ts2_cnt_satisfied, so an inactive Lane on a reduced-width link contributes a
+  // trivial '1' to the &-reduction instead of blocking it forever.  ⚠️ That gating
+  // is exactly why the consumers below ALSO test (|lane_active_r): with no Lane
+  // active the &-reduction is trivially true and the exit would fire on entry.
+  logic              [     MAX_NUM_LANES-1:0] lanes_all_pad;
+
   logic              [                   7:0] idle_to_rlock_transitioned_c;
   logic              [                   7:0] idle_to_rlock_transitioned_r;
 
@@ -762,6 +776,27 @@ module pcie_ltssm_downstream
       //  Polling.Configuration
       //-----------------------------------------------------------
       ST_POLLING_CONFIGURATION: begin
+        // P9 (Base 2.1 4.2.6.2.3 p.224; tracker SS54 #11): "Receiver must invert
+        // polarity if necessary (see Section 4.2.4.4)" is a requirement OF THIS
+        // SUBSTATE.  The capability existed only in Polling.Active, so an
+        // inversion first needed here was never applied.
+        //
+        // ⚠️ This ADDS a writer; it does NOT move the Polling.Active one.  p.220
+        // places the same requirement there, and
+        // verilate_config_gaps::run_test_p9_polarity_in_polling_config asserts as
+        // its POSITIVE CONTROL that Polling.Active still inverts -- precisely so
+        // that "did not change" here cannot be a vacuous green.  A move turns that
+        // control red.
+        //
+        // ⚠️ Deliberately NOT gated on ordered_set_tranmitted_i, unlike its
+        // Polling.Active twin.  Polarity inversion is a RECEIVER action; gating a
+        // receive-side response on a transmit handshake is the shape of Bug 4 and
+        // Bug 5, both already fixed out of this file.
+        if (|polarity_inverted_i && (polarity_lockout_timer_r == 0)) begin
+          phy_rxpolarity_c = phy_rxpolarity_r ^ polarity_inverted_i;
+          polarity_lockout_timer_c = 16'd1000; // ~10us lockout
+        end
+
         //bounded timeout counter
         if (ordered_set_tranmitted_i && |single_ts2_received) begin
             ordered_set_sent_cnt_c = ordered_set_sent_cnt_r + 1'b1;
@@ -903,6 +938,26 @@ module pcie_ltssm_downstream
           end
         end  // end of: if (ordered_set_tranmitted_i)
 
+        // C9 (Base 2.1 4.2.6.3.2.1 p.230): "The next state is Detect after a 2 ms
+        // timeout OR if no Link can be configured OR if all Lanes receive two
+        // consecutive TS1 Ordered Sets with Link and Lane numbers set to PAD
+        // (K23.7)."  Only the timeout limb existed; the all-PAD limb is added
+        // here.  Without it a partner that withdraws its Link number cannot tear
+        // the link down promptly -- it must wait out the full 2 ms.
+        //
+        // ⚠️ The "no Link can be configured" limb is NOT implemented.  It has no
+        // observable form at x1, no row measures it, and inventing one is a new
+        // feature rather than a fix.  Registered as owed, like C12/C19/C20.
+        //
+        // ⚠️ (|lane_active_r) is an ANTI-VACUITY guard, not a spec term -- see
+        // lanes_all_pad's declaration.  error_c is raised for consistency with
+        // every other Configuration->Detect arc here and with SS54 #2's premise
+        // that a training failure must be observable; p.230 does not require it.
+        if ((&lanes_all_pad) && (|lane_active_r) && (next_state == curr_state)) begin
+          error_c    = '1;
+          next_state = ST_IDLE;
+        end
+
         if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
           error_c    = '1;
           next_state = ST_IDLE;
@@ -932,6 +987,34 @@ module pcie_ltssm_downstream
           end
         end  // end of: if (ordered_set_tranmitted_i)
 
+        // C16 (Base 2.1 4.2.6.3.3.1 p.233): "The next state is Detect if no Link
+        // can be configured or if all Lanes receive two consecutive TS1 Ordered
+        // Sets with Link and Lane numbers set to PAD (K23.7)."  Neither limb
+        // existed.  The all-PAD one is added here; "no Link can be configured" is
+        // owed, as in Linkwidth.Accept above.
+        if ((&lanes_all_pad) && (|lane_active_r) && (next_state == curr_state)) begin
+          error_c    = '1;
+          next_state = ST_IDLE;
+        end
+
+        // ⚠️ The 2 ms watchdog below is EXTRA-SPEC -- p.233 states no timeout for
+        // this substate -- and it is DELIBERATELY KEPT.  Two measured reasons,
+        // not a preference:
+        //
+        //  * verilate_config_timeout::run_test_config_lanenum_accept_timeout is an
+        //    ORDINARY PASS row (Bug 5 regression coverage, nothing to do with
+        //    SS54 #11).  It walks here, silences the TX handshake, and REQUIRES
+        //    this watchdog to reach ST_IDLE inside 250 000 cycles.  Deleting it
+        //    turns a green row red -- a fix breaking another row's witness, which
+        //    is the coupling SS54.W's setup-route axis exists to prevent.
+        //  * Rung 10a classified Detect.Active's structurally identical
+        //    extra-spec watchdog (oracle D11) as "conformant-but-added" -- an
+        //    ADDITION, not a violation -- and verilate_ltssm_24ms CHARACTERISES
+        //    it rather than holding it red.  Same class, same treatment.
+        //
+        // C16 therefore closes as HALF a fix: the missing exit is added, the added
+        // watchdog is closed documented-correct.  See
+        // evidence/fix-arc-6/PREDICTIONS_C9_C16_C18_P9.md section 0.
         if ((timer_r >= TwoMsTimeOut) && (next_state == curr_state)) begin
           //assert error
           error_c    = '1;
@@ -1611,6 +1694,17 @@ module pcie_ltssm_downstream
     (* mark_debug = "true" *) logic              [7:0] ts2_cnt;
     logic              [7:0] idle_cnt;
 
+    // C9/C16: consecutive all-PAD TS1 on this Lane.  Needs its own counter --
+    // neither existing one can express the condition.  ts1_cnt SATURATES rather
+    // than clearing on a mismatch in both Accept arms, which would turn "two
+    // consecutive" into "two ever"; ts2_cnt is unwritten in Linkwidth.Accept but
+    // is read by link_width_satisfied and link_lanes_nums_match, so repurposing
+    // it would leak into two other substates' exits.
+    // ⚠️ pad_cnt therefore RESETS to 0 on a mismatch -- deliberately unlike its
+    // neighbours in the very same arms.  That difference IS the word
+    // "consecutive".
+    logic              [1:0] pad_cnt;
+
     logic              [7:0] lane_in_save;
     logic                    first_ts1;
     ts_symbol6_union_t       temp_ts6;
@@ -1619,6 +1713,7 @@ module pcie_ltssm_downstream
 
     // Signals used for combinatorial logic block
     logic [7:0] ts1_cnt_c, ts2_cnt_c, idle_cnt_c;
+    logic [1:0] pad_cnt_c;
     logic first_ts1_c;
 
     logic single_idle_received_c;
@@ -1647,6 +1742,7 @@ module pcie_ltssm_downstream
         link_lanes_formed[lane]          <= '0;
         //determine if TS1 req satisfied
         ts1_lanenum_wait_satisfied[lane] <= '0;
+        lanes_all_pad[lane]              <= '0;
         link_lanes_nums_match[lane]      <= '0;
         link_lane_reconfig[lane]         <= '0;
         lane_num_formed[lane]            <= '0;
@@ -1667,6 +1763,10 @@ module pcie_ltssm_downstream
         link_lanes_formed[lane]          <= (ts1_cnt >= 8'h2);
         //determine if TS1 req satisfied
         ts1_lanenum_wait_satisfied[lane] <= (ts1_cnt >= 8'h2);
+        //C9/C16: two consecutive all-PAD TS1 on this Lane.  lane_active_r gate as
+        //per link_idle_satisfied below; see the declaration for why the consumers
+        //also require (|lane_active_r).
+        lanes_all_pad[lane]              <= lane_active_r[lane] ? (pad_cnt >= 2'd2) : '1;
         link_lanes_nums_match[lane]      <= (ts1_cnt >= 8'h2) | (ts2_cnt >= 8'h2);
         link_lane_reconfig[lane]         <= (ts1_cnt >= 8'h2);
         lane_num_formed[lane]            <= lane_active_r[lane] ? (ts2_cnt == 8'h8) : '1;
@@ -1703,6 +1803,7 @@ module pcie_ltssm_downstream
         ts1_cnt                                  <= '0;
         ts2_cnt                                  <= '0;
         idle_cnt                                 <= '0;
+        pad_cnt                                  <= '0;
         first_ts1                                 <= '0;
         link_number_selected_per_lane[lane*8+:8] <= '0;
         lane_in_save                             <= PAD_;
@@ -1718,6 +1819,7 @@ module pcie_ltssm_downstream
         ts1_cnt <= ts1_cnt_c;
         ts2_cnt <= ts2_cnt_c;
         idle_cnt <= idle_cnt_c;
+        pad_cnt <= pad_cnt_c;
         first_ts1 <= first_ts1_c;
 
         single_idle_received[lane] <= single_idle_received_c;
@@ -1747,6 +1849,7 @@ module pcie_ltssm_downstream
       ts1_cnt_c  = ts1_cnt;
       ts2_cnt_c  = ts2_cnt;
       idle_cnt_c = idle_cnt;
+      pad_cnt_c  = pad_cnt;
       first_ts1_c = first_ts1;
 
       single_idle_received_c = single_idle_received[lane];
@@ -1775,6 +1878,7 @@ module pcie_ltssm_downstream
         ts1_cnt_c  = '0;
         ts2_cnt_c  = '0;
         idle_cnt_c = '0;
+        pad_cnt_c  = '0;
         first_ts1_c = '0;
 
         single_idle_received_c = '0;
@@ -1982,6 +2086,20 @@ module pcie_ltssm_downstream
               end else begin
                 ts1_cnt_c = (ts1_cnt >= 8'h2) ? 8'h2 : '0;
               end
+
+              //C9 (p.230): the COMPLEMENTARY condition -- two consecutive TS1
+              //with BOTH Link and Lane numbers PAD.  Counted separately from
+              //ts1_cnt because that counter saturates on a mismatch just above,
+              //which cannot express "consecutive".
+              if ((ordered_set_i[lane].link_num == PAD) &&
+                  (ordered_set_i[lane].lane_num == PAD)) begin
+                pad_cnt_c = (pad_cnt >= 2'd2) ? 2'd2 : pad_cnt + 2'd1;
+              end else begin
+                pad_cnt_c = '0;
+              end
+            end else if (ts2_valid_i[lane]) begin
+              //a non-TS1 Ordered Set breaks the run of CONSECUTIVE TS1
+              pad_cnt_c = '0;
             end
           end
 
@@ -2048,6 +2166,21 @@ module pcie_ltssm_downstream
                 lane_num_echo_c = ordered_set_i[lane].lane_num;
               end
             end
+
+            //C16 (p.233): two consecutive all-PAD TS1 -- same counter and same
+            //reasoning as the Linkwidth.Accept arm above.  One counter serves
+            //both substates: the global transition reset zeroes it on every state
+            //change, so they cannot interfere.
+            if (ts1_valid_i[lane]) begin
+              if ((ordered_set_i[lane].link_num == PAD) &&
+                  (ordered_set_i[lane].lane_num == PAD)) begin
+                pad_cnt_c = (pad_cnt >= 2'd2) ? 2'd2 : pad_cnt + 2'd1;
+              end else begin
+                pad_cnt_c = '0;
+              end
+            end else if (ts2_valid_i[lane]) begin
+              pad_cnt_c = '0;
+            end
           end
 
           // =========================
@@ -2055,10 +2188,35 @@ module pcie_ltssm_downstream
             if (ts2_valid_i[lane]) begin
               single_ts2_received_c ='1;
 
+              // C18 (Base 2.1 4.2.6.3.5.1 p.235; tracker SS54 #11): the eight
+              // consecutive TS2 must carry matching non-PAD Link and Lane numbers
+              // AND "identical data rate identifiers (including identical Link
+              // Upconfigure Capability (Symbol 4 bit 6))".  Only Link and Lane
+              // were compared.
+              //
+              // ⚠️ This compares the WHOLE rate_id_t on purpose, and it is NOT
+              // SS54 #1's trap in reverse.  There the spec named one field
+              // (.rate) and the code compared the struct; here p.235 names the
+              // BYTE and its parenthetical explicitly pulls a second bit in.
+              //
+              // temp_rate_id holds the identifier of the TS2 that OPENED the
+              // current run.  (ts2_cnt == '0) is the run-opener: the global
+              // transition reset zeroes ts2_cnt on entry and a mismatch zeroes it
+              // again, so "count is 0" is exactly "no run in progress".  Preferred
+              // over first_ts1, which carries its own meaning in
+              // Linkwidth.Start and RcvrCfg -- this way there is no cross-state
+              // coupling at all.
+              //
+              // Mirrors ST_RECOVERY_RCVR_CFG's existing idiom rather than
+              // inventing one; see evidence/fix-arc-6/REDERIVE_SITES_FA6b.md
+              // section 4 on why oracle R11 read that site as absent.
               if ((ordered_set_i[lane].link_num == link_number_selected) &&
-                  (ordered_set_i[lane].lane_num == lane)) begin
+                  (ordered_set_i[lane].lane_num == lane) &&
+                  ((ts2_cnt == '0) ||
+                   (temp_rate_id == ordered_set_i[lane].rate_id))) begin
                 ts2_cnt_c = (ts2_cnt >= 8'h8) ? 8'h8 : ts2_cnt + 1;
                 ts1_cnt_c = '0;
+                temp_rate_id_c = ordered_set_i[lane].rate_id;
               end else begin
                 ts1_cnt_c = '0;
                 ts2_cnt_c = (ts2_cnt >= 8'h8) ? 8'h8 : '0;
