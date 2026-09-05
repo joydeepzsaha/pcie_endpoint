@@ -110,7 +110,6 @@
 #    "/tools/C/research/pcie/copy-pcie/src/ltssm/ltssm_l0.sv"
 #    "/tools/C/research/pcie/copy-pcie/src/ltssm/ltssm_polling.sv"
 #    "/tools/C/research/pcie/copy-pcie/src/ltssm/pcie_ltssm_downstream.sv"
-#    "/tools/C/research/pcie/copy-pcie/src/ltssm/pcie_ltssm.sv"
 #    "/tools/C/research/pcie/copy-pcie/src/ltssm/ltssm_detect.sv"
 #    "/tools/C/research/pcie/copy-pcie/src/ltssm/ltssm_configuration.sv"
 #    "/tools/C/research/pcie/copy-pcie/src/ltssm/iverilog_dump.v"
@@ -332,7 +331,6 @@ proc checkRequiredFiles { origin_dir} {
  "[file normalize "$origin_dir/../src/ltssm/ltssm_l0.sv"]"\
  "[file normalize "$origin_dir/../src/ltssm/ltssm_polling.sv"]"\
  "[file normalize "$origin_dir/../src/ltssm/pcie_ltssm_downstream.sv"]"\
- "[file normalize "$origin_dir/../src/ltssm/pcie_ltssm.sv"]"\
  "[file normalize "$origin_dir/../src/ltssm/ltssm_detect.sv"]"\
  "[file normalize "$origin_dir/../src/ltssm/ltssm_configuration.sv"]"\
  "[file normalize "$origin_dir/../src/ltssm/iverilog_dump.v"]"\
@@ -684,7 +682,6 @@ set files [list \
  [file normalize "${origin_dir}/../src/ltssm/ltssm_l0.sv"] \
  [file normalize "${origin_dir}/../src/ltssm/ltssm_polling.sv"] \
  [file normalize "${origin_dir}/../src/ltssm/pcie_ltssm_downstream.sv"] \
- [file normalize "${origin_dir}/../src/ltssm/pcie_ltssm.sv"] \
  [file normalize "${origin_dir}/../src/ltssm/ltssm_detect.sv"] \
  [file normalize "${origin_dir}/../src/ltssm/ltssm_configuration.sv"] \
  [file normalize "${origin_dir}/../src/ltssm/iverilog_dump.v"] \
@@ -1521,19 +1518,6 @@ set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
 set file "$origin_dir/../src/ltssm/pcie_ltssm_downstream.sv"
-set file [file normalize $file]
-set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
-set_property -name "file_type" -value "SystemVerilog" -objects $file_obj
-set_property -name "is_enabled" -value "1" -objects $file_obj
-set_property -name "is_global_include" -value "0" -objects $file_obj
-set_property -name "library" -value "xil_defaultlib" -objects $file_obj
-set_property -name "path_mode" -value "RelativeFirst" -objects $file_obj
-set_property -name "used_in" -value "synthesis implementation simulation" -objects $file_obj
-set_property -name "used_in_implementation" -value "1" -objects $file_obj
-set_property -name "used_in_simulation" -value "1" -objects $file_obj
-set_property -name "used_in_synthesis" -value "1" -objects $file_obj
-
-set file "$origin_dir/../src/ltssm/pcie_ltssm.sv"
 set file [file normalize $file]
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "SystemVerilog" -objects $file_obj
