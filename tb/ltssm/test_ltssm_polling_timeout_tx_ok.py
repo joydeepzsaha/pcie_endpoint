@@ -6,6 +6,12 @@ live inside the ordered_set_tranmitted_i gate) -- it must keep passing
 after the fix, proving the fix didn't disturb the previously-working case.
 NOTE: TwentyFourMsTimeOut is NOT scaled by SIM_FAST_LINK -- this test
 takes several real-world minutes. That is expected, not a hang.
+
+FRAGILITY (mutant MP4b's oracle below): its kill depends on os_tx_pulser's
+period, TwentyFourMsTimeOut and the clock period staying as they are -- the
+24 ms branch sits inside the ordered_set_tranmitted_i gate while the generic
+watchdog does not, so error_c has a ONE-CYCLE window and changing any of the
+three makes this row silently vacuous while it keeps passing.
 """
 import cocotb
 from cocotb.clock import Clock
