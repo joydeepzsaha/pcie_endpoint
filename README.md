@@ -1,111 +1,180 @@
-# (Open-Source) PCIe Endpoint Controller (WORK IN PROGESS)
+# (Open-Source) PCIe Endpoint Controller — **work in progress**
 
-This repository provides an open-source PCIe 1.0 Endpoint Controller implemented in SystemVerilog RTL.  
-The project is intended to serve as a research and educational platform for high-speed interconnect design, as well as a practical solution for FPGA-based PCIe endpoint integration.
+An open-source PCIe 1.0 (Gen1) endpoint controller in synthesizable SystemVerilog, intended as a
+research and teaching platform for high-speed interconnect design and as a practical basis for
+FPGA-based PCIe integration.
 
----
-
-## Features
-- PCIe 1.0 Endpoint Controller written in synthesizable RTL.
-- Implements key layers of the PCIe stack:
-  - PIPE interface for PHY connectivity.
-  - Data Link Layer with sequencing, LCRC, ACK/NAK, and retry logic.
-  - Transaction Layer Packet (TLP) handling.
-- Example implementations of high-speed interconnect design patterns:
-  - Scramblers
-  - CRCs
-  - Flow Control
-- Designed for integration with open-source FPGA toolchains.
-- Provides an educational example of PCIe design for teaching and research.
-- Lightweight FPGA resource utilization (validated on Xilinx KC705 and AC701).
+**Upstream:** this project began as [`isomoye-msu/pcie_datalink_layer`](https://github.com/isomoye-msu/pcie_datalink_layer)
+by **Idris Somoye**, and most of the RTL below is his. Development now continues in this repository.
 
 ---
 
-## Repository Structure
+## Status
+
+Verification is organised around a **99-target regression gate** whose artifact is byte-compared
+between runs; a rung of work is not considered done until the gate reproduces. Layer coverage is
+uneven and the honest summary is:
+
+| area | state |
+|---|---|
+| Transaction Layer, enumeration, Data Link Layer | covered by the gate, spec-cited benches |
+| LTSSM | covered, and under active defect repair — several conformance divergences are **open and recorded** |
+| PHY (Gen1 TX/RX, 8b/10b, scrambler, ordered sets) | covered, spec-golden vectors from Base 2.1 |
+| GTP/GTX/GTH transceiver integration | **not exercised by the gate** — synthesis only |
+| x4 and above | **not supported**; several known structural gaps are recorded, not fixed |
+
+⚠️ Open defects are tracked deliberately rather than hidden: some regression rows are **expected to
+fail** and are marked `expect_fail`. **A failing row is not necessarily a regression** — check the
+tracker before "fixing" one, because several of those rows exist specifically to keep a known
+divergence visible.
+
+---
+
+## Repository structure
+
 ```
-├── src/ # Synthesizable RTL source code
-├── tb/ # Individual level testbenches and cocotb-based verification
-├── verif/ #PyUVM based top-level pipe-based constrained ramdom verification 
-├── docs/ # Documentation and design notes
-├── examples/ # Example reference designs and integration scripts
-├── scripts/ # Build and synthesis scripts
-└── README.md # Project overview (this file)
+src/       synthesizable RTL
+tb/        per-block testbenches (cocotb) and the .core files that wire them
+verif/     PyUVM top-level PIPE-based constrained-random verification
+docs/      design notes and documentation
+example/   Vivado example-project scripts and reference integration
+synth/     synthesis scripts and constraints
 ```
 
+---
 
+## Getting started
 
-## Getting Started
+⚠️ **Read the two traps first — both silently produce a wrong result rather than an error.**
+
+### Trap 1 — `fusesoc.conf` is per-directory, untracked, and gitignored
+
+There is **no global `fusesoc.conf`** on a normal setup (not `/etc/fusesoc/`, not
+`~/.config/fusesoc/`). FuseSoC reads a `fusesoc.conf` **from the current directory**, and this
+repository's copy is untracked and ignored (`.gitignore`: `*.conf`), so it never arrives with a clone.
+
+It contains an **absolute path**:
+
+```ini
+[library.pcie-endpoint-controller]
+location = /absolute/path/to/your/checkout
+sync-uri = ./
+sync-type = local
+auto-sync = true
+```
+
+⚠️ **Never copy this file between checkouts.** A second checkout that inherits a conf pointing at the
+first will **silently build and test the first checkout** while reporting itself as testing the
+second. Always write it fresh, pointing at the checkout you are in.
+
+### Trap 2 — `fusesoc run` exits 0 when nothing ran
+
+`fusesoc run` returns **0** on a cocotb test **failure**, and **also** returns 0 when **zero tests
+ran** (a stale build directory yields `make: Nothing to be done for 'all'` and no test table at all).
+
+⚠️ **Never judge a run by `$?`.** Parse the `TESTS=` line; **a run that printed no `TESTS=` line at
+all did not test anything.** If you see that, remove the target's build directory
+(`rm -rf build/*/<target>`) and re-run.
 
 ### Prerequisites
-- [FuseSoC](https://github.com/olofk/fusesoc) installed and configured.
-- Cocotb and Python for simulation-based verification.
-- [Verilator] (https://github.com/verilator/verilator) installed and configured.
-- FPGA development environment (Xilinx Vivado,openXC7, or Intel Quartus) if synthesizing.
-- Git for version control.
 
-### Cloning the Repository
+- Python 3, [FuseSoC](https://github.com/olofk/fusesoc) ≥ 2.4.4, [Edalize](https://github.com/olofk/edalize)
+- [Verilator](https://github.com/verilator/verilator) (5.x) and cocotb
+- Xilinx Vivado — only for synthesis and the GTP/GTX flows
+- ⚠️ If the toolchain lives in a conda environment, non-interactive shells will **not** have it on
+  `PATH`. Export it explicitly before running anything:
+
+  ```bash
+  export PATH="/path/to/conda/envs/<env>/bin:$PATH"
+  # FST tracing includes <lz4.h>; without this the build dies with
+  # "fatal error: lz4.h: No such file or directory"
+  export CPATH="$(dirname "$(command -v fusesoc)")/../include:$CPATH"
+  ```
+
+### Clone — the cold-clone checklist
+
+This is the procedure used to prove the regression gate reproduces from a clean checkout. Following
+it exactly is the difference between testing your clone and testing something else.
+
 ```bash
-git clone https://github.com/isomoye-msu/pcie_datalink_layer.git
-cd pcie_datalink_layer
+git clone git@github.com:joydeepzsaha/pcie_gen1.git my_checkout
+cd my_checkout
 
-git submodule init && git submodule update
+# ⚠️ --force is required; a plain `git submodule update --init` can leave a
+# submodule at the wrong revision without failing.
+git submodule update --init --force
+
+# ⚠️ WRITE THIS FRESH.  Never copy it from another checkout (Trap 1).
+cat > fusesoc.conf <<EOF
+[library.pcie-endpoint-controller]
+location = $(pwd)
+sync-uri = ./
+sync-type = local
+auto-sync = true
+EOF
+
+pip install -r requirements.txt
 ```
 
-### Install prereqs with pip
+Confirm isolation before trusting any result:
 
-```
-  pip install setuptools>=64
-  pip install wheel --user
-  pip install edalize --user
-  pip install fusesoc>=2.4.4 --user
-  pip install -r requirements.txt --user
-```
-
-### Registering with FuseSoC
-
-```
-fusesoc library add pcie-endpoint-controller ./
+```bash
+# must print THIS checkout's path, not another one
+grep location fusesoc.conf
+# must be absent in a fresh clone -- if present, it came from somewhere else
+ls build/ 2>/dev/null
 ```
 
-### Running Simulation
+### Running a simulation
 
+```bash
+fusesoc run --target=<target> <core>
+# e.g.
+fusesoc run --target=verilate_tlp_parser fusesoc:pcie:tb_tlp
+```
 
-### Pipe Simulation with Verilator
-Run the cocotb-based testbench via FuseSoC:
+Target and core names live in the `.core` files under `tb/`. ⚠️ Targets are **not** interchangeable
+between cores — running a target against the wrong core can silently elaborate a different design.
 
-```fusesoc run --target=sim fusesoc:pcie:phy_core:1.0.0```
+### Synthesis
 
+```bash
+fusesoc run --target=synth fusesoc:pcie:pcie_gtp:1.0.0
+fusesoc run --target=synth fusesoc:pcie:pcie_gtx:1.0.0
+```
 
-### GTP/GTH Simulation with Vivado
+---
 
-``` fusesoc run --target=synth fusesoc:pcie:pcie_gtp:1.0.0```
+## Verification approach
 
-``` fusesoc run --target=synth fusesoc:pcie:pcie_gtx:1.0.0```
+Benches are written against the **PCI Express Base Specification 2.1** with the clause and page cited
+in the test, so a disagreement between RTL and bench can be adjudicated against the text rather than
+against intuition. Where the specification is genuinely silent or implementation-defined, the choice
+is stated in the bench as a choice.
 
+Correctness claims are backed by **mutation testing**: a fix is not considered proven until a mutant
+restoring the original defect turns the relevant row red, and controls confirm the kill is
+attributable to the intended assertion rather than to collateral damage.
 
+---
 
 ## Documentation
 
-Detailed documentation can be found in the docs/ folder.
-It includes:
+`docs/` holds the system overview, the PIPE interface description, the Data Link Layer architecture,
+and resource/performance notes.
 
-System Overview
+---
 
-PIPE Interface description
+## Research and educational contributions
 
-Data Link Layer architecture
+Provides an open-source PCIe endpoint controller aimed at research and education; supports
+experimentation with high-speed interconnect design in RTL; demonstrates cocotb/Python-based hardware
+verification; and serves communities — RISC-V among them — where PCIe is a commonly missing
+peripheral.
 
-Resource utilization summary
+---
 
-Performance evaluation
+## License
 
-
-##  Research and Educational Contributions
-
-This work contributes to the open-source hardware ecosystem by, providing the first open-source PCIe endpoint controller targeting research and education.
-Enabling experiments with high-speed interconnect design in RTL. Demonstrating integration of cocotb and Python for modern hardware verification. Supporting RISC-V and open hardware communities where PCIe remains a missing peripheral.
-
-
-License
-
-This project is licensed under the MIT License. See the LICENSE file for details.
+MIT. ⚠️ **A `LICENSE` file is not currently present in this repository** — the previous README
+referred to one that does not exist. Adding it is outstanding.

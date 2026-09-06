@@ -15,10 +15,11 @@ description: Exhaustive spec-golden bench for decode_8b10b (Base 2.1 Appendix B)
 #
 # This is the first target in the repository to name a member of the 8b/10b codec
 # as a toplevel.  The module is in the compile set of every phy_scrambler
-# dependant but was elaborated by none of the 68 pre-existing gate rows; the two
-# testbenches that instantiate it (tb/scrambler/test_8b10b.v and
-# tb/dllp/tb_pcie_datalink_layer.v) are referenced by no .core.  See
-# CENSUS_8B10B.md sec 5.
+# dependant but was elaborated by none of the 68 pre-existing gate rows; the
+# testbenches that instantiated it were referenced by no .core.  See
+# CENSUS_8B10B.md sec 5.  Of those two, tb/scrambler/test_8b10b.v was DELETED in
+# the cleanup rung (0 of 99 gate targets elaborated it, no fileset named it);
+# tb/dllp/tb_pcie_datalink_layer.v remains.
 
 filesets:
   rtl:

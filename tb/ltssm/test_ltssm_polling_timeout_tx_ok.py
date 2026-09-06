@@ -6,6 +6,12 @@ live inside the ordered_set_tranmitted_i gate) -- it must keep passing
 after the fix, proving the fix didn't disturb the previously-working case.
 NOTE: TwentyFourMsTimeOut is NOT scaled by SIM_FAST_LINK -- this test
 takes several real-world minutes. That is expected, not a hang.
+
+FRAGILITY (mutant MP4b's oracle below): its kill depends on os_tx_pulser's
+period, TwentyFourMsTimeOut and the clock period staying as they are -- the
+24 ms branch sits inside the ordered_set_tranmitted_i gate while the generic
+watchdog does not, so error_c has a ONE-CYCLE window and changing any of the
+three makes this row silently vacuous while it keeps passing.
 """
 import cocotb
 from cocotb.clock import Clock
@@ -41,4 +47,23 @@ async def run_test_polling_timeout_tx_ok(dut):
     cocotb.start_soon(os_tx_pulser(dut))
 
     await wait_state(dut, ST_IDLE, 2_500_000, "ST_IDLE (24ms timeout, TX healthy)")
+
+    # Owed row for mutant MP4b (tracker sec 54 #8; evidence/fix-arc-6/
+    # MUTANTS_BATCH_A.md sec 3c).  MP4b applies the REJECTED one-line form of the
+    # P4 fix -- it deletes the `if (|single_ts1_received)` gate around
+    # ordered_set_sent_cnt_c in ST_POLLING_ACTIVE.  With that gate gone the
+    # counter advances on every TX pulse even though the partner never sent a
+    # TS1, so the 24 ms branch becomes satisfiable on a link that never
+    # responded; neither lanes_ts1_satisfied nor lanes_ts2_satisfied is set, and
+    # control reaches the branch's else arm, which raises error_c.
+    #
+    # error_o is STICKY (assign error_o = error_r), so reading it once here
+    # covers the whole run.  It is the only observable: MP4b does not change the
+    # state trajectory -- the generic 24 ms watchdog sends us to ST_IDLE either
+    # way -- and it does not change the sim end time.
+    assert int(dut.error_o.value) == 0, (
+        "the 24 ms Polling.Active watchdog must not raise error_c; a 1 here means "
+        "ordered_set_sent_cnt_r advanced without a received TS1 and the 24 ms "
+        "branch took its else arm -- the coupling MP4b injects")
+
     dut._log.info("POLLING TIMEOUT (TX healthy) VERIFIED")
