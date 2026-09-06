@@ -1,180 +1,106 @@
-# (Open-Source) PCIe Endpoint Controller — **work in progress**
+# pcie_gen1
 
-An open-source PCIe 1.0 (Gen1) endpoint controller in synthesizable SystemVerilog, intended as a
-research and teaching platform for high-speed interconnect design and as a practical basis for
-FPGA-based PCIe integration.
+A fully soft-logic PCIe Gen1 x1 **root complex and endpoint** in synthesizable SystemVerilog, with no
+hard PCIe IP. The target board is the Xilinx ZCU102 — synthesis runs out-of-context on ZU7EV
+(`xczu7ev-ffvc1156-2-e`), a same-family stand-in for the board's ZU9EG. The stack is part of the
+AZilla / AraXL RISC-V vector system at SSRL, University of Washington.
 
-**Upstream:** this project began as [`isomoye-msu/pcie_datalink_layer`](https://github.com/isomoye-msu/pcie_datalink_layer)
-by **Idris Somoye**, and most of the RTL below is his. Development now continues in this repository.
+The soft stack starts at the scrambler. Below it, the transceiver layer is the AMD PCIe PHY IP
+(PG239) presenting a PIPE interface — planned, not yet integrated.
 
----
+## What is in the tree
+
+### Root complex
+
+| layer | files |
+|---|---|
+| Downstream LTSSM | `pcie_ltssm_downstream.sv`, `ltssm_detect.sv`, `ltssm_polling.sv`, `ltssm_configuration.sv`, `ltssm_l0.sv`, `ltssm_recovery.sv`, `downstream_config.sv` |
+| Scrambler, 8b/10b, framing | `scrambler.sv`, `gen1_scramble.sv`, `encode_8b10b.sv`, `decode_8b10b.sv`, `frame_symbols.sv` |
+| Data Link Layer | `pcie_datalink_layer.sv`, `dllp_handler.sv`, `dllp_transmit.sv`, `dllp_receive.sv`, `retry_management.sv`, `axis_retry_fifo.sv`, `pcie_flow_ctrl_init.sv`, `dllp_fc_update.sv` |
+| Transaction Layer | `tlp_layer.sv`, `tlp_parser.sv`, `tlp_generator.sv`, `tlp_requester.sv`, `tlp_completion_generator.sv`, `tlp_credit_manager.sv`, `tlp_request_tracker.sv`, `tlp_vc_buffer.sv` |
+| Enumeration engine | `pcie_enum_top.sv`, `pcie_enum_scan.sv`, `pcie_enum_bus.sv`, `pcie_enum_bar.sv`, `pcie_cfg_txn.sv` |
+| Configuration space | `pcie_config_reg.sv`, `pcie_config_handler.sv`, `pcie_config_decode.sv`, `pcie_config_mux.sv` |
+| AXI-Stream host interface | `axi_stream_if.sv`, `pcie_axis_dw_upsize.sv`, `pcie_axis_dw_downsize.sv` |
+| Stacked tops | `pcie_rc_dl_top.sv` (TL over DLL), `pcie_enum_dl_top.sv` (enumeration engine over the same stack) |
+
+### Endpoint
+
+`pcie_endpoint_top.sv` integrates the endpoint-side Transaction and Data Link layers behind a packet
+PHY interface, with an `INTEGRATED_GEN1_PHY` parameter that pulls the LTSSM, logical PHY, Gen1
+scrambler and 8b/10b codec in below the Data Link Layer.
+
+It is exercised by the `verilate_endpoint_top` target in `tb_pcie_endpoint_top.core`, and carries a
+`synth` target in `pcie_endpoint.core`.
+
+### Shared between both verticals
+
+The LTSSM, ordered-set generator (`os_generator.sv`), lane management (`lane_management.sv`), block
+alignment (`block_alignment.sv`), the TX and RX logical PHY (`phy_transmit.sv`, `phy_receive.sv`) and
+the scrambler/codec are common to the root complex and the endpoint.
 
 ## Status
 
-Verification is organised around a **99-target regression gate** whose artifact is byte-compared
-between runs; a rung of work is not considered done until the gate reproduces. Layer coverage is
-uneven and the honest summary is:
+`main` is at PR #28. The regression gate is **99 Verilator/cocotb targets, 530 tests, all passing**,
+cold-verified from a fresh clone and byte-compared between runs — a change is not considered done
+until the gate artifact reproduces. Out-of-context synthesis closes at **125 MHz** on ZU7EV, the Gen1
+PIPE clock rate. The fabric 8b/10b codec is proven exhaustively against the specification tables and
+is kept as the reference model.
 
-| area | state |
-|---|---|
-| Transaction Layer, enumeration, Data Link Layer | covered by the gate, spec-cited benches |
-| LTSSM | covered, and under active defect repair — several conformance divergences are **open and recorded** |
-| PHY (Gen1 TX/RX, 8b/10b, scrambler, ordered sets) | covered, spec-golden vectors from Base 2.1 |
-| GTP/GTX/GTH transceiver integration | **not exercised by the gate** — synthesis only |
-| x4 and above | **not supported**; several known structural gaps are recorded, not fixed |
+## Provenance
 
-⚠️ Open defects are tracked deliberately rather than hidden: some regression rows are **expected to
-fail** and are marked `expect_fail`. **A failing row is not necessarily a regression** — check the
-tracker before "fixing" one, because several of those rows exist specifically to keep a known
-divergence visible.
+The PHY/LTSSM codebase was inherited from an earlier lab effort; it was audited line-by-line against
+PCIe Base 2.1 and reworked during Aug–Sep 2026 (PRs #12–#28). Git history carries authorship.
 
----
+## Running a target
 
-## Repository structure
-
-```
-src/       synthesizable RTL
-tb/        per-block testbenches (cocotb) and the .core files that wire them
-verif/     PyUVM top-level PIPE-based constrained-random verification
-docs/      design notes and documentation
-example/   Vivado example-project scripts and reference integration
-synth/     synthesis scripts and constraints
-```
-
----
-
-## Getting started
-
-⚠️ **Read the two traps first — both silently produce a wrong result rather than an error.**
-
-### Trap 1 — `fusesoc.conf` is per-directory, untracked, and gitignored
-
-There is **no global `fusesoc.conf`** on a normal setup (not `/etc/fusesoc/`, not
-`~/.config/fusesoc/`). FuseSoC reads a `fusesoc.conf` **from the current directory**, and this
-repository's copy is untracked and ignored (`.gitignore`: `*.conf`), so it never arrives with a clone.
-
-It contains an **absolute path**:
-
-```ini
-[library.pcie-endpoint-controller]
-location = /absolute/path/to/your/checkout
-sync-uri = ./
-sync-type = local
-auto-sync = true
-```
-
-⚠️ **Never copy this file between checkouts.** A second checkout that inherits a conf pointing at the
-first will **silently build and test the first checkout** while reporting itself as testing the
-second. Always write it fresh, pointing at the checkout you are in.
-
-### Trap 2 — `fusesoc run` exits 0 when nothing ran
-
-`fusesoc run` returns **0** on a cocotb test **failure**, and **also** returns 0 when **zero tests
-ran** (a stale build directory yields `make: Nothing to be done for 'all'` and no test table at all).
-
-⚠️ **Never judge a run by `$?`.** Parse the `TESTS=` line; **a run that printed no `TESTS=` line at
-all did not test anything.** If you see that, remove the target's build directory
-(`rm -rf build/*/<target>`) and re-run.
-
-### Prerequisites
-
-- Python 3, [FuseSoC](https://github.com/olofk/fusesoc) ≥ 2.4.4, [Edalize](https://github.com/olofk/edalize)
-- [Verilator](https://github.com/verilator/verilator) (5.x) and cocotb
-- Xilinx Vivado — only for synthesis and the GTP/GTX flows
-- ⚠️ If the toolchain lives in a conda environment, non-interactive shells will **not** have it on
-  `PATH`. Export it explicitly before running anything:
-
-  ```bash
-  export PATH="/path/to/conda/envs/<env>/bin:$PATH"
-  # FST tracing includes <lz4.h>; without this the build dies with
-  # "fatal error: lz4.h: No such file or directory"
-  export CPATH="$(dirname "$(command -v fusesoc)")/../include:$CPATH"
-  ```
-
-### Clone — the cold-clone checklist
-
-This is the procedure used to prove the regression gate reproduces from a clean checkout. Following
-it exactly is the difference between testing your clone and testing something else.
+Activate the `pcie` conda environment so FuseSoC, Verilator and cocotb are on `PATH`:
 
 ```bash
-git clone git@github.com:joydeepzsaha/pcie_gen1.git my_checkout
-cd my_checkout
-
-# ⚠️ --force is required; a plain `git submodule update --init` can leave a
-# submodule at the wrong revision without failing.
-git submodule update --init --force
-
-# ⚠️ WRITE THIS FRESH.  Never copy it from another checkout (Trap 1).
-cat > fusesoc.conf <<EOF
-[library.pcie-endpoint-controller]
-location = $(pwd)
-sync-uri = ./
-sync-type = local
-auto-sync = true
-EOF
-
-pip install -r requirements.txt
+export PATH=/home/kourosh/miniconda3/envs/pcie/bin:$PATH
 ```
 
-Confirm isolation before trusting any result:
+Then run one target against its core:
 
 ```bash
-# must print THIS checkout's path, not another one
-grep location fusesoc.conf
-# must be absent in a fresh clone -- if present, it came from somewhere else
-ls build/ 2>/dev/null
+fusesoc --cores-root . run --target verilate_<target> <core>
+# for example
+fusesoc --cores-root . run --target verilate_tlp_parser fusesoc:pcie:tb_tlp:1.0.0
 ```
 
-### Running a simulation
+Target and core names live in the `.core` files under `tb/` and `src/`.
 
-```bash
-fusesoc run --target=<target> <core>
-# e.g.
-fusesoc run --target=verilate_tlp_parser fusesoc:pcie:tb_tlp
-```
+⚠️ **`fusesoc run` returns 0 on a cocotb FAIL, and returns 0 again when zero tests ran** — a stale
+build directory yields no test table at all.
+**Never judge a run by its exit code: read the `TESTS=` line.** A run that printed no `TESTS=` line
+tested nothing; delete that target's build directory and re-run.
 
-Target and core names live in the `.core` files under `tb/`. ⚠️ Targets are **not** interchangeable
-between cores — running a target against the wrong core can silently elaborate a different design.
+⚠️ Run targets **sequentially**. Concurrent runs share a build directory and race.
 
-### Synthesis
+## Conventions
 
-```bash
-fusesoc run --target=synth fusesoc:pcie:pcie_gtp:1.0.0
-fusesoc run --target=synth fusesoc:pcie:pcie_gtx:1.0.0
-```
+- Rows marked `expect_fail` record a deliberate divergence from the specification; a passing
+  `expect_fail` row prints `STATUS=PASS`, so a red row there is news and a green one is not.
+- RTL guards use `$warning`, never `$error` — a procedural `$error` maps to `$stop`, which would
+  abort the shared multi-test process, and several tests deliberately trip these guards.
+- One behaviour per commit.
+- Pull requests are reviewed and land as merge commits; `main` is protected.
+- `fusesoc.conf` is per-directory and gitignored, so it never arrives with a clone. Write it fresh
+  pointing at the checkout you are in — a copied conf silently builds a *different* checkout.
 
----
+## Roadmap
 
-## Verification approach
+1. Completer path — the receive side of the root complex's transaction layer.
+2. PHY IP evaluation (PG239) against the current PIPE boundary.
+3. GTH transceiver bring-up.
+4. Root-complex ↔ endpoint bench, both verticals in one netlist.
+5. Full-stack place-and-route.
+6. Hardware: loopback, then root complex ↔ endpoint on one chip, then GTH.
+7. NVMe SSD enumeration and traffic.
+8. x4, then Gen2 and Gen3.
 
-Benches are written against the **PCI Express Base Specification 2.1** with the clause and page cited
-in the test, so a disagreement between RTL and bench can be adjudicated against the text rather than
-against intuition. Where the specification is genuinely silent or implementation-defined, the choice
-is stated in the bench as a choice.
+## Specifications
 
-Correctness claims are backed by **mutation testing**: a fix is not considered proven until a mutant
-restoring the original defect turns the relevant row red, and controls confirm the kill is
-attributable to the intended assertion rather than to collateral damage.
-
----
-
-## Documentation
-
-`docs/` holds the system overview, the PIPE interface description, the Data Link Layer architecture,
-and resource/performance notes.
-
----
-
-## Research and educational contributions
-
-Provides an open-source PCIe endpoint controller aimed at research and education; supports
-experimentation with high-speed interconnect design in RTL; demonstrates cocotb/Python-based hardware
-verification; and serves communities — RISC-V among them — where PCIe is a commonly missing
-peripheral.
-
----
-
-## License
-
-MIT. ⚠️ **A `LICENSE` file is not currently present in this repository** — the previous README
-referred to one that does not exist. Adding it is outstanding.
+- *PCI Express Base Specification, Revision 2.1* — the citation of record for every bench.
+- *AMD PCI Express PHY LogiCORE IP Product Guide* (PG239).
+- *UltraScale Architecture GTH Transceivers User Guide* (UG576).
+- *ZCU102 Evaluation Board User Guide* (UG1182).
